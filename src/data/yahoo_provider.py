@@ -31,6 +31,20 @@ logger = get_logger(__name__)
 
 _EASTERN = ZoneInfo("America/New_York")
 
+# Maximum history available from yfinance per interval (calendar days).
+# Requests whose start date falls outside this window will silently return
+# no data, so we raise early with a clear message instead.
+_INTRADAY_MAX_HISTORY_DAYS: dict[str, int] = {
+    "1m":  7,
+    "2m":  60,
+    "5m":  60,
+    "15m": 60,
+    "30m": 60,
+    "60m": 730,
+    "90m": 60,
+    "1h":  730,
+}
+
 
 class YahooDataProvider(BaseDataProvider):
     """Fetch OHLCV bars from Yahoo Finance via *yfinance*."""
@@ -62,6 +76,8 @@ class YahooDataProvider(BaseDataProvider):
 
         start_dt = pd.Timestamp(start, tz=_EASTERN)
         end_dt   = pd.Timestamp(end,   tz=_EASTERN) + pd.Timedelta(days=1)  # inclusive
+
+        self._validate_intraday_request(interval, start_dt)
 
         frames: list[pd.DataFrame] = []
         chunk_start = start_dt
@@ -108,3 +124,30 @@ class YahooDataProvider(BaseDataProvider):
 
         logger.info("  → %d bars loaded for %s", len(df), symbol)
         return df
+
+    # ------------------------------------------------------------------
+    # Validation helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _validate_intraday_request(interval: str, start_dt: pd.Timestamp) -> None:
+        """Raise :exc:`ValueError` when *start_dt* is outside yfinance's retention window.
+
+        yfinance silently returns empty data for intraday intervals when the
+        requested history is too old.  This method raises early so the caller
+        gets a clear error message rather than a silent empty DataFrame.
+        """
+        max_days = _INTRADAY_MAX_HISTORY_DAYS.get(interval)
+        if max_days is None:
+            return  # daily/weekly intervals have no intraday cap
+
+        today   = pd.Timestamp.now(tz=_EASTERN).normalize()
+        cutoff  = today - pd.Timedelta(days=max_days)
+
+        if start_dt < cutoff:
+            raise ValueError(
+                f"yfinance only retains ~{max_days} days of intraday history for "
+                f"interval '{interval}'.  Requested start {start_dt.date()} predates "
+                f"the available cutoff ({cutoff.date()}).  "
+                f"Use a start date on or after {cutoff.date()}."
+            )

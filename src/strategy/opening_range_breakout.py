@@ -6,7 +6,7 @@ Opening Range Breakout (ORB) strategy — long only.
 Rules (all times in US Eastern):
   1. Opening range   = [09:30, 10:00)
   2. opening_range_high / opening_range_low are the max/min of that range.
-  3. After 10:00, if a bar's *close* exceeds opening_range_high → LONG signal.
+  3. After 10:00, if the breakout trigger field exceeds opening_range_high → LONG signal.
   4. Stop-loss = opening_range_low.
   5. At most one trade per symbol per day (tracked by the engine, not here).
   6. Force-exit at 15:55 is handled by the engine / risk manager.
@@ -38,27 +38,41 @@ class OpeningRangeBreakout(BaseStrategy):
 
     Parameters (via ``params`` dict from settings.yaml)
     ---------------------------------------------------
-    opening_range_start : str  — ``"HH:MM"`` Eastern, default ``"09:30"``
-    opening_range_end   : str  — ``"HH:MM"`` Eastern, default ``"10:00"``
-    force_exit_time     : str  — ``"HH:MM"`` Eastern, default ``"15:55"``
+    opening_range_start : str   — ``"HH:MM"`` Eastern, default ``"09:30"``
+    opening_range_end   : str   — ``"HH:MM"`` Eastern, default ``"10:00"``
+    force_exit_time     : str   — ``"HH:MM"`` Eastern, default ``"15:55"``
     position_size_pct   : float — fraction of cash to deploy, default ``0.95``
     long_only           : bool  — ``True`` for MVP
+    breakout_trigger    : str   — ``"close"`` (default) or ``"high"``.
+                                  ``"close"`` fires when bar close > or_high;
+                                  ``"high"`` fires when bar high > or_high.
     """
 
     def __init__(self, params: dict[str, Any]) -> None:
         super().__init__(params)
 
-        self._range_start_str: str = params.get("opening_range_start", "09:30")
-        self._range_end_str:   str = params.get("opening_range_end",   "10:00")
-        self._force_exit_str:  str = params.get("force_exit_time",     "15:55")
-        self._long_only: bool      = bool(params.get("long_only", True))
+        self._range_start_str:    str = params.get("opening_range_start", "09:30")
+        self._range_end_str:      str = params.get("opening_range_end",   "10:00")
+        self._force_exit_str:     str = params.get("force_exit_time",     "15:55")
+        self._long_only:         bool = bool(params.get("long_only", True))
+        self._breakout_trigger:   str = params.get("breakout_trigger",    "close")
 
-        # Per-day cache:  date → {"high": float, "low": float, "formed": bool}
-        self._daily_range: dict[str, dict[str, Any]] = {}
+        if self._breakout_trigger not in ("close", "high"):
+            raise ValueError(
+                f"breakout_trigger must be 'close' or 'high', got '{self._breakout_trigger}'"
+            )
+
+        # Per-(symbol, date) cache: (symbol, date_str) → {"high": float, "low": float, "formed": bool}
+        self._daily_range: dict[tuple[str, str], dict[str, Any]] = {}
 
     # ------------------------------------------------------------------
     # Public interface
     # ------------------------------------------------------------------
+
+    def reset(self) -> None:
+        """Clear the opening-range cache so the strategy can be re-run cleanly."""
+        self._daily_range.clear()
+        logger.debug("OpeningRangeBreakout: state reset.")
 
     def generate_signal(
         self,
@@ -85,6 +99,9 @@ class OpeningRangeBreakout(BaseStrategy):
         range_end   = self._range_end_str     # "10:00"
         force_exit  = self._force_exit_str    # "15:55"
 
+        # Composite key — each symbol maintains its own opening range per day.
+        key = (symbol, bar_date)
+
         # ---- Step 1: accumulate the opening range ----------------------
         if range_start <= bar_hhmm < range_end:
             self._update_opening_range(symbol, bar_date, bars.loc[current_bar])
@@ -92,14 +109,14 @@ class OpeningRangeBreakout(BaseStrategy):
 
         # ---- Step 2: mark range as fully formed once 10:00 arrives ----
         if bar_hhmm == range_end or (
-            bar_date in self._daily_range
-            and not self._daily_range[bar_date].get("formed", False)
+            key in self._daily_range
+            and not self._daily_range[key].get("formed", False)
             and bar_hhmm > range_end
         ):
             self._mark_range_formed(symbol, bar_date, bars, range_start, range_end)
 
         # ---- Step 3: no range available yet (e.g. first bar of day) ---
-        if bar_date not in self._daily_range or not self._daily_range[bar_date].get("formed"):
+        if key not in self._daily_range or not self._daily_range[key].get("formed"):
             return None
 
         # ---- Step 4: force-exit handled by the engine — no signal here
@@ -107,14 +124,24 @@ class OpeningRangeBreakout(BaseStrategy):
             return None
 
         # ---- Step 5: breakout detection --------------------------------
-        or_high: float = self._daily_range[bar_date]["high"]
-        or_low:  float = self._daily_range[bar_date]["low"]
+        or_high: float = self._daily_range[key]["high"]
+        or_low:  float = self._daily_range[key]["low"]
         bar_close: float = float(bars.loc[current_bar, "close"])
+        bar_high:  float = float(bars.loc[current_bar, "high"])
 
-        if bar_close > or_high:
+        if self._breakout_trigger == "high":
+            triggered = bar_high > or_high
+            trigger_val = bar_high
+            trigger_field = "high"
+        else:  # "close"
+            triggered = bar_close > or_high
+            trigger_val = bar_close
+            trigger_field = "close"
+
+        if triggered:
             logger.debug(
-                "%s %s — breakout detected close=%.4f > or_high=%.4f",
-                symbol, bar_hhmm, bar_close, or_high,
+                "%s %s — breakout detected %s=%.4f > or_high=%.4f",
+                symbol, bar_hhmm, trigger_field, trigger_val, or_high,
             )
             return Signal(
                 direction=SignalDirection.LONG,
@@ -122,7 +149,12 @@ class OpeningRangeBreakout(BaseStrategy):
                 entry_price=bar_close,   # fill at close of breakout bar
                 stop_loss=or_low,
                 timestamp=current_bar,
-                meta={"or_high": or_high, "or_low": or_low},
+                meta={
+                    "or_high": or_high,
+                    "or_low": or_low,
+                    "breakout_trigger": self._breakout_trigger,
+                    "trigger_val": trigger_val,
+                },
             )
 
         return None
@@ -135,7 +167,7 @@ class OpeningRangeBreakout(BaseStrategy):
         self, symbol: str, date_str: str, bar: pd.Series
     ) -> None:
         """Extend the day's opening-range high/low with *bar*."""
-        key = date_str
+        key = (symbol, date_str)
         if key not in self._daily_range:
             self._daily_range[key] = {
                 "high": float(bar["high"]),
@@ -164,6 +196,8 @@ class OpeningRangeBreakout(BaseStrategy):
         incremental cache so that the result is always correct even if
         the engine calls this strategy on a partial day's data.
         """
+        key = (symbol, date_str)
+
         # Filter bars that fall within [range_start, range_end)
         idx = bars.index[
             (bars.index.strftime("%H:%M") >= range_start) &
@@ -177,7 +211,7 @@ class OpeningRangeBreakout(BaseStrategy):
         or_high = float(bars.loc[idx, "high"].max())
         or_low  = float(bars.loc[idx, "low"].min())
 
-        self._daily_range[date_str] = {"high": or_high, "low": or_low, "formed": True}
+        self._daily_range[key] = {"high": or_high, "low": or_low, "formed": True}
         logger.debug(
             "%s %s — range formed: high=%.4f  low=%.4f",
             symbol, date_str, or_high, or_low,

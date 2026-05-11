@@ -192,6 +192,83 @@ class TestEngine(unittest.TestCase):
         self.assertGreaterEqual(len(stops), 1)
 
 
+class TestSessionBoundary(unittest.TestCase):
+    """Position must be closed at session boundary even when the 15:55 bar is missing."""
+
+    def test_missing_eod_bar_closes_position_on_next_day(self):
+        """Day 1 has no 15:55 bar.  An entry at 10:05 on day 1 must be closed
+        (with reason='session_end') when the first bar of day 2 arrives."""
+
+        date1, date2 = "2024-01-02", "2024-01-03"
+
+        # Day 1: has a breakout entry bar but deliberately NO 15:55 bar.
+        day1 = {
+            _ts(date1, "09:30"): (480, 485, 475, 482),
+            _ts(date1, "09:35"): (482, 490, 480, 484),
+            _ts(date1, "09:50"): (487, 490, 482, 488),
+            _ts(date1, "09:55"): (488, 490, 483, 489),
+            _ts(date1, "10:00"): (489, 491, 484, 490),
+            _ts(date1, "10:05"): (490, 497, 488, 495),  # breakout entry
+            # ← no 15:55 bar
+        }
+        # Day 2: normal range bars (position should be closed on the first bar)
+        day2 = {
+            _ts(date2, "09:30"): (493, 498, 491, 495),
+        }
+
+        rows = {**day1, **day2}
+        df = pd.DataFrame.from_dict(rows, orient="index", columns=["open", "high", "low", "close"])
+        df["volume"] = 1_000_000
+        df.index = pd.DatetimeIndex(df.index)
+        df = df.sort_index()
+
+        engine = _build_engine({"SPY": df})
+        result = engine.run()
+
+        session_end_trades = [t for t in result["trades"] if t.exit_reason == "session_end"]
+        self.assertGreaterEqual(
+            len(session_end_trades), 1,
+            "Expected at least one trade closed with reason='session_end'",
+        )
+
+        # The exit must be on day 2's first bar, not left open
+        self.assertEqual(len(engine._portfolio.positions), 0,
+                         "No positions should remain open after the backtest")
+
+
+class TestMaxOpenPositions(unittest.TestCase):
+    """max_open_positions=1 must prevent a second symbol from entering simultaneously."""
+
+    def test_max_1_blocks_second_concurrent_entry(self):
+        """Both SPY and QQQ trigger a breakout on the same bar.
+        With max_open_positions=1, only the first symbol (by iteration order)
+        should have a trade; the second is blocked."""
+
+        date = "2024-01-02"
+        # Both symbols: identical day with a breakout at 10:05
+        spy_df = _make_day(date, or_high=490, breakout_close=500, eod_close=505)
+        qqq_df = _make_day(date, or_high=490, breakout_close=500, eod_close=505)
+
+        bars = {"SPY": spy_df, "QQQ": qqq_df}
+
+        engine = BacktestEngine(
+            strategy=OpeningRangeBreakout(DEFAULT_PARAMS),
+            data_provider=FakeDataProvider(bars),
+            portfolio=Portfolio(200_000, commission_per_share=0.0, slippage_per_share=0.0),
+            risk_manager=RiskManager(force_exit_time="15:55", max_open_positions=1),
+            symbols=["SPY", "QQQ"],
+            start_date=date, end_date=date,
+            position_size_pct=0.95,
+        )
+        result = engine.run()
+
+        # With max_open_positions=1, at most one trade should occur on any day.
+        self.assertEqual(
+            len(result["trades"]), 1,
+            f"Expected exactly 1 trade with max_open_positions=1, got {len(result['trades'])}",
+        )
+
+
 class TestMetrics(unittest.TestCase):
     def _trade(self, win=True):
         t1, t2 = _ts("2024-01-02","10:05"), _ts("2024-01-02","15:55")

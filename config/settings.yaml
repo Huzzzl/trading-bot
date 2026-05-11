@@ -2,8 +2,10 @@
 # All strategy parameters are defined here — never hardcoded in source files.
 
 backtest:
-  start_date: "2024-01-01"
-  end_date: "2024-12-31"
+  # yfinance 5-minute bars are only available for the last ~60 days.
+  # Keep this window short and recent; update start/end as needed.
+  start_date: "2026-04-10"
+  end_date:   "2026-05-09"
   initial_capital: 100000.0
   commission_per_share: 0.005   # USD per share (e.g. Interactive Brokers tiered)
   slippage_per_share: 0.01      # USD per share — simulated market-impact slippage
@@ -25,6 +27,12 @@ strategy:
     force_exit_time:     "15:55"   # HH:MM Eastern — hard EOD exit
     position_size_pct:   0.95      # fraction of available cash per trade
     long_only: true                # only long signals for MVP
+    breakout_trigger: "close"      # "close" or "high" — field that must exceed or_high
+
+risk:
+  # Limit concurrent open positions for deterministic multi-symbol behavior.
+  # Set to null to allow unlimited simultaneous positions.
+  max_open_positions: 1
 
 logging:
   level: INFO
