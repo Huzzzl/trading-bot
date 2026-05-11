@@ -30,6 +30,7 @@ from src.backtest.engine import BacktestEngine
 from src.config.loader import load_config, AppConfig
 from src.data.yahoo_provider import YahooDataProvider
 from src.portfolio.portfolio import Portfolio
+from src.reporting.report_generator import ReportGenerator
 from src.risk.risk_manager import RiskManager
 from src.strategy.opening_range_breakout import OpeningRangeBreakout
 from src.utils.logger import configure_logging, get_logger
@@ -110,14 +111,16 @@ def main() -> None:
     chart_path   = output_dir / "equity_curve.png"
     BacktestEngine.plot_equity_curve(equity_curve, output_path=chart_path)
 
-    # Trade log CSV
-    trade_log = BacktestEngine.trade_log(results["trades"])
-    if not trade_log.empty:
-        csv_path = output_dir / "trade_log.csv"
-        trade_log.to_csv(csv_path)
-        logger.info("Trade log saved to %s", csv_path)
-    else:
-        logger.info("No trades executed — trade log not written.")
+    # Full reporting artefacts (metrics.json, trade_log.csv, daily_summary.csv,
+    # backtest_report.md) plus validation checks
+    reporter = ReportGenerator(
+        metrics=results["metrics"],
+        trades=results["trades"],
+        equity_curve=equity_curve,
+        config=cfg,
+        output_dir=output_dir,
+    )
+    reporter.generate_all()
 
 
 if __name__ == "__main__":
