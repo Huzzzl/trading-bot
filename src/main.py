@@ -55,11 +55,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--mode",
-        choices=["backtest", "sweep"],
+        choices=["backtest", "sweep", "walk-forward"],
         default="backtest",
         help=(
             "'backtest' runs a single backtest with full reporting; "
-            "'sweep' runs a parameter grid search and writes experiments.csv"
+            "'sweep' runs a parameter grid search and writes experiments.csv; "
+            "'walk-forward' tests candidate configs across multiple time windows"
         ),
     )
     return parser.parse_args()
@@ -119,6 +120,12 @@ def main() -> None:
         from src.experiments.sweep_runner import SweepRunner
         sweeper = SweepRunner(base_config=cfg, output_dir=output_dir)
         sweeper.run()
+        return
+
+    if args.mode == "walk-forward":
+        from src.experiments.walk_forward_runner import WalkForwardRunner
+        runner = WalkForwardRunner(base_config=cfg, output_dir=output_dir)
+        runner.run()
         return
 
     # ---- backtest mode (default) -----------------------------------------
