@@ -1,0 +1,31 @@
+# Trading Bot Configuration
+# All strategy parameters are defined here — never hardcoded in source files.
+
+backtest:
+  start_date: "2024-01-01"
+  end_date: "2024-12-31"
+  initial_capital: 100000.0
+  commission_per_share: 0.005   # USD per share (e.g. Interactive Brokers tiered)
+  slippage_per_share: 0.01      # USD per share — simulated market-impact slippage
+
+symbols:
+  - SPY
+  - QQQ
+
+data:
+  provider: yahoo           # currently only "yahoo" is supported
+  bar_interval: "5m"        # yfinance interval string
+  timezone: "America/New_York"
+
+strategy:
+  name: opening_range_breakout
+  params:
+    opening_range_start: "09:30"   # HH:MM Eastern
+    opening_range_end:   "10:00"   # HH:MM Eastern — range is [start, end)
+    force_exit_time:     "15:55"   # HH:MM Eastern — hard EOD exit
+    position_size_pct:   0.95      # fraction of available cash per trade
+    long_only: true                # only long signals for MVP
+
+logging:
+  level: INFO
+  format: "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
