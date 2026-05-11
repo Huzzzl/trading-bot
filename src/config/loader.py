@@ -42,6 +42,11 @@ class StrategyConfig:
 
 
 @dataclass
+class RiskConfig:
+    max_open_positions: int | None = None
+
+
+@dataclass
 class LoggingConfig:
     level: str
     format: str
@@ -53,6 +58,7 @@ class AppConfig:
     symbols: list[str]
     data: DataConfig
     strategy: StrategyConfig
+    risk: RiskConfig
     logging: LoggingConfig
 
 
@@ -117,6 +123,11 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
         params=s.get("params", {}),
     )
 
+    r = raw.get("risk", {})
+    risk_cfg = RiskConfig(
+        max_open_positions=r.get("max_open_positions", None),
+    )
+
     lg = raw.get("logging", {})
     logging_cfg = LoggingConfig(
         level=lg.get("level", "INFO"),
@@ -128,5 +139,6 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
         symbols=list(raw["symbols"]),
         data=data_cfg,
         strategy=strategy_cfg,
+        risk=risk_cfg,
         logging=logging_cfg,
     )

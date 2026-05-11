@@ -66,6 +66,14 @@ class BaseStrategy(ABC):
         """
         self.params = params
 
+    def reset(self) -> None:
+        """Clear any internal state accumulated from a previous backtest run.
+
+        Override in stateful subclasses.  Called by the engine before each
+        run so that re-using the same strategy instance produces identical
+        results to using a fresh one.
+        """
+
     @abstractmethod
     def generate_signal(
         self,

@@ -43,15 +43,22 @@ class RiskManager:
     max_trades_per_symbol_per_day:
         Hard cap on how many times a symbol can be traded in one session.
         Defaults to 1 (ORB strategy requirement).
+    max_open_positions:
+        Maximum number of concurrent open positions across all symbols.
+        ``None`` means unlimited.  Set to ``1`` for strictly sequential
+        trading (deterministic results when multiple symbols trigger
+        simultaneously).
     """
 
     def __init__(
         self,
         force_exit_time: str = "15:55",
         max_trades_per_symbol_per_day: int = 1,
+        max_open_positions: int | None = None,
     ) -> None:
         self._force_exit_time = force_exit_time
         self._max_trades_per_day = max_trades_per_symbol_per_day
+        self._max_open_positions = max_open_positions
         # Tracks {date_str: {symbol: trade_count}}
         self._daily_trade_count: dict[str, dict[str, int]] = {}
 
@@ -85,6 +92,17 @@ class RiskManager:
         # Rule: no duplicate open positions
         if signal.symbol in portfolio.positions:
             logger.debug("approve_entry(%s): rejected — position already open", signal.symbol)
+            return False
+
+        # Rule: portfolio-level open-position cap
+        if (
+            self._max_open_positions is not None
+            and len(portfolio.positions) >= self._max_open_positions
+        ):
+            logger.debug(
+                "approve_entry(%s): rejected — max_open_positions=%d reached",
+                signal.symbol, self._max_open_positions,
+            )
             return False
 
         # Rule: max trades per day

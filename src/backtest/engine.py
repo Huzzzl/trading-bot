@@ -92,6 +92,15 @@ class BacktestEngine:
         # Loaded bar data: {symbol: DataFrame}
         self._bars: dict[str, pd.DataFrame] = {}
 
+        # Per-symbol state used to detect session boundaries.
+        # We need the *previous* bar's date, timestamp, and close so that a
+        # session-end exit is priced at the last bar of the closing session,
+        # not at the first bar of the new session (which would include the
+        # overnight gap).
+        self._last_bar_date:  dict[str, str]          = {}
+        self._last_bar_ts:    dict[str, pd.Timestamp] = {}
+        self._last_bar_close: dict[str, float]        = {}
+
     # ------------------------------------------------------------------
     # Public entry point
     # ------------------------------------------------------------------
@@ -109,10 +118,16 @@ class BacktestEngine:
         logger.info("Symbols: %s  |  %s → %s  |  interval=%s",
                     self._symbols, self._start_date, self._end_date, self._bar_interval)
 
-        # 1. Load data
+        # 1. Reset strategy state so re-running the same instance is safe.
+        self._strategy.reset()
+        self._last_bar_date  = {}
+        self._last_bar_ts    = {}
+        self._last_bar_close = {}
+
+        # 2. Load data
         self._load_data()
 
-        # 2. Build unified sorted timeline
+        # 3. Build unified sorted timeline
         all_timestamps = self._build_timeline()
 
         if all_timestamps.empty:
@@ -121,11 +136,11 @@ class BacktestEngine:
 
         logger.info("Total bars in timeline: %d", len(all_timestamps))
 
-        # 3. Iterate bar by bar
+        # 4. Iterate bar by bar
         for ts in all_timestamps:
             self._process_bar(ts)
 
-        # 4. Force-close any remaining open positions at last bar
+        # 5. Force-close any remaining open positions at last bar
         self._close_all_open_positions(all_timestamps[-1])
 
         # 5. Compute metrics
@@ -173,6 +188,8 @@ class BacktestEngine:
     def _process_bar(self, ts: pd.Timestamp) -> None:
         """Process a single timestamp across all symbols."""
         bar_data: dict[str, dict[str, float]] = {}
+        bar_et   = ts.astimezone(_EASTERN)
+        bar_date = bar_et.date().isoformat()
 
         for symbol in self._symbols:
             df = self._bars.get(symbol)
@@ -185,6 +202,28 @@ class BacktestEngine:
                 "low":   float(row["low"]),
                 "close": float(row["close"]),
             }
+
+        # ---- Session boundary: close any position that survived overnight ----
+        # When the first bar of a new session arrives for a symbol that still
+        # has an open position, we must close it WITHOUT including the overnight
+        # gap.  Exit price and timestamp are taken from the *previous* bar
+        # (the last bar of the closing session) so the trade reflects only
+        # intraday movement.  The overnight gap is intentionally excluded.
+        for symbol in bar_data:
+            last_date = self._last_bar_date.get(symbol)
+            if (
+                last_date is not None
+                and last_date != bar_date
+                and symbol in self._portfolio.positions
+            ):
+                prev_ts    = self._last_bar_ts[symbol]
+                prev_close = self._last_bar_close[symbol]
+                logger.warning(
+                    "SESSION_END %s — position from %s not closed before %s; "
+                    "closing at prev-session close=%.4f @ %s",
+                    symbol, last_date, bar_date, prev_close, prev_ts,
+                )
+                self._portfolio.close_position(symbol, prev_close, prev_ts, "session_end")
 
         # ---- Risk: check exits BEFORE generating new signals ----------
         # This prevents entering and exiting in the same bar erroneously.
@@ -232,9 +271,13 @@ class BacktestEngine:
                     meta=signal.meta,
                 )
                 if pos is not None:
-                    bar_et  = ts.astimezone(_EASTERN)
-                    date_str = bar_et.date().isoformat()
-                    self._risk_manager.record_trade_taken(symbol, date_str)
+                    self._risk_manager.record_trade_taken(symbol, bar_date)
+
+        # ---- Update per-symbol last-seen bar info ---------------------
+        for symbol, bar in bar_data.items():
+            self._last_bar_date[symbol]  = bar_date
+            self._last_bar_ts[symbol]    = ts
+            self._last_bar_close[symbol] = bar["close"]
 
         # ---- Portfolio: record equity snapshot -------------------------
         current_prices = {sym: d["close"] for sym, d in bar_data.items()}
