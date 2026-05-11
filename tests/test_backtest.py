@@ -17,7 +17,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.backtest.engine import BacktestEngine
 from src.backtest.metrics import compute_metrics
 from src.backtest.trade import Trade
+from src.config.loader import AppConfig, BacktestConfig, DataConfig, LoggingConfig, RiskConfig, StrategyConfig
 from src.data.base import BaseDataProvider
+from src.main import build_engine
 from src.portfolio.portfolio import Portfolio
 from src.risk.risk_manager import RiskManager
 from src.strategy.opening_range_breakout import OpeningRangeBreakout
@@ -195,25 +197,27 @@ class TestEngine(unittest.TestCase):
 class TestSessionBoundary(unittest.TestCase):
     """Position must be closed at session boundary even when the 15:55 bar is missing."""
 
-    def test_missing_eod_bar_closes_position_on_next_day(self):
-        """Day 1 has no 15:55 bar.  An entry at 10:05 on day 1 must be closed
-        (with reason='session_end') when the first bar of day 2 arrives."""
+    def test_missing_eod_bar_closes_at_prev_session_price(self):
+        """Day 1 has no 15:55 bar.  An entry at 10:05 (close=495) must be closed
+        at Day 1's last close (495), NOT at Day 2's first close (550).
+        exit_time must fall on Day 1."""
 
         date1, date2 = "2024-01-02", "2024-01-03"
 
-        # Day 1: has a breakout entry bar but deliberately NO 15:55 bar.
+        # Day 1: breakout entry at 10:05, last close = 495.  No 15:55 bar.
         day1 = {
             _ts(date1, "09:30"): (480, 485, 475, 482),
             _ts(date1, "09:35"): (482, 490, 480, 484),
             _ts(date1, "09:50"): (487, 490, 482, 488),
             _ts(date1, "09:55"): (488, 490, 483, 489),
             _ts(date1, "10:00"): (489, 491, 484, 490),
-            _ts(date1, "10:05"): (490, 497, 488, 495),  # breakout entry
-            # ← no 15:55 bar
+            _ts(date1, "10:05"): (490, 497, 488, 495),   # entry bar; last close = 495
+            # no 15:55 bar
         }
-        # Day 2: normal range bars (position should be closed on the first bar)
+        # Day 2: first close is 550 — very different from Day 1 last close.
+        # If exit_price were 550 the test would catch the regression.
         day2 = {
-            _ts(date2, "09:30"): (493, 498, 491, 495),
+            _ts(date2, "09:30"): (548, 555, 545, 550),
         }
 
         rows = {**day1, **day2}
@@ -222,16 +226,29 @@ class TestSessionBoundary(unittest.TestCase):
         df.index = pd.DatetimeIndex(df.index)
         df = df.sort_index()
 
+        # slippage=0 so exit_price == close of the exit bar exactly
         engine = _build_engine({"SPY": df})
         result = engine.run()
 
         session_end_trades = [t for t in result["trades"] if t.exit_reason == "session_end"]
-        self.assertGreaterEqual(
-            len(session_end_trades), 1,
-            "Expected at least one trade closed with reason='session_end'",
+        self.assertGreaterEqual(len(session_end_trades), 1,
+                                "Expected at least one trade with reason='session_end'")
+
+        trade = session_end_trades[0]
+
+        # exit_time must be on Day 1, not Day 2
+        self.assertEqual(
+            trade.exit_time.date().isoformat(), date1,
+            f"exit_time {trade.exit_time.date()} must be Day 1 ({date1})",
         )
 
-        # The exit must be on day 2's first bar, not left open
+        # exit_price must be based on Day 1's last close (495), not Day 2's (550)
+        self.assertAlmostEqual(
+            trade.exit_price, 495.0, places=2,
+            msg=f"exit_price {trade.exit_price} should be Day 1 last close 495, not Day 2 close 550",
+        )
+
+        # no positions left open
         self.assertEqual(len(engine._portfolio.positions), 0,
                          "No positions should remain open after the backtest")
 
@@ -292,6 +309,90 @@ class TestMetrics(unittest.TestCase):
         m = compute_metrics([], pd.DataFrame(), 100_000)
         self.assertEqual(m["num_trades"], 0)
         self.assertAlmostEqual(m["total_return_pct"], 0.0)
+
+
+def _make_app_config(**risk_overrides) -> AppConfig:
+    """Build a minimal AppConfig for wiring tests (no file I/O)."""
+    return AppConfig(
+        backtest=BacktestConfig(
+            start_date="2026-04-10", end_date="2026-05-09",
+            initial_capital=100_000.0,
+            commission_per_share=0.0,
+            slippage_per_share=0.0,
+        ),
+        symbols=["SPY"],
+        data=DataConfig(provider="yahoo", bar_interval="5m", timezone="America/New_York"),
+        strategy=StrategyConfig(
+            name="opening_range_breakout",
+            params={
+                "opening_range_start": "09:30", "opening_range_end": "10:00",
+                "force_exit_time": "15:55", "position_size_pct": 0.95,
+                "long_only": True, "breakout_trigger": "close",
+            },
+        ),
+        risk=RiskConfig(**risk_overrides),
+        logging=LoggingConfig(level="WARNING", format="%(message)s"),
+    )
+
+
+class TestRiskConfig(unittest.TestCase):
+    """RiskConfig dataclass and loader integration."""
+
+    def test_risk_config_defaults_to_none(self):
+        cfg = RiskConfig()
+        self.assertIsNone(cfg.max_open_positions)
+
+    def test_risk_config_stores_value(self):
+        cfg = RiskConfig(max_open_positions=1)
+        self.assertEqual(cfg.max_open_positions, 1)
+
+    def test_load_config_parses_max_open_positions(self):
+        """load_config must parse the risk section from settings.yaml."""
+        from src.config.loader import load_config
+        cfg = load_config()   # uses config/settings.yaml which has max_open_positions: 1
+        self.assertIsNotNone(cfg.risk)
+        self.assertEqual(cfg.risk.max_open_positions, 1)
+
+    def test_load_config_risk_absent_gives_none(self):
+        """When the risk section is missing, max_open_positions defaults to None."""
+        import tempfile, textwrap, yaml
+        yaml_text = textwrap.dedent("""
+            backtest:
+              start_date: "2026-04-10"
+              end_date:   "2026-05-09"
+              initial_capital: 100000.0
+              commission_per_share: 0.005
+              slippage_per_share: 0.01
+            symbols: [SPY]
+            data:
+              provider: yahoo
+              bar_interval: "5m"
+              timezone: "America/New_York"
+            strategy:
+              name: opening_range_breakout
+              params: {}
+        """)
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml_text)
+            tmp_path = f.name
+
+        from src.config.loader import load_config
+        cfg = load_config(tmp_path)
+        self.assertIsNone(cfg.risk.max_open_positions)
+
+
+class TestBuildEngineWiring(unittest.TestCase):
+    """build_engine() must pass RiskConfig values into RiskManager."""
+
+    def test_build_engine_passes_max_open_positions_none(self):
+        cfg = _make_app_config()   # max_open_positions=None
+        engine = build_engine(cfg)
+        self.assertIsNone(engine._risk_manager._max_open_positions)
+
+    def test_build_engine_passes_max_open_positions_value(self):
+        cfg = _make_app_config(max_open_positions=2)
+        engine = build_engine(cfg)
+        self.assertEqual(engine._risk_manager._max_open_positions, 2)
 
 
 if __name__ == "__main__":

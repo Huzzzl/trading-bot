@@ -92,9 +92,14 @@ class BacktestEngine:
         # Loaded bar data: {symbol: DataFrame}
         self._bars: dict[str, pd.DataFrame] = {}
 
-        # Tracks the last Eastern date seen for each symbol; used to detect
-        # session boundaries and force-close overnight positions.
-        self._last_bar_date: dict[str, str] = {}
+        # Per-symbol state used to detect session boundaries.
+        # We need the *previous* bar's date, timestamp, and close so that a
+        # session-end exit is priced at the last bar of the closing session,
+        # not at the first bar of the new session (which would include the
+        # overnight gap).
+        self._last_bar_date:  dict[str, str]          = {}
+        self._last_bar_ts:    dict[str, pd.Timestamp] = {}
+        self._last_bar_close: dict[str, float]        = {}
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -115,7 +120,9 @@ class BacktestEngine:
 
         # 1. Reset strategy state so re-running the same instance is safe.
         self._strategy.reset()
-        self._last_bar_date = {}
+        self._last_bar_date  = {}
+        self._last_bar_ts    = {}
+        self._last_bar_close = {}
 
         # 2. Load data
         self._load_data()
@@ -197,24 +204,26 @@ class BacktestEngine:
             }
 
         # ---- Session boundary: close any position that survived overnight ----
-        # If the current bar for a symbol belongs to a different Eastern date
-        # than the last bar processed for that symbol, the position should have
-        # been closed at EOD.  Close it now at the current bar's close so that
-        # no overnight exposure is ever recorded in the trade log.
-        for symbol, bar in bar_data.items():
+        # When the first bar of a new session arrives for a symbol that still
+        # has an open position, we must close it WITHOUT including the overnight
+        # gap.  Exit price and timestamp are taken from the *previous* bar
+        # (the last bar of the closing session) so the trade reflects only
+        # intraday movement.  The overnight gap is intentionally excluded.
+        for symbol in bar_data:
             last_date = self._last_bar_date.get(symbol)
             if (
                 last_date is not None
                 and last_date != bar_date
                 and symbol in self._portfolio.positions
             ):
-                exit_price = bar["close"]
+                prev_ts    = self._last_bar_ts[symbol]
+                prev_close = self._last_bar_close[symbol]
                 logger.warning(
-                    "SESSION_END %s — position from %s carried to %s (missing EOD bar); "
-                    "closing at %.4f",
-                    symbol, last_date, bar_date, exit_price,
+                    "SESSION_END %s — position from %s not closed before %s; "
+                    "closing at prev-session close=%.4f @ %s",
+                    symbol, last_date, bar_date, prev_close, prev_ts,
                 )
-                self._portfolio.close_position(symbol, exit_price, ts, "session_end")
+                self._portfolio.close_position(symbol, prev_close, prev_ts, "session_end")
 
         # ---- Risk: check exits BEFORE generating new signals ----------
         # This prevents entering and exiting in the same bar erroneously.
@@ -264,9 +273,11 @@ class BacktestEngine:
                 if pos is not None:
                     self._risk_manager.record_trade_taken(symbol, bar_date)
 
-        # ---- Update per-symbol last-seen date -------------------------
-        for symbol in bar_data:
-            self._last_bar_date[symbol] = bar_date
+        # ---- Update per-symbol last-seen bar info ---------------------
+        for symbol, bar in bar_data.items():
+            self._last_bar_date[symbol]  = bar_date
+            self._last_bar_ts[symbol]    = ts
+            self._last_bar_close[symbol] = bar["close"]
 
         # ---- Portfolio: record equity snapshot -------------------------
         current_prices = {sym: d["close"] for sym, d in bar_data.items()}

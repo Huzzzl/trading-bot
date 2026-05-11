@@ -71,7 +71,10 @@ def build_engine(cfg: AppConfig) -> BacktestEngine:
     )
 
     force_exit = cfg.strategy.params.get("force_exit_time", "15:55")
-    risk_manager = RiskManager(force_exit_time=force_exit)
+    risk_manager = RiskManager(
+        force_exit_time=force_exit,
+        max_open_positions=cfg.risk.max_open_positions,
+    )
 
     return BacktestEngine(
         strategy=strategy,
