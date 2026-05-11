@@ -10,6 +10,7 @@ collected into a single ``experiments.csv`` for comparison.
 from __future__ import annotations
 
 import copy
+import json
 from itertools import product
 from pathlib import Path
 from typing import Any
@@ -59,7 +60,57 @@ _METRIC_COLS: list[str] = [
     "final_equity",
 ]
 
-OUTPUT_COLS: list[str] = _PARAM_COLS + _METRIC_COLS
+_STATUS_COLS: list[str] = ["status", "error"]
+
+OUTPUT_COLS: list[str] = _PARAM_COLS + _METRIC_COLS + _STATUS_COLS
+
+
+# ---------------------------------------------------------------------------
+# CachedDataProvider
+# ---------------------------------------------------------------------------
+
+
+class CachedDataProvider(BaseDataProvider):
+    """Memoising wrapper around any :class:`~src.data.base.BaseDataProvider`.
+
+    On the first call for a given ``(symbol, start, end, interval)`` tuple the
+    request is forwarded to the wrapped provider and the result is stored.
+    Subsequent identical requests return a fresh ``DataFrame.copy()`` so callers
+    cannot mutate the cache.
+
+    Parameters
+    ----------
+    provider:
+        The underlying provider to delegate cache misses to.
+    """
+
+    def __init__(self, provider: BaseDataProvider) -> None:
+        self._provider = provider
+        self._cache: dict[tuple[str, str, str, str], pd.DataFrame] = {}
+
+    # Expose the underlying provider for testing / introspection.
+    @property
+    def provider(self) -> BaseDataProvider:
+        return self._provider
+
+    @property
+    def cache_size(self) -> int:
+        """Number of distinct (symbol, start, end, interval) entries cached."""
+        return len(self._cache)
+
+    def fetch_bars(
+        self,
+        symbol: str,
+        start: str,
+        end: str,
+        interval: str,
+    ) -> pd.DataFrame:
+        key = (symbol, start, end, interval)
+        if key not in self._cache:
+            logger.debug("CachedDataProvider: cache miss — fetching %s [%s, %s] %s",
+                         symbol, start, end, interval)
+            self._cache[key] = self._provider.fetch_bars(symbol, start, end, interval)
+        return self._cache[key].copy()
 
 
 # ---------------------------------------------------------------------------
@@ -81,9 +132,11 @@ class SweepRunner:
         Mapping of parameter name → list of values to sweep.
         Defaults to :data:`DEFAULT_GRID`.
     data_provider:
-        Optional shared data provider.  When ``None`` a fresh
-        ``YahooDataProvider`` is used.  Pass a fake provider in unit tests
-        to avoid network calls.
+        Optional data provider.  Whatever is passed (or the default
+        ``YahooDataProvider``) is automatically wrapped in
+        :class:`CachedDataProvider` so each unique symbol/date range is
+        fetched at most once across all experiments.  Pass a
+        ``CachedDataProvider`` directly to skip double-wrapping.
     """
 
     def __init__(
@@ -93,11 +146,16 @@ class SweepRunner:
         grid: dict[str, list[Any]] | None = None,
         data_provider: BaseDataProvider | None = None,
     ) -> None:
-        self._base_config   = base_config
-        self._output_dir    = Path(output_dir)
-        self._grid          = grid if grid is not None else DEFAULT_GRID
-        self._data_provider = data_provider
+        self._base_config = base_config
+        self._output_dir  = Path(output_dir)
+        self._grid        = grid if grid is not None else DEFAULT_GRID
         self._output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Always use a caching layer; avoid double-wrapping.
+        raw = data_provider if data_provider is not None else YahooDataProvider()
+        self._data_provider: BaseDataProvider = (
+            raw if isinstance(raw, CachedDataProvider) else CachedDataProvider(raw)
+        )
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -124,24 +182,30 @@ class SweepRunner:
             params = dict(zip(keys, combo))
             cfg    = self._patch_config(params)
 
+            status = "ok"
+            error  = ""
             try:
                 engine  = self._build_engine(cfg)
                 metrics = engine.run()["metrics"]
             except Exception as exc:
-                logger.warning("Experiment %d/%d FAILED: %s", exp_id, total, exc)
+                status  = "failed"
+                error   = str(exc)
                 metrics = {col: None for col in _METRIC_COLS}
+                logger.warning("Experiment %d/%d FAILED: %s", exp_id, total, exc)
 
-            symbols_str = "+".join(cfg.symbols)
+            symbols_json = json.dumps(list(cfg.symbols))
 
             row: dict[str, Any] = {
-                "experiment_id":    exp_id,
-                "symbols":          symbols_str,
+                "experiment_id":     exp_id,
+                "symbols":           symbols_json,
                 "opening_range_end": params.get("opening_range_end"),
                 "breakout_trigger":  params.get("breakout_trigger"),
                 "position_size_pct": params.get("position_size_pct"),
             }
             for col in _METRIC_COLS:
                 row[col] = metrics.get(col)
+            row["status"] = status
+            row["error"]  = error
 
             rows.append(row)
 
@@ -150,15 +214,16 @@ class SweepRunner:
                 if metrics.get("total_return_pct") is not None else "?"
             )
             logger.info(
-                "Experiment %3d/%d | %-9s | or_end=%s | trigger=%-5s | size=%.2f"
-                " → trades=%s  return=%s%%",
+                "Experiment %3d/%d | %-14s | or_end=%s | trigger=%-5s | size=%.2f"
+                " → trades=%s  return=%s%%  [%s]",
                 exp_id, total,
-                symbols_str,
+                symbols_json,
                 row["opening_range_end"],
                 row["breakout_trigger"],
                 row["position_size_pct"],
                 metrics.get("num_trades", "?"),
                 ret_str,
+                status,
             )
 
         df   = pd.DataFrame(rows)[OUTPUT_COLS]
@@ -174,7 +239,6 @@ class SweepRunner:
     def _patch_config(self, params: dict[str, Any]) -> AppConfig:
         """Return a deep copy of the base config with *params* applied."""
         cfg = copy.deepcopy(self._base_config)
-
         if "symbols" in params:
             cfg.symbols = list(params["symbols"])
         if "opening_range_end" in params:
@@ -183,30 +247,24 @@ class SweepRunner:
             cfg.strategy.params["breakout_trigger"] = params["breakout_trigger"]
         if "position_size_pct" in params:
             cfg.strategy.params["position_size_pct"] = params["position_size_pct"]
-
         return cfg
 
     def _build_engine(self, cfg: AppConfig) -> BacktestEngine:
         """Construct a fully-wired, fresh ``BacktestEngine`` from *cfg*."""
         strategy = OpeningRangeBreakout(params=cfg.strategy.params)
-
-        data_provider = self._data_provider or YahooDataProvider()
-
         portfolio = Portfolio(
             initial_capital=cfg.backtest.initial_capital,
             commission_per_share=cfg.backtest.commission_per_share,
             slippage_per_share=cfg.backtest.slippage_per_share,
         )
-
         force_exit = cfg.strategy.params.get("force_exit_time", "15:55")
         risk_manager = RiskManager(
             force_exit_time=force_exit,
             max_open_positions=cfg.risk.max_open_positions,
         )
-
         return BacktestEngine(
             strategy=strategy,
-            data_provider=data_provider,
+            data_provider=self._data_provider,
             portfolio=portfolio,
             risk_manager=risk_manager,
             symbols=cfg.symbols,

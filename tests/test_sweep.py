@@ -1,14 +1,14 @@
 """
 tests/test_sweep.py
 -------------------
-Unit tests for SweepRunner.
+Unit tests for CachedDataProvider and SweepRunner.
 
-All tests use a FakeDataProvider that returns synthetic 5-minute OHLCV bars —
-no network calls, no yfinance, no broker.
+All tests use fake data providers — no network calls, no yfinance, no broker.
 """
 
 from __future__ import annotations
 
+import json
 import tempfile
 from itertools import product
 from pathlib import Path
@@ -26,19 +26,24 @@ from src.config.loader import (
     StrategyConfig,
 )
 from src.data.base import BaseDataProvider
-from src.experiments.sweep_runner import DEFAULT_GRID, OUTPUT_COLS, SweepRunner
+from src.experiments.sweep_runner import (
+    DEFAULT_GRID,
+    OUTPUT_COLS,
+    CachedDataProvider,
+    SweepRunner,
+)
 
 _ET = ZoneInfo("America/New_York")
 
 # ---------------------------------------------------------------------------
-# Test helpers
+# Shared helpers
 # ---------------------------------------------------------------------------
 
 _TRADING_DAYS = ["2024-01-02", "2024-01-03", "2024-01-04", "2024-01-05"]
 
 
 def _make_day_bars(date_str: str) -> pd.DataFrame:
-    """78 flat 5-minute bars for one trading session."""
+    """78 flat 5-minute bars for one trading session (no breakout signals)."""
     session_start = pd.Timestamp(date_str, tz=_ET).replace(hour=9, minute=30)
     idx = pd.date_range(session_start, periods=78, freq="5min")
     return pd.DataFrame(
@@ -47,11 +52,29 @@ def _make_day_bars(date_str: str) -> pd.DataFrame:
     )
 
 
+class CountingDataProvider(BaseDataProvider):
+    """Records every fetch_bars call; returns synthetic flat bars."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, str, str]] = []
+
+    def fetch_bars(self, symbol: str, start: str, end: str, interval: str) -> pd.DataFrame:
+        self.calls.append((symbol, start, end, interval))
+        return pd.concat([_make_day_bars(d) for d in _TRADING_DAYS])
+
+
 class FakeDataProvider(BaseDataProvider):
-    """Returns synthetic bars for any symbol/date without touching the network."""
+    """Silent fake provider — returns synthetic flat bars."""
 
     def fetch_bars(self, symbol: str, start: str, end: str, interval: str) -> pd.DataFrame:
         return pd.concat([_make_day_bars(d) for d in _TRADING_DAYS])
+
+
+class ErrorDataProvider(BaseDataProvider):
+    """Always raises RuntimeError to simulate a provider failure."""
+
+    def fetch_bars(self, symbol: str, start: str, end: str, interval: str) -> pd.DataFrame:
+        raise RuntimeError(f"Simulated fetch failure for {symbol}")
 
 
 def _make_config() -> AppConfig:
@@ -82,7 +105,6 @@ def _make_config() -> AppConfig:
 
 
 def _minimal_grid(**overrides) -> dict:
-    """Single-cell grid, optionally overriding individual parameter lists."""
     base = {
         "symbols":           [["SPY"]],
         "opening_range_end": ["10:00"],
@@ -93,19 +115,112 @@ def _minimal_grid(**overrides) -> dict:
     return base
 
 
-def _make_sweeper(grid=None, tmp=None) -> tuple[SweepRunner, Path]:
+def _make_sweeper(grid=None, provider=None, tmp=None) -> tuple[SweepRunner, Path]:
     if tmp is None:
         tmp = Path(tempfile.mkdtemp())
     return SweepRunner(
         base_config=_make_config(),
         output_dir=tmp,
         grid=grid or _minimal_grid(),
-        data_provider=FakeDataProvider(),
+        data_provider=provider or FakeDataProvider(),
     ), tmp
 
 
 # ===========================================================================
-# DEFAULT_GRID combinatorics (no backtest needed)
+# CachedDataProvider
+# ===========================================================================
+
+class TestCachedDataProvider:
+    def test_first_call_delegates_to_inner(self):
+        inner = CountingDataProvider()
+        cached = CachedDataProvider(inner)
+        cached.fetch_bars("SPY", "2024-01-02", "2024-01-05", "5m")
+        assert len(inner.calls) == 1
+
+    def test_second_identical_call_does_not_hit_inner(self):
+        inner = CountingDataProvider()
+        cached = CachedDataProvider(inner)
+        cached.fetch_bars("SPY", "2024-01-02", "2024-01-05", "5m")
+        cached.fetch_bars("SPY", "2024-01-02", "2024-01-05", "5m")
+        assert len(inner.calls) == 1
+
+    def test_different_symbols_each_hit_inner_once(self):
+        inner = CountingDataProvider()
+        cached = CachedDataProvider(inner)
+        cached.fetch_bars("SPY", "2024-01-02", "2024-01-05", "5m")
+        cached.fetch_bars("QQQ", "2024-01-02", "2024-01-05", "5m")
+        assert len(inner.calls) == 2
+
+    def test_different_date_range_is_separate_entry(self):
+        inner = CountingDataProvider()
+        cached = CachedDataProvider(inner)
+        cached.fetch_bars("SPY", "2024-01-02", "2024-01-05", "5m")
+        cached.fetch_bars("SPY", "2024-01-08", "2024-01-12", "5m")
+        assert len(inner.calls) == 2
+
+    def test_returns_copy_not_reference(self):
+        inner = FakeDataProvider()
+        cached = CachedDataProvider(inner)
+        df1 = cached.fetch_bars("SPY", "2024-01-02", "2024-01-05", "5m")
+        df1["close"] = 999.0
+        df2 = cached.fetch_bars("SPY", "2024-01-02", "2024-01-05", "5m")
+        assert (df2["close"] != 999.0).all(), "Cache must return a copy, not the same object"
+
+    def test_cache_size_property(self):
+        inner = FakeDataProvider()
+        cached = CachedDataProvider(inner)
+        assert cached.cache_size == 0
+        cached.fetch_bars("SPY", "2024-01-02", "2024-01-05", "5m")
+        assert cached.cache_size == 1
+        cached.fetch_bars("QQQ", "2024-01-02", "2024-01-05", "5m")
+        assert cached.cache_size == 2
+        cached.fetch_bars("SPY", "2024-01-02", "2024-01-05", "5m")  # hit
+        assert cached.cache_size == 2
+
+    def test_provider_property_exposes_inner(self):
+        inner = FakeDataProvider()
+        cached = CachedDataProvider(inner)
+        assert cached.provider is inner
+
+
+# ===========================================================================
+# SweepRunner caching integration
+# ===========================================================================
+
+class TestSweepRunnerCaching:
+    def test_same_symbol_fetched_once_across_multiple_experiments(self):
+        inner = CountingDataProvider()
+        # Three experiments, all using SPY with different or_end values.
+        grid = _minimal_grid(opening_range_end=["09:45", "10:00", "10:15"])
+        sweeper = SweepRunner(
+            base_config=_make_config(),
+            output_dir=Path(tempfile.mkdtemp()),
+            grid=grid,
+            data_provider=inner,
+        )
+        sweeper.run()
+        spy_calls = [c for c in sweeper._data_provider._cache if c[0] == "SPY"]
+        assert len(spy_calls) == 1, "SPY should be fetched only once despite 3 experiments"
+
+    def test_provider_is_wrapped_in_cache(self):
+        inner = FakeDataProvider()
+        sweeper, _ = _make_sweeper(provider=inner)
+        assert isinstance(sweeper._data_provider, CachedDataProvider)
+
+    def test_already_cached_provider_not_double_wrapped(self):
+        inner   = FakeDataProvider()
+        already = CachedDataProvider(inner)
+        sweeper = SweepRunner(
+            base_config=_make_config(),
+            output_dir=Path(tempfile.mkdtemp()),
+            grid=_minimal_grid(),
+            data_provider=already,
+        )
+        assert sweeper._data_provider is already
+
+
+# ===========================================================================
+# DEFAULT_GRID combinatorics (pure computation — no backtest)
 # ===========================================================================
 
 class TestDefaultGrid:
@@ -115,10 +230,8 @@ class TestDefaultGrid:
         assert len(list(product(*values))) == 54
 
     def test_all_four_sweep_dimensions_present(self):
-        assert "symbols"           in DEFAULT_GRID
-        assert "opening_range_end" in DEFAULT_GRID
-        assert "breakout_trigger"  in DEFAULT_GRID
-        assert "position_size_pct" in DEFAULT_GRID
+        for dim in ("symbols", "opening_range_end", "breakout_trigger", "position_size_pct"):
+            assert dim in DEFAULT_GRID
 
     def test_expected_symbol_sets(self):
         assert ["SPY"]        in DEFAULT_GRID["symbols"]
@@ -158,7 +271,7 @@ class TestSweepRunnerStructure:
         )
         sweeper, _ = _make_sweeper(grid=grid)
         df = sweeper.run()
-        assert len(df) == 6   # 3 × 2
+        assert len(df) == 6  # 3 × 2
 
     def test_experiments_csv_is_created(self):
         sweeper, out = _make_sweeper()
@@ -186,6 +299,78 @@ class TestSweepRunnerStructure:
 
 
 # ===========================================================================
+# Status and error columns
+# ===========================================================================
+
+class TestStatusErrorColumns:
+    def test_successful_row_has_status_ok(self):
+        sweeper, _ = _make_sweeper()
+        df = sweeper.run()
+        assert df["status"].iloc[0] == "ok"
+
+    def test_successful_row_has_empty_error(self):
+        sweeper, _ = _make_sweeper()
+        df = sweeper.run()
+        assert df["error"].iloc[0] == ""
+
+    def test_failed_row_has_status_failed(self):
+        sweeper, _ = _make_sweeper(provider=ErrorDataProvider())
+        df = sweeper.run()
+        assert (df["status"] == "failed").all()
+
+    def test_failed_row_has_non_empty_error(self):
+        sweeper, _ = _make_sweeper(provider=ErrorDataProvider())
+        df = sweeper.run()
+        assert df["error"].iloc[0] != ""
+
+    def test_failed_row_error_contains_exception_message(self):
+        sweeper, _ = _make_sweeper(provider=ErrorDataProvider())
+        df = sweeper.run()
+        assert "Simulated fetch failure" in df["error"].iloc[0]
+
+    def test_failed_row_metrics_are_null(self):
+        sweeper, _ = _make_sweeper(provider=ErrorDataProvider())
+        df = sweeper.run()
+        assert df["num_trades"].isna().all()
+        assert df["final_equity"].isna().all()
+
+    def test_status_and_error_in_csv(self):
+        sweeper, out = _make_sweeper()
+        sweeper.run()
+        df = pd.read_csv(out / "experiments.csv")
+        assert "status" in df.columns
+        assert "error"  in df.columns
+
+
+# ===========================================================================
+# JSON symbols column
+# ===========================================================================
+
+class TestSymbolsJsonColumn:
+    def test_single_symbol_is_json_list(self):
+        sweeper, _ = _make_sweeper()
+        df = sweeper.run()
+        parsed = json.loads(df["symbols"].iloc[0])
+        assert parsed == ["SPY"]
+
+    def test_multi_symbol_is_json_list(self):
+        grid = _minimal_grid(symbols=[["SPY", "QQQ"]])
+        sweeper, _ = _make_sweeper(grid=grid)
+        df = sweeper.run()
+        parsed = json.loads(df["symbols"].iloc[0])
+        assert parsed == ["SPY", "QQQ"]
+
+    def test_symbols_column_is_valid_json_for_all_rows(self):
+        grid = _minimal_grid(symbols=[["SPY"], ["QQQ"], ["SPY", "QQQ"]])
+        sweeper, _ = _make_sweeper(grid=grid)
+        df = sweeper.run()
+        for val in df["symbols"]:
+            parsed = json.loads(val)
+            assert isinstance(parsed, list)
+            assert all(isinstance(s, str) for s in parsed)
+
+
+# ===========================================================================
 # Parameter variation
 # ===========================================================================
 
@@ -194,13 +379,8 @@ class TestParameterVariation:
         grid = _minimal_grid(symbols=[["SPY"], ["QQQ"]])
         sweeper, _ = _make_sweeper(grid=grid)
         df = sweeper.run()
-        assert set(df["symbols"]) == {"SPY", "QQQ"}
-
-    def test_multi_symbol_formatted_with_plus(self):
-        grid = _minimal_grid(symbols=[["SPY", "QQQ"]])
-        sweeper, _ = _make_sweeper(grid=grid)
-        df = sweeper.run()
-        assert df["symbols"].iloc[0] == "SPY+QQQ"
+        symbol_sets = {tuple(json.loads(v)) for v in df["symbols"]}
+        assert symbol_sets == {("SPY",), ("QQQ",)}
 
     def test_opening_range_end_column_reflects_grid(self):
         grid = _minimal_grid(opening_range_end=["09:45", "10:15"])
@@ -271,13 +451,9 @@ class TestConfigIsolation:
         assert cfg.strategy.params["position_size_pct"] == original
 
     def test_independent_runs_do_not_share_strategy_state(self):
-        # Two experiments with the same symbol must not bleed opening-range
-        # cache from the first run into the second.
         grid = _minimal_grid(opening_range_end=["09:45", "10:00"])
         sweeper, _ = _make_sweeper(grid=grid)
         df = sweeper.run()
-        # Both should complete without exception and return equal num_trades
-        # (flat data → 0 trades either way); the key assertion is no error.
         assert len(df) == 2
         assert (df["num_trades"] == 0).all()
 
@@ -301,17 +477,14 @@ class TestCsvOutput:
         assert len(df_returned) == len(df_csv)
 
     def test_overwrite_on_second_run(self):
-        grid = _minimal_grid()
-        sweeper, out = _make_sweeper(grid=grid)
+        sweeper, out = _make_sweeper()
         sweeper.run()
-        # Second run with a different grid — CSV should reflect new results.
         grid2 = _minimal_grid(opening_range_end=["09:45", "10:00"])
-        sweeper2 = SweepRunner(
+        SweepRunner(
             base_config=_make_config(),
             output_dir=out,
             grid=grid2,
             data_provider=FakeDataProvider(),
-        )
-        sweeper2.run()
+        ).run()
         df = pd.read_csv(out / "experiments.csv")
         assert len(df) == 2
