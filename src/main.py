@@ -5,10 +5,13 @@ Application entry point.
 
 Usage
 -----
-    # from the trading-bot/ directory
+    # Single backtest with full reporting (default)
     python -m src.main
 
-    # or with a custom config file
+    # Parameter sweep — writes output/experiments.csv
+    python -m src.main --mode sweep
+
+    # Custom config file
     python -m src.main --config path/to/settings.yaml
 
 TODO (Alpaca integration):
@@ -37,7 +40,7 @@ from src.utils.logger import configure_logging, get_logger
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Intraday Trading Bot — Backtest Mode")
+    parser = argparse.ArgumentParser(description="Intraday Trading Bot")
     parser.add_argument(
         "--config",
         type=str,
@@ -48,7 +51,16 @@ def parse_args() -> argparse.Namespace:
         "--output-dir",
         type=str,
         default="output",
-        help="Directory for equity curve chart and trade log CSV",
+        help="Directory for output files",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["backtest", "sweep"],
+        default="backtest",
+        help=(
+            "'backtest' runs a single backtest with full reporting; "
+            "'sweep' runs a parameter grid search and writes experiments.csv"
+        ),
     )
     return parser.parse_args()
 
@@ -97,17 +109,24 @@ def main() -> None:
     configure_logging(level=cfg.logging.level, fmt=cfg.logging.format)
     logger = get_logger(__name__)
 
-    logger.info("Loaded config: strategy=%s  symbols=%s", cfg.strategy.name, cfg.symbols)
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
+    logger.info("Loaded config: strategy=%s  symbols=%s  mode=%s",
+                cfg.strategy.name, cfg.symbols, args.mode)
+
+    if args.mode == "sweep":
+        from src.experiments.sweep_runner import SweepRunner
+        sweeper = SweepRunner(base_config=cfg, output_dir=output_dir)
+        sweeper.run()
+        return
+
+    # ---- backtest mode (default) -----------------------------------------
     engine = build_engine(cfg)
     results = engine.run()
     # Capture remaining open positions immediately after run() returns so the
     # validation check in ReportGenerator reflects reality.
     open_positions_count = len(engine._portfolio.positions)
-
-    # ---- Save outputs ------------------------------------------------
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
 
     # Equity curve chart
     equity_curve = results["equity_curve"]
