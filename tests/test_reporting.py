@@ -29,7 +29,13 @@ from src.config.loader import (
     RiskConfig,
     StrategyConfig,
 )
-from src.reporting.report_generator import ReportGenerator, _date_of, _time_of, _parse_hhmm
+from src.reporting.report_generator import (
+    TRADE_LOG_COLUMNS,
+    ReportGenerator,
+    _date_of,
+    _time_of,
+    _parse_hhmm,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +106,8 @@ def _make_reporter(
     trades: list[Trade] | None = None,
     config: AppConfig | None = None,
     output_dir: Path | None = None,
+    open_positions_count: int = 0,
+    metrics: dict | None = None,
 ) -> tuple[ReportGenerator, Path]:
     if output_dir is None:
         tmp = tempfile.mkdtemp()
@@ -107,24 +115,26 @@ def _make_reporter(
     cfg = config or _make_config()
     eq  = _make_equity_curve()
     trs = trades if trades is not None else [_make_trade()]
+    default_metrics = {
+        "initial_capital":       100_000.0,
+        "final_equity":          100_300.0,
+        "num_trades":            len(trs),
+        "total_return_pct":      0.30,
+        "annualized_return_pct": 3.60,
+        "max_drawdown_pct":     -0.10,
+        "sharpe_ratio":          1.20,
+        "win_rate_pct":          60.0,
+        "avg_winning_trade":     350.0,
+        "avg_losing_trade":     -80.0,
+        "total_commission":      sum(t.commission for t in trs),
+    }
     return ReportGenerator(
-        metrics={
-            "initial_capital": 100_000.0,
-            "final_equity":    100_300.0,
-            "num_trades":      len(trs),
-            "total_return_pct":       0.30,
-            "annualized_return_pct":  3.60,
-            "max_drawdown_pct":      -0.10,
-            "sharpe_ratio":           1.20,
-            "win_rate_pct":           60.0,
-            "avg_winning_trade":      350.0,
-            "avg_losing_trade":      -80.0,
-            "total_commission":       sum(t.commission for t in trs),
-        },
+        metrics=metrics if metrics is not None else default_metrics,
         trades=trs,
         equity_curve=eq,
         config=cfg,
         output_dir=output_dir,
+        open_positions_count=open_positions_count,
     ), output_dir
 
 
@@ -223,6 +233,13 @@ class TestTradeLogCsv:
         reporter._write_trade_log_csv()
         df = pd.read_csv(out / "trade_log.csv")
         assert len(df) == 0
+
+    def test_empty_trade_log_has_required_columns(self):
+        reporter, out = _make_reporter(trades=[])
+        reporter._write_trade_log_csv()
+        df = pd.read_csv(out / "trade_log.csv", index_col="entry_time")
+        expected = {c for c in TRADE_LOG_COLUMNS if c != "entry_time"}
+        assert expected == set(df.columns)
 
 
 # ===========================================================================
@@ -382,6 +399,20 @@ class TestValidationChecks:
         check = next(r for r in results if "Session-end exits on entry date" in r["check"])
         assert check["status"] == "WARN"
 
+    def test_open_positions_count_zero_passes(self):
+        reporter, _ = _make_reporter(open_positions_count=0)
+        results = reporter._run_validation_checks()
+        check = next(r for r in results if "No open positions at end" in r["check"])
+        assert check["status"] == "PASS"
+        assert check["detail"] == "OK"
+
+    def test_open_positions_count_nonzero_warns(self):
+        reporter, _ = _make_reporter(open_positions_count=2)
+        results = reporter._run_validation_checks()
+        check = next(r for r in results if "No open positions at end" in r["check"])
+        assert check["status"] == "WARN"
+        assert "2" in check["detail"]
+
 
 # ===========================================================================
 # backtest_report.md
@@ -427,6 +458,34 @@ class TestMarkdownReport:
         reporter._write_markdown_report([])
         content = (out / "backtest_report.md").read_text()
         assert "No trades" in content
+
+    def test_trade_summary_stats_present(self):
+        t1 = _make_trade(symbol="SPY", exit_reason="force_exit")
+        t2 = _make_trade(
+            symbol="QQQ",
+            entry_time="2024-01-02 10:10:00-05:00",
+            exit_time="2024-01-02 15:55:00-05:00",
+            entry_price=380.0, exit_price=383.0,
+            exit_reason="stop_loss",
+        )
+        reporter, out = _make_reporter(trades=[t1, t2])
+        reporter._write_markdown_report(reporter._run_validation_checks())
+        content = (out / "backtest_report.md").read_text()
+        assert "Total trades" in content
+        assert "Trades by symbol" in content
+        assert "Trades by exit reason" in content
+        assert "Best trade" in content
+        assert "Worst trade" in content
+        assert "Avg winning trade" in content
+        assert "Avg losing trade" in content
+
+    def test_minimal_metrics_no_crash(self):
+        # Report must be created even if only a subset of known metrics are present.
+        reporter, out = _make_reporter(metrics={"num_trades": 0, "initial_capital": 50_000.0})
+        reporter._write_markdown_report([])
+        content = (out / "backtest_report.md").read_text()
+        assert "## Performance Metrics" in content
+        assert "N/A" in content  # missing keys rendered as N/A
 
 
 # ===========================================================================

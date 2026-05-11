@@ -22,6 +22,45 @@ from src.utils.logger import get_logger
 logger = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
+# Public constants
+# ---------------------------------------------------------------------------
+
+TRADE_LOG_COLUMNS: list[str] = [
+    "symbol",
+    "direction",
+    "entry_time",
+    "exit_time",
+    "entry_price",
+    "exit_price",
+    "shares",
+    "pnl",
+    "pnl_pct",
+    "commission",
+    "exit_reason",
+    "or_high",
+    "or_low",
+    "breakout_trigger",
+    "trigger_val",
+]
+
+# ---------------------------------------------------------------------------
+# Known metrics display spec: (dict_key, display_label, format_string)
+# ---------------------------------------------------------------------------
+
+_METRIC_DISPLAY: list[tuple[str, str, str]] = [
+    ("final_equity",          "Final equity",      "${:,.2f}"),
+    ("total_return_pct",      "Total return",      "{:.2f}%"),
+    ("annualized_return_pct", "Annualised return", "{:.2f}%"),
+    ("max_drawdown_pct",      "Max drawdown",      "{:.2f}%"),
+    ("sharpe_ratio",          "Sharpe ratio",      "{:.4f}"),
+    ("num_trades",            "Number of trades",  "{}"),
+    ("win_rate_pct",          "Win rate",          "{:.2f}%"),
+    ("avg_winning_trade",     "Avg winning trade", "${:,.2f}"),
+    ("avg_losing_trade",      "Avg losing trade",  "${:,.2f}"),
+    ("total_commission",      "Total commission",  "${:,.2f}"),
+]
+
+# ---------------------------------------------------------------------------
 # Validation result helpers
 # ---------------------------------------------------------------------------
 
@@ -53,6 +92,11 @@ class ReportGenerator:
         Loaded application configuration.
     output_dir:
         Directory to write all output files.
+    open_positions_count:
+        Number of positions still open after the backtest ended.  The engine
+        normally force-closes everything, so this should be 0.  Pass
+        ``len(engine._portfolio.positions)`` after ``engine.run()`` to make
+        the validation check real.
     """
 
     def __init__(
@@ -62,12 +106,14 @@ class ReportGenerator:
         equity_curve: pd.DataFrame,
         config: AppConfig,
         output_dir: str | Path,
+        open_positions_count: int = 0,
     ) -> None:
-        self._metrics      = metrics
-        self._trades       = trades
-        self._equity_curve = equity_curve
-        self._config       = config
-        self._output_dir   = Path(output_dir)
+        self._metrics               = metrics
+        self._trades                = trades
+        self._equity_curve          = equity_curve
+        self._config                = config
+        self._output_dir            = Path(output_dir)
+        self._open_positions_count  = open_positions_count
         self._output_dir.mkdir(parents=True, exist_ok=True)
 
         self._force_exit_time: str = config.strategy.params.get("force_exit_time", "15:55")
@@ -99,8 +145,17 @@ class ReportGenerator:
     # ------------------------------------------------------------------
 
     def _build_trade_log_df(self) -> pd.DataFrame:
+        """Build the trade-log DataFrame.
+
+        Always returns a DataFrame with the columns defined in
+        ``TRADE_LOG_COLUMNS``, indexed by ``entry_time``.  The DataFrame is
+        empty (zero rows) when there are no trades, but the schema is stable.
+        """
         if not self._trades:
-            return pd.DataFrame()
+            non_index = [c for c in TRADE_LOG_COLUMNS if c != "entry_time"]
+            df = pd.DataFrame(columns=non_index)
+            df.index.name = "entry_time"
+            return df
 
         rows: list[dict[str, Any]] = []
         for t in self._trades:
@@ -129,13 +184,12 @@ class ReportGenerator:
         return df
 
     def _write_trade_log_csv(self) -> None:
-        df = self._build_trade_log_df()
+        df   = self._build_trade_log_df()
         path = self._output_dir / "trade_log.csv"
+        df.to_csv(path)
         if df.empty:
-            df.to_csv(path)
-            logger.info("No trades — empty trade log saved to %s", path)
+            logger.info("No trades — empty trade log (header only) saved to %s", path)
         else:
-            df.to_csv(path)
             logger.info("Trade log (%d trades) saved to %s", len(df), path)
 
     # ------------------------------------------------------------------
@@ -153,13 +207,13 @@ class ReportGenerator:
 
         rows: list[dict[str, Any]] = []
         for day in sorted(groups):
-            day_trades  = groups[day]
-            pnls        = [t.pnl for t in day_trades]
-            winners     = [p for p in pnls if p > 0]
-            gross_pnl   = sum(pnls)
-            avg_pnl     = gross_pnl / len(pnls) if pnls else 0.0
-            win_rate    = len(winners) / len(pnls) * 100.0 if pnls else 0.0
-            symbols     = ", ".join(sorted({t.symbol for t in day_trades}))
+            day_trades   = groups[day]
+            pnls         = [t.pnl for t in day_trades]
+            winners      = [p for p in pnls if p > 0]
+            gross_pnl    = sum(pnls)
+            avg_pnl      = gross_pnl / len(pnls) if pnls else 0.0
+            win_rate     = len(winners) / len(pnls) * 100.0 if pnls else 0.0
+            symbols      = ", ".join(sorted({t.symbol for t in day_trades}))
             exit_reasons = ", ".join(sorted({t.exit_reason for t in day_trades}))
             rows.append({
                 "date":           day.isoformat(),
@@ -171,11 +225,10 @@ class ReportGenerator:
                 "exit_reasons":   exit_reasons,
             })
 
-        df = pd.DataFrame(rows).set_index("date")
-        return df
+        return pd.DataFrame(rows).set_index("date")
 
     def _write_daily_summary_csv(self) -> None:
-        df = self._build_daily_summary_df()
+        df   = self._build_daily_summary_df()
         path = self._output_dir / "daily_summary.csv"
         df.to_csv(path)
         logger.info("Daily summary saved to %s", path)
@@ -189,17 +242,15 @@ class ReportGenerator:
         trades  = self._trades
 
         # 1. No open positions at backtest end
+        n = self._open_positions_count
         results.append(_check(
             "No open positions at end",
-            passed=True,  # engine always force-closes; include for completeness
-            detail="Engine force-closes all positions at last bar",
+            passed=n == 0,
+            detail=f"{n} position(s) still open at backtest end" if n > 0 else "OK",
         ))
 
         # 2. No exit before (or equal to) entry
-        bad_times = [
-            t for t in trades
-            if t.exit_time <= t.entry_time
-        ]
+        bad_times = [t for t in trades if t.exit_time <= t.entry_time]
         results.append(_check(
             "Exit time after entry time",
             passed=len(bad_times) == 0,
@@ -244,10 +295,7 @@ class ReportGenerator:
         ))
 
         # 6. No missing / zero prices (entry or exit)
-        zero_prices = [
-            t for t in trades
-            if t.entry_price <= 0 or t.exit_price <= 0
-        ]
+        zero_prices = [t for t in trades if t.entry_price <= 0 or t.exit_price <= 0]
         results.append(_check(
             "No zero or negative prices",
             passed=len(zero_prices) == 0,
@@ -255,10 +303,7 @@ class ReportGenerator:
         ))
 
         # 7. No zero or negative share counts
-        bad_shares = [
-            t for t in trades
-            if t.shares <= 0
-        ]
+        bad_shares = [t for t in trades if t.shares <= 0]
         results.append(_check(
             "No zero or negative share counts",
             passed=len(bad_shares) == 0,
@@ -266,19 +311,14 @@ class ReportGenerator:
         ))
 
         # 8. ORB trades have or_high and or_low in meta
-        strategy_name = self._config.strategy.name
-        if "opening_range_breakout" in strategy_name:
-            missing_meta = [
-                t for t in trades
-                if "or_high" not in t.meta or "or_low" not in t.meta
-            ]
+        if "opening_range_breakout" in self._config.strategy.name:
+            missing_meta = [t for t in trades if "or_high" not in t.meta or "or_low" not in t.meta]
             results.append(_check(
                 "ORB trades have or_high and or_low",
                 passed=len(missing_meta) == 0,
                 detail=f"{len(missing_meta)} ORB trade(s) missing or_high/or_low in meta" if missing_meta else "OK",
             ))
 
-        # Log summary
         warns = [r for r in results if r["status"] == _WARN]
         if warns:
             for w in warns:
@@ -299,11 +339,7 @@ class ReportGenerator:
 
         lines: list[str] = []
 
-        # Title
-        lines += [
-            "# Backtest Report",
-            "",
-        ]
+        lines += ["# Backtest Report", ""]
 
         # --- Configuration ---
         lines += [
@@ -327,40 +363,78 @@ class ReportGenerator:
         lines.append("")
 
         # --- Performance Metrics ---
+        # Render known keys with formatting; fall back to string for unknowns.
         lines += [
             "## Performance Metrics",
             "",
             "| Metric | Value |",
             "| --- | --- |",
-            f"| Final equity | ${m['final_equity']:,.2f} |",
-            f"| Total return | {m['total_return_pct']:.2f}% |",
-            f"| Annualised return | {m['annualized_return_pct']:.2f}% |",
-            f"| Max drawdown | {m['max_drawdown_pct']:.2f}% |",
-            f"| Sharpe ratio | {m['sharpe_ratio']:.4f} |",
-            f"| Number of trades | {m['num_trades']} |",
-            f"| Win rate | {m['win_rate_pct']:.2f}% |",
-            f"| Avg winning trade | ${m['avg_winning_trade']:,.2f} |",
-            f"| Avg losing trade | ${m['avg_losing_trade']:,.2f} |",
-            f"| Total commission | ${m['total_commission']:,.2f} |",
-            "",
         ]
+        known_keys: set[str] = set()
+        for key, label, fmt in _METRIC_DISPLAY:
+            known_keys.add(key)
+            val = m.get(key)
+            if val is None:
+                rendered = "N/A"
+            else:
+                try:
+                    rendered = fmt.format(val)
+                except (ValueError, TypeError):
+                    rendered = str(val)
+            lines.append(f"| {label} | {rendered} |")
+        for key, val in m.items():
+            if key not in known_keys:
+                lines.append(f"| {key} | {val} |")
+        lines.append("")
 
         # --- Trade Summary ---
-        lines.append("## Trade Summary")
-        lines.append("")
+        lines += ["## Trade Summary", ""]
         trade_df = self._build_trade_log_df()
         if trade_df.empty:
             lines.append("_No trades were executed during this backtest._")
         else:
-            cols = ["symbol", "direction", "exit_time", "entry_price", "exit_price",
-                    "shares", "pnl", "pnl_pct", "exit_reason"]
-            display = trade_df.reset_index()[cols].copy()
-            lines.append(_df_to_md(display))
+            trades = self._trades
+            pnls   = [t.pnl for t in trades]
+            winners = [p for p in pnls if p > 0]
+            losers  = [p for p in pnls if p <= 0]
+
+            by_symbol: dict[str, int] = {}
+            for t in trades:
+                by_symbol[t.symbol] = by_symbol.get(t.symbol, 0) + 1
+
+            by_reason: dict[str, int] = {}
+            for t in trades:
+                by_reason[t.exit_reason] = by_reason.get(t.exit_reason, 0) + 1
+
+            best  = max(trades, key=lambda t: t.pnl)
+            worst = min(trades, key=lambda t: t.pnl)
+            avg_win  = sum(winners) / len(winners) if winners else 0.0
+            avg_loss = sum(losers)  / len(losers)  if losers  else 0.0
+
+            symbol_str = ", ".join(f"{sym}: {cnt}" for sym, cnt in sorted(by_symbol.items()))
+            reason_str = ", ".join(f"{r}: {cnt}"   for r, cnt  in sorted(by_reason.items()))
+
+            lines += [
+                "| Stat | Value |",
+                "| --- | --- |",
+                f"| Total trades | {len(trades)} |",
+                f"| Trades by symbol | {symbol_str} |",
+                f"| Trades by exit reason | {reason_str} |",
+                f"| Best trade (PnL) | ${best.pnl:,.2f} ({best.symbol}, {_date_of(best.exit_time)}) |",
+                f"| Worst trade (PnL) | ${worst.pnl:,.2f} ({worst.symbol}, {_date_of(worst.exit_time)}) |",
+                f"| Avg winning trade | ${avg_win:,.2f} |",
+                f"| Avg losing trade | ${avg_loss:,.2f} |",
+                "",
+                "### Trade Detail",
+                "",
+            ]
+            detail_cols = ["symbol", "direction", "exit_time", "entry_price",
+                           "exit_price", "shares", "pnl", "pnl_pct", "exit_reason"]
+            lines.append(_df_to_md(trade_df.reset_index()[detail_cols]))
         lines.append("")
 
         # --- Daily Summary ---
-        lines.append("## Daily Summary")
-        lines.append("")
+        lines += ["## Daily Summary", ""]
         daily_df = self._build_daily_summary_df()
         if daily_df.empty:
             lines.append("_No trades to summarise by day._")
@@ -376,8 +450,8 @@ class ReportGenerator:
             "| --- | --- | --- |",
         ]
         for r in validation_results:
-            status_badge = "✅ PASS" if r["status"] == _PASS else "⚠️ WARN"
-            lines.append(f"| {r['check']} | {status_badge} | {r['detail']} |")
+            badge = "✅ PASS" if r["status"] == _PASS else "⚠️ WARN"
+            lines.append(f"| {r['check']} | {badge} | {r['detail']} |")
         lines.append("")
 
         path.write_text("\n".join(lines), encoding="utf-8")

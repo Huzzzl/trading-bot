@@ -101,6 +101,9 @@ def main() -> None:
 
     engine = build_engine(cfg)
     results = engine.run()
+    # Capture remaining open positions immediately after run() returns so the
+    # validation check in ReportGenerator reflects reality.
+    open_positions_count = len(engine._portfolio.positions)
 
     # ---- Save outputs ------------------------------------------------
     output_dir = Path(args.output_dir)
@@ -119,6 +122,7 @@ def main() -> None:
         equity_curve=equity_curve,
         config=cfg,
         output_dir=output_dir,
+        open_positions_count=open_positions_count,
     )
     reporter.generate_all()
 
