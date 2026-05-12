@@ -322,6 +322,7 @@ class ReportGenerator:
         warn = (
             missing_ids_warn
             or result_count != intent_count
+            or unmatched_count > 0
             or mismatch_count > 0
         )
         return {

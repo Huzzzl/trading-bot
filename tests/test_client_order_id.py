@@ -174,6 +174,26 @@ class TestFakeBrokerClientOrderId:
         result = broker.submit_order(sell)
         assert result.client_order_id == "BT-000002"
 
+    def test_cancel_preserves_client_order_id(self):
+        # Submit a pending (non-immediately-filled) order so it can be cancelled
+        broker = FakeBrokerAdapter(fill_immediately=False)
+        intent = OrderIntent(
+            symbol="SPY", side="buy", quantity=10.0,
+            order_type="limit", reason="entry",
+            timestamp=_make_timestamp(),
+            limit_price=470.0,
+            client_order_id="BT-000001",
+        )
+        result = broker.submit_order(intent)
+        assert result.status == "accepted"
+
+        cancelled = broker.cancel_order(result.order_id)
+        assert cancelled is True
+
+        _, cancelled_result = broker.get_order(result.order_id)
+        assert cancelled_result.status == "cancelled"
+        assert cancelled_result.client_order_id == "BT-000001"
+
 
 # ---------------------------------------------------------------------------
 # BacktestEngine: deterministic IDs and reset per run
@@ -409,6 +429,34 @@ class TestReconciliationIdBased:
         rc = self._reconcile(intents, results)
         assert rc["overall_status"] == "PASS"
         assert rc["missing_ids_warn"] is False
+
+    def test_warn_when_same_count_but_different_ids(self):
+        # Same total count but one ID differs — unmatched_count > 0 → WARN
+        intents = [
+            _make_intent("SPY", "buy",  10.0, "entry",     "BT-000001"),
+            _make_intent("SPY", "sell", 10.0, "stop_loss", "BT-000002"),
+        ]
+        results = [
+            _make_result("SPY", "buy",  10.0, "entry",     "BT-000001"),
+            _make_result("SPY", "sell", 10.0, "stop_loss", "BT-999999"),  # wrong ID
+        ]
+        rc = self._reconcile(intents, results)
+        assert rc["unmatched_count"] > 0
+        assert rc["overall_status"] == "WARN"
+
+    def test_warn_when_intent_id_missing_from_results_same_count(self):
+        # Both lists have length 2 but BT-000002 has no matching result ID
+        intents = [
+            _make_intent("SPY", "buy",  10.0, "entry",     "BT-000001"),
+            _make_intent("SPY", "sell", 10.0, "stop_loss", "BT-000002"),
+        ]
+        results = [
+            _make_result("SPY", "buy",  10.0, "entry",     "BT-000001"),
+            _make_result("SPY", "sell", 10.0, "stop_loss", "BT-000003"),
+        ]
+        rc = self._reconcile(intents, results)
+        assert rc["unmatched_count"] > 0
+        assert rc["overall_status"] == "WARN"
 
     def test_reconciliation_json_has_missing_ids_warn(self):
         intents = [_make_intent(client_order_id="BT-000001")]

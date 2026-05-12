@@ -183,16 +183,17 @@ class FakeBrokerAdapter(BrokerAdapter):
             return False
 
         cancelled = OrderResult(
-            order_id     = result.order_id,
-            symbol       = result.symbol,
-            side         = result.side,
-            quantity     = result.quantity,
-            status       = "cancelled",
-            submitted_at = result.submitted_at,
-            reason       = result.reason,
-            filled_at    = None,
-            filled_price = None,
-            metadata     = dict(result.metadata),
+            order_id        = result.order_id,
+            symbol          = result.symbol,
+            side            = result.side,
+            quantity        = result.quantity,
+            status          = "cancelled",
+            submitted_at    = result.submitted_at,
+            reason          = result.reason,
+            filled_at       = None,
+            filled_price    = None,
+            metadata        = dict(result.metadata),
+            client_order_id = result.client_order_id,
         )
         self._orders[order_id] = (intent, cancelled)
         logger.debug("FakeBroker cancel: order_id=%s cancelled", order_id)
