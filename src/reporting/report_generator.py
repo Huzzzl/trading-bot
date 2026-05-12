@@ -155,10 +155,13 @@ class ReportGenerator:
         self._write_trade_log_csv()
         self._write_daily_summary_csv()
         self._write_order_intents_csv()
+        reconciliation: dict | None = None
         if self._order_results is not None:
             self._write_order_results_csv()
+            reconciliation = self._build_reconciliation()
+            self._write_reconciliation_json(reconciliation)
         validation_results = self._run_validation_checks()
-        self._write_markdown_report(validation_results)
+        self._write_markdown_report(validation_results, reconciliation)
 
     # ------------------------------------------------------------------
     # metrics.json
@@ -253,6 +256,58 @@ class ReportGenerator:
         path = self._output_dir / "order_intents.csv"
         df.to_csv(path, index=False)
         logger.info("Order intents (%d) saved to %s", len(rows), path)
+
+    # ------------------------------------------------------------------
+    # Order reconciliation
+    # ------------------------------------------------------------------
+
+    def _build_reconciliation(self) -> dict:
+        """Compare order_intents with order_results and return a summary dict.
+
+        Fields
+        ------
+        intent_count, result_count, unmatched_count, rejected_count,
+        accepted_count, filled_count, mismatch_count, overall_status ("PASS"|"WARN")
+        """
+        intents = self._order_intents
+        results = self._order_results or []
+
+        intent_count  = len(intents)
+        result_count  = len(results)
+        rejected_count = sum(1 for r in results if r.status == "rejected")
+        accepted_count = sum(1 for r in results if r.status == "accepted")
+        filled_count   = sum(1 for r in results if r.status == "filled")
+
+        unmatched_count = abs(intent_count - result_count)
+
+        mismatch_count = 0
+        for oi, r in zip(intents, results):
+            if (oi.symbol   != r.symbol   or
+                oi.side     != r.side     or
+                oi.quantity != r.quantity or
+                oi.reason   != r.reason):
+                mismatch_count += 1
+
+        warn = (
+            result_count != intent_count
+            or mismatch_count > 0
+        )
+        return {
+            "intent_count":   intent_count,
+            "result_count":   result_count,
+            "unmatched_count": unmatched_count,
+            "rejected_count": rejected_count,
+            "accepted_count": accepted_count,
+            "filled_count":   filled_count,
+            "mismatch_count": mismatch_count,
+            "overall_status": "WARN" if warn else "PASS",
+        }
+
+    def _write_reconciliation_json(self, reconciliation: dict) -> None:
+        path = self._output_dir / "order_reconciliation.json"
+        with path.open("w", encoding="utf-8") as fh:
+            json.dump(reconciliation, fh, indent=2)
+        logger.info("Order reconciliation saved to %s", path)
 
     # ------------------------------------------------------------------
     # order_results.csv
@@ -422,7 +477,11 @@ class ReportGenerator:
     # backtest_report.md
     # ------------------------------------------------------------------
 
-    def _write_markdown_report(self, validation_results: list[dict[str, str]]) -> None:
+    def _write_markdown_report(
+        self,
+        validation_results: list[dict[str, str]],
+        reconciliation: dict | None = None,
+    ) -> None:
         cfg  = self._config
         m    = self._metrics
         path = self._output_dir / "backtest_report.md"
@@ -544,6 +603,27 @@ class ReportGenerator:
             badge = "✅ PASS" if r["status"] == _PASS else "⚠️ WARN"
             lines.append(f"| {r['check']} | {badge} | {r['detail']} |")
         lines.append("")
+
+        # --- Order Reconciliation (dry-run only) ---
+        if reconciliation is not None:
+            rc     = reconciliation
+            badge  = "✅ PASS" if rc["overall_status"] == "PASS" else "⚠️ WARN"
+            lines += [
+                "## Order Reconciliation",
+                "",
+                f"Overall status: **{badge}**",
+                "",
+                "| Field | Value |",
+                "| --- | --- |",
+                f"| Intent count | {rc['intent_count']} |",
+                f"| Result count | {rc['result_count']} |",
+                f"| Unmatched count | {rc['unmatched_count']} |",
+                f"| Filled | {rc['filled_count']} |",
+                f"| Accepted | {rc['accepted_count']} |",
+                f"| Rejected | {rc['rejected_count']} |",
+                f"| Mismatch count | {rc['mismatch_count']} |",
+                "",
+            ]
 
         path.write_text("\n".join(lines), encoding="utf-8")
         logger.info("Markdown report saved to %s", path)
