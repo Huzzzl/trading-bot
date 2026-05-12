@@ -114,6 +114,27 @@ class AlpacaBrokerAdapter(BrokerAdapter):
         if not (_MARKET_OPEN <= t < _MARKET_CLOSE):
             raise RuntimeError("Outside regular market hours")
 
+    def _validate_order_intent(self, intent: OrderIntent) -> None:
+        """Validate an :class:`OrderIntent` before any broker submission.
+
+        Raises
+        ------
+        NotImplementedError
+            If ``order_type`` is not ``"market"``.
+        ValueError
+            If any required field is missing, empty, or out of range.
+        """
+        if intent.order_type != "market":
+            raise NotImplementedError("Only market orders are supported")
+        if not intent.client_order_id or not str(intent.client_order_id).strip():
+            raise ValueError("client_order_id is required")
+        if intent.quantity <= 0:
+            raise ValueError("quantity must be positive")
+        if not intent.symbol or not intent.symbol.strip():
+            raise ValueError("symbol is required")
+        if intent.side not in {"buy", "sell"}:
+            raise ValueError("side must be buy or sell")
+
     # ------------------------------------------------------------------
     # BrokerAdapter interface (not yet implemented)
     # ------------------------------------------------------------------

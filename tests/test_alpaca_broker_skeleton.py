@@ -320,3 +320,118 @@ class TestMainPaperModeGuard:
             from src.main import main as _main
             with pytest.raises(NotImplementedError):
                 _main()
+
+
+# ---------------------------------------------------------------------------
+# _validate_order_intent
+# ---------------------------------------------------------------------------
+
+class TestValidateOrderIntent:
+    def _adapter(self):
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        return AlpacaBrokerAdapter()
+
+    def _intent(self, **overrides):
+        """Return a valid market OrderIntent, with optional field overrides."""
+        from src.execution.order_intent import OrderIntent
+        defaults = dict(
+            symbol="SPY",
+            side="buy",
+            quantity=10.0,
+            order_type="market",
+            reason="entry",
+            timestamp=pd.Timestamp("2024-01-15 10:00:00", tz="America/New_York"),
+            client_order_id="BT-000001",
+        )
+        defaults.update(overrides)
+        return OrderIntent(**defaults)
+
+    # --- happy path ---
+
+    def test_valid_market_buy_passes(self):
+        self._adapter()._validate_order_intent(self._intent(side="buy"))
+
+    def test_valid_market_sell_passes(self):
+        self._adapter()._validate_order_intent(self._intent(side="sell"))
+
+    # --- order_type ---
+
+    def test_limit_order_raises_not_implemented(self):
+        intent = self._intent(order_type="limit", limit_price=470.0)
+        with pytest.raises(NotImplementedError, match="Only market orders are supported"):
+            self._adapter()._validate_order_intent(intent)
+
+    def test_stop_order_raises_not_implemented(self):
+        intent = self._intent(order_type="stop", stop_price=460.0)
+        with pytest.raises(NotImplementedError, match="Only market orders are supported"):
+            self._adapter()._validate_order_intent(intent)
+
+    # --- client_order_id ---
+
+    def test_missing_client_order_id_raises_value_error(self):
+        intent = self._intent(client_order_id=None)
+        with pytest.raises(ValueError, match="client_order_id is required"):
+            self._adapter()._validate_order_intent(intent)
+
+    def test_empty_client_order_id_raises_value_error(self):
+        intent = self._intent(client_order_id="   ")
+        with pytest.raises(ValueError, match="client_order_id is required"):
+            self._adapter()._validate_order_intent(intent)
+
+    # --- symbol ---
+
+    def test_empty_symbol_raises_value_error(self):
+        intent = self._intent(symbol="")
+        with pytest.raises(ValueError, match="symbol is required"):
+            self._adapter()._validate_order_intent(intent)
+
+    def test_whitespace_symbol_raises_value_error(self):
+        intent = self._intent(symbol="   ")
+        with pytest.raises(ValueError, match="symbol is required"):
+            self._adapter()._validate_order_intent(intent)
+
+    # --- side ---
+
+    def test_invalid_side_raises_value_error(self):
+        # OrderIntent validates side at construction time, so we bypass that
+        # by patching the frozen dataclass attribute directly.
+        intent = self._intent()
+        object.__setattr__(intent, "side", "short")
+        with pytest.raises(ValueError, match="side must be buy or sell"):
+            self._adapter()._validate_order_intent(intent)
+
+    # --- quantity ---
+
+    def test_zero_quantity_raises_value_error(self):
+        # OrderIntent already rejects quantity <= 0, so patch the field.
+        intent = self._intent()
+        object.__setattr__(intent, "quantity", 0.0)
+        with pytest.raises(ValueError, match="quantity must be positive"):
+            self._adapter()._validate_order_intent(intent)
+
+    def test_negative_quantity_raises_value_error(self):
+        intent = self._intent()
+        object.__setattr__(intent, "quantity", -5.0)
+        with pytest.raises(ValueError, match="quantity must be positive"):
+            self._adapter()._validate_order_intent(intent)
+
+    # --- isolation ---
+
+    def test_does_not_read_env_vars(self):
+        # Helper must not care about credentials at all
+        clean = {k: v for k, v in os.environ.items()
+                 if k not in ("ALPACA_API_KEY", "ALPACA_SECRET_KEY")}
+        with mock.patch.dict(os.environ, clean, clear=True):
+            self._adapter()._validate_order_intent(self._intent())  # must not raise
+
+    def test_does_not_call_market_hours_helper(self):
+        adapter = self._adapter()
+        with mock.patch.object(adapter, "_ensure_market_hours",
+                               side_effect=AssertionError("should not be called")):
+            adapter._validate_order_intent(self._intent())  # must not raise
+
+    # --- submit_order still blocked ---
+
+    def test_submit_order_still_raises_not_implemented(self):
+        with pytest.raises(NotImplementedError, match="AlpacaBrokerAdapter is not implemented yet"):
+            self._adapter().submit_order(self._intent())
