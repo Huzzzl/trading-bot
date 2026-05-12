@@ -37,6 +37,9 @@ risk:
   # Limit concurrent open positions for deterministic multi-symbol behavior.
   # Set to null to allow unlimited simultaneous positions.
   max_open_positions: 1
+  # Daily loss kill-switch. Set daily_loss_limit_pct to null to disable.
+  daily_loss_limit_pct: null
+  daily_loss_action: "block_new_entries"   # "block_new_entries" | "close_all"
 
 logging:
   level: INFO
