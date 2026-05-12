@@ -492,3 +492,57 @@ class TestDailyLossLimitIntegration:
         trades = _run_engine(bars, limit_pct=10.0, action="close_all")
         # No daily_loss_limit exit; position exits normally
         assert all(t.exit_reason != "daily_loss_limit" for t in trades)
+
+    # ---- priority: daily_loss_limit beats stop_loss / force_exit on same bar ----
+
+    def test_close_all_takes_priority_over_stop_loss_same_bar(self):
+        # Set OR low=50 so stop_loss=50; loss bar has low=50 → stop would fire.
+        # daily_loss_limit fires first and should be the only exit reason recorded.
+        rm = _make_rm(limit_pct=5.0, action="close_all")
+        portfolio = _make_portfolio(10_000.0)
+
+        rm._current_day      = "2024-01-02"
+        rm._day_start_equity = 10_000.0
+
+        # Open position with stop_loss=50
+        portfolio.open_long("SPY", 95.0, _ts("2024-01-02", "10:05"), 0.95, stop_loss=50.0)
+
+        # Bar where low=50 (hits stop) AND big drop triggers daily limit
+        bar_data = {"SPY": {"open": 50.0, "high": 50.0, "low": 50.0, "close": 50.0}}
+        exits = rm.check_exits(portfolio, _ts("2024-01-02", "10:10"), bar_data)
+
+        spy_exits = [(px, reason) for sym, px, reason in exits if sym == "SPY"]
+        assert len(spy_exits) == 1, "Only one exit per symbol"
+        assert spy_exits[0][1] == "daily_loss_limit"
+
+    def test_close_all_takes_priority_over_force_exit_same_bar(self):
+        # daily_loss_limit fires; force_exit time is also reached on the same bar.
+        rm = RiskManager(
+            force_exit_time="10:10",
+            daily_loss_limit_pct=5.0,
+            daily_loss_action="close_all",
+        )
+        portfolio = _make_portfolio(10_000.0)
+
+        rm._current_day      = "2024-01-02"
+        rm._day_start_equity = 10_000.0
+
+        portfolio.open_long("SPY", 95.0, _ts("2024-01-02", "10:05"), 0.95, stop_loss=1.0)
+
+        # Bar at 10:10 — matches force_exit_time AND causes big loss
+        bar_data = {"SPY": {"open": 50.0, "high": 50.0, "low": 50.0, "close": 50.0}}
+        exits = rm.check_exits(portfolio, _ts("2024-01-02", "10:10"), bar_data)
+
+        spy_exits = [(px, reason) for sym, px, reason in exits if sym == "SPY"]
+        assert len(spy_exits) == 1, "Only one exit per symbol"
+        assert spy_exits[0][1] == "daily_loss_limit"
+
+    def test_engine_no_duplicate_trades_when_daily_loss_and_stop_coincide(self):
+        # OR low=50 so stop fires at 50; loss bar also drops to 50 → daily limit.
+        # The engine should record exactly one trade (not two).
+        day = _make_day("2024-01-02", or_low=50.0, breakout_close=105.0, loss_close=50.0)
+        bars = {"SPY": day}
+        trades = _run_engine(bars, limit_pct=10.0, action="close_all")
+        spy_trades = [t for t in trades if t.symbol == "SPY"]
+        assert len(spy_trades) == 1
+        assert spy_trades[0].exit_reason == "daily_loss_limit"

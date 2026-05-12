@@ -245,8 +245,14 @@ class RiskManager:
                                 "DAILY_LOSS_LIMIT close_all: %s at %.4f", sym, price
                             )
 
+        # Symbols already scheduled for close_all — skip in the normal loop
+        # so that one position never generates two exit orders on the same bar.
+        daily_loss_closed: set[str] = {sym for sym, _, r in exits if r == "daily_loss_limit"}
+
         # ---- Per-position stop-loss and force-exit -------------------------
         for symbol, pos in list(portfolio.positions.items()):
+            if symbol in daily_loss_closed:
+                continue
             if symbol not in bar_data:
                 continue
 
