@@ -56,7 +56,8 @@ class RiskConfig:
 
 @dataclass
 class ExecutionConfig:
-    mode: str = "backtest"
+    mode:            str  = "backtest"
+    dry_run_broker:  bool = False
 
 
 @dataclass
@@ -165,7 +166,10 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
             f"Invalid execution.mode={raw_mode!r}. "
             f"Must be one of {sorted(_VALID_EXECUTION_MODES)}."
         )
-    execution_cfg = ExecutionConfig(mode=raw_mode)
+    execution_cfg = ExecutionConfig(
+        mode=raw_mode,
+        dry_run_broker=bool(ex.get("dry_run_broker", False)),
+    )
 
     return AppConfig(
         backtest=backtest_cfg,
