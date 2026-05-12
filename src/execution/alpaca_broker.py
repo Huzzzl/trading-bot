@@ -21,6 +21,8 @@ from datetime import datetime, time
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import pandas as pd
+
 from src.execution.broker import BrokerAdapter, OrderResult
 from src.execution.order_intent import OrderIntent
 
@@ -178,6 +180,70 @@ class AlpacaBrokerAdapter(BrokerAdapter):
             is stripped and comparison is case-insensitive.
         """
         return status.strip().lower() == "partially_filled"
+
+    def _order_response_to_result(self, response: Any, intent: OrderIntent) -> OrderResult:
+        """Convert an Alpaca order response to an :class:`OrderResult`.
+
+        Accepts either a ``dict``-like object or an attribute-based object
+        (e.g. an Alpaca SDK model).
+
+        Parameters
+        ----------
+        response:
+            The raw order response from Alpaca.
+        intent:
+            The originating :class:`OrderIntent`; used to supply ``reason``
+            and as a fallback for ``client_order_id``.
+
+        Raises
+        ------
+        ValueError
+            If the response status is not a recognised Alpaca status string.
+        """
+        def _get(key: str, default: Any = None) -> Any:
+            if isinstance(response, dict):
+                return response.get(key, default)
+            return getattr(response, key, default)
+
+        raw_status = str(_get("status", ""))
+        status     = self._normalize_status(raw_status)
+
+        # Timestamps — accept str, datetime, or None
+        def _to_ts(val: Any) -> pd.Timestamp | None:
+            if val is None:
+                return None
+            return pd.Timestamp(val)
+
+        submitted_at = _to_ts(_get("submitted_at"))
+        filled_at    = _to_ts(_get("filled_at"))
+
+        raw_filled_price = _get("filled_avg_price")
+        filled_price     = float(raw_filled_price) if raw_filled_price is not None else None
+
+        raw_qty    = _get("qty")
+        filled_qty = _get("filled_qty")
+
+        response_cid = _get("client_order_id")
+        client_order_id = response_cid if response_cid is not None else intent.client_order_id
+
+        metadata: dict[str, Any] = {"raw_status": raw_status}
+        if filled_qty is not None:
+            metadata["filled_qty"] = filled_qty
+        metadata["partial_fill"] = self._is_partial_fill(raw_status)
+
+        return OrderResult(
+            order_id        = str(_get("id", "")),
+            symbol          = str(_get("symbol", "")),
+            side            = str(_get("side", "")),
+            quantity        = float(raw_qty) if raw_qty is not None else intent.quantity,
+            status          = status,
+            submitted_at    = submitted_at or intent.timestamp,
+            reason          = intent.reason,
+            filled_at       = filled_at,
+            filled_price    = filled_price,
+            metadata        = metadata,
+            client_order_id = client_order_id,
+        )
 
     # ------------------------------------------------------------------
     # BrokerAdapter interface (not yet implemented)
