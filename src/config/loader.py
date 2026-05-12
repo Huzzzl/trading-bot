@@ -44,6 +44,7 @@ class StrategyConfig:
 
 
 _VALID_DAILY_LOSS_ACTIONS = {"block_new_entries", "close_all"}
+_VALID_EXECUTION_MODES    = {"backtest", "paper"}
 
 
 @dataclass
@@ -51,6 +52,11 @@ class RiskConfig:
     max_open_positions: int | None = None
     daily_loss_limit_pct: float | None = None
     daily_loss_action: str = "block_new_entries"
+
+
+@dataclass
+class ExecutionConfig:
+    mode: str = "backtest"
 
 
 @dataclass
@@ -67,6 +73,7 @@ class AppConfig:
     strategy: StrategyConfig
     risk: RiskConfig
     logging: LoggingConfig
+    execution: ExecutionConfig = field(default_factory=ExecutionConfig)
 
 
 # ---------------------------------------------------------------------------
@@ -151,6 +158,15 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
         format=lg.get("format", "%(asctime)s | %(levelname)s | %(message)s"),
     )
 
+    ex = raw.get("execution", {})
+    raw_mode = ex.get("mode", "backtest")
+    if raw_mode not in _VALID_EXECUTION_MODES:
+        raise ValueError(
+            f"Invalid execution.mode={raw_mode!r}. "
+            f"Must be one of {sorted(_VALID_EXECUTION_MODES)}."
+        )
+    execution_cfg = ExecutionConfig(mode=raw_mode)
+
     return AppConfig(
         backtest=backtest_cfg,
         symbols=list(raw["symbols"]),
@@ -158,4 +174,5 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
         strategy=strategy_cfg,
         risk=risk_cfg,
         logging=logging_cfg,
+        execution=execution_cfg,
     )

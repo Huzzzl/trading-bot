@@ -160,6 +160,12 @@ def main() -> None:
     logger.info("Loaded config: strategy=%s  symbols=%s  mode=%s",
                 cfg.strategy.name, cfg.symbols, args.mode)
 
+    if cfg.execution.mode == "paper":
+        raise NotImplementedError(
+            "Paper trading is not implemented yet. "
+            "Set execution.mode to 'backtest' in config/settings.yaml."
+        )
+
     if args.mode == "candidate-b":
         cfg = apply_candidate_b(cfg)
         logger.info("Candidate B overrides applied: symbols=%s  or_end=%s  trigger=%s  size=%.2f",
