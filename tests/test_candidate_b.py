@@ -112,6 +112,11 @@ class TestCandidateBConstant:
             "symbols", "opening_range_end", "breakout_trigger", "position_size_pct"
         }
 
+    def test_entry_cutoff_time_not_in_candidate_b_overrides(self):
+        # entry_cutoff_time is intentionally NOT overridden by Candidate B —
+        # it inherits null from the base config so no hardcoded cutoff is applied.
+        assert "entry_cutoff_time" not in CANDIDATE_B_OVERRIDES
+
 
 # ===========================================================================
 # apply_candidate_b — override correctness
@@ -144,6 +149,12 @@ class TestApplyCandidateB:
         assert result.strategy.params["opening_range_start"] == "09:30"
         assert result.strategy.params["force_exit_time"]     == "15:55"
         assert result.strategy.params["long_only"]           is True
+
+    def test_entry_cutoff_time_not_overridden_to_11_30(self):
+        cfg = _make_base_config()
+        cfg.strategy.params["entry_cutoff_time"] = None
+        result = apply_candidate_b(cfg)
+        assert result.strategy.params.get("entry_cutoff_time") is None
 
     def test_backtest_dates_preserved(self):
         cfg = _make_base_config()

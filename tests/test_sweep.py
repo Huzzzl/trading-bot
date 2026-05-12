@@ -106,10 +106,11 @@ def _make_config() -> AppConfig:
 
 def _minimal_grid(**overrides) -> dict:
     base = {
-        "symbols":           [["SPY"]],
-        "opening_range_end": ["10:00"],
-        "breakout_trigger":  ["close"],
-        "position_size_pct": [0.95],
+        "symbols":            [["SPY"]],
+        "opening_range_end":  ["10:00"],
+        "breakout_trigger":   ["close"],
+        "position_size_pct":  [0.95],
+        "entry_cutoff_time":  [None],
     }
     base.update(overrides)
     return base
@@ -224,13 +225,15 @@ class TestSweepRunnerCaching:
 # ===========================================================================
 
 class TestDefaultGrid:
-    def test_54_combinations(self):
+    def test_216_combinations(self):
+        # 3 symbol-sets × 3 or_end × 2 triggers × 3 sizes × 4 cutoffs = 216
         keys   = list(DEFAULT_GRID.keys())
         values = [DEFAULT_GRID[k] for k in keys]
-        assert len(list(product(*values))) == 54
+        assert len(list(product(*values))) == 216
 
-    def test_all_four_sweep_dimensions_present(self):
-        for dim in ("symbols", "opening_range_end", "breakout_trigger", "position_size_pct"):
+    def test_all_five_sweep_dimensions_present(self):
+        for dim in ("symbols", "opening_range_end", "breakout_trigger",
+                    "position_size_pct", "entry_cutoff_time"):
             assert dim in DEFAULT_GRID
 
     def test_expected_symbol_sets(self):
@@ -246,6 +249,13 @@ class TestDefaultGrid:
 
     def test_expected_position_sizes(self):
         assert set(DEFAULT_GRID["position_size_pct"]) == {0.25, 0.50, 0.95}
+
+    def test_entry_cutoff_time_values(self):
+        assert None   in DEFAULT_GRID["entry_cutoff_time"]
+        assert "10:30" in DEFAULT_GRID["entry_cutoff_time"]
+        assert "11:30" in DEFAULT_GRID["entry_cutoff_time"]
+        assert "13:30" in DEFAULT_GRID["entry_cutoff_time"]
+        assert len(DEFAULT_GRID["entry_cutoff_time"]) == 4
 
 
 # ===========================================================================
@@ -488,3 +498,63 @@ class TestCsvOutput:
         ).run()
         df = pd.read_csv(out / "experiments.csv")
         assert len(df) == 2
+
+
+# ===========================================================================
+# entry_cutoff_time in sweep grid and output
+# ===========================================================================
+
+class TestEntryCutoffSweep:
+    def test_entry_cutoff_time_column_in_dataframe(self):
+        sweeper, _ = _make_sweeper()
+        df = sweeper.run()
+        assert "entry_cutoff_time" in df.columns
+
+    def test_entry_cutoff_time_column_in_csv(self):
+        sweeper, out = _make_sweeper()
+        sweeper.run()
+        df = pd.read_csv(out / "experiments.csv")
+        assert "entry_cutoff_time" in df.columns
+
+    def test_none_cutoff_serialized_as_empty_in_csv(self):
+        sweeper, out = _make_sweeper(grid=_minimal_grid(entry_cutoff_time=[None]))
+        sweeper.run()
+        df = pd.read_csv(out / "experiments.csv")
+        assert df["entry_cutoff_time"].isna().all()
+
+    def test_string_cutoff_preserved_in_output(self):
+        grid = _minimal_grid(entry_cutoff_time=["11:30"])
+        sweeper, _ = _make_sweeper(grid=grid)
+        df = sweeper.run()
+        assert df["entry_cutoff_time"].iloc[0] == "11:30"
+
+    def test_multiple_cutoff_values_reflected_in_output(self):
+        grid = _minimal_grid(entry_cutoff_time=[None, "10:30", "11:30", "13:30"])
+        sweeper, _ = _make_sweeper(grid=grid)
+        df = sweeper.run()
+        assert len(df) == 4
+        non_null = df["entry_cutoff_time"].dropna()
+        assert set(non_null) == {"10:30", "11:30", "13:30"}
+
+    def test_patch_config_applies_none_cutoff(self):
+        cfg = _make_config()
+        sweeper, _ = _make_sweeper()
+        patched = sweeper._patch_config({"entry_cutoff_time": None})
+        assert patched.strategy.params.get("entry_cutoff_time") is None
+
+    def test_patch_config_applies_string_cutoff(self):
+        sweeper, _ = _make_sweeper()
+        patched = sweeper._patch_config({"entry_cutoff_time": "11:30"})
+        assert patched.strategy.params["entry_cutoff_time"] == "11:30"
+
+    def test_base_config_entry_cutoff_not_mutated(self):
+        cfg = _make_config()
+        cfg.strategy.params["entry_cutoff_time"] = None
+        sweeper = SweepRunner(
+            base_config=cfg,
+            output_dir=__import__("pathlib").Path(__import__("tempfile").mkdtemp()),
+            grid=_minimal_grid(entry_cutoff_time=["11:30"]),
+            data_provider=FakeDataProvider(),
+        )
+        sweeper.run()
+        assert cfg.strategy.params["entry_cutoff_time"] is None

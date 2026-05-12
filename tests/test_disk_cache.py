@@ -362,7 +362,7 @@ class TestWalkForwardRunnerIntegration:
             reference_end_date="2024-01-31",
         )
         df = runner.run()
-        assert len(df) == 3  # 3 candidates × 1 window
+        assert len(df) == 5  # 5 candidates × 1 window
         assert (df["status"] == "ok").all()
 
     def test_walk_forward_disk_cache_fetches_once_per_window(self, tmp_path):
@@ -376,7 +376,7 @@ class TestWalkForwardRunnerIntegration:
             reference_end_date="2024-01-31",
         )
         runner.run()
-        # All 3 candidates share the same QQQ date range for window=10.
+        # All 5 candidates share the same QQQ date range for window=10.
         # The underlying provider should be called exactly once.
         assert inner.call_count == 1
 

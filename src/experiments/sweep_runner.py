@@ -33,10 +33,11 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 DEFAULT_GRID: dict[str, list[Any]] = {
-    "symbols":           [["SPY"], ["QQQ"], ["SPY", "QQQ"]],
-    "opening_range_end": ["09:45", "10:00", "10:15"],
-    "breakout_trigger":  ["close", "high"],
-    "position_size_pct": [0.25, 0.50, 0.95],
+    "symbols":            [["SPY"], ["QQQ"], ["SPY", "QQQ"]],
+    "opening_range_end":  ["09:45", "10:00", "10:15"],
+    "breakout_trigger":   ["close", "high"],
+    "position_size_pct":  [0.25, 0.50, 0.95],
+    "entry_cutoff_time":  [None, "10:30", "11:30", "13:30"],
 }
 
 _PARAM_COLS: list[str] = [
@@ -45,6 +46,7 @@ _PARAM_COLS: list[str] = [
     "opening_range_end",
     "breakout_trigger",
     "position_size_pct",
+    "entry_cutoff_time",
 ]
 
 _METRIC_COLS: list[str] = [
@@ -201,6 +203,7 @@ class SweepRunner:
                 "opening_range_end": params.get("opening_range_end"),
                 "breakout_trigger":  params.get("breakout_trigger"),
                 "position_size_pct": params.get("position_size_pct"),
+                "entry_cutoff_time": params.get("entry_cutoff_time"),
             }
             for col in _METRIC_COLS:
                 row[col] = metrics.get(col)
@@ -247,6 +250,8 @@ class SweepRunner:
             cfg.strategy.params["breakout_trigger"] = params["breakout_trigger"]
         if "position_size_pct" in params:
             cfg.strategy.params["position_size_pct"] = params["position_size_pct"]
+        if "entry_cutoff_time" in params:
+            cfg.strategy.params["entry_cutoff_time"] = params["entry_cutoff_time"]
         return cfg
 
     def _build_engine(self, cfg: AppConfig) -> BacktestEngine:
