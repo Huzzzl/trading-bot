@@ -32,6 +32,7 @@ from zoneinfo import ZoneInfo
 from src.backtest.metrics import compute_metrics, format_metrics
 from src.backtest.trade import Trade
 from src.data.base import BaseDataProvider
+from src.execution.order_intent import OrderIntent
 from src.portfolio.portfolio import Portfolio
 from src.risk.risk_manager import RiskManager
 from src.strategy.base import BaseStrategy, Signal, SignalDirection
@@ -98,6 +99,9 @@ class BacktestEngine:
         # Loaded bar data: {symbol: DataFrame}
         self._bars: dict[str, pd.DataFrame] = {}
 
+        # Audit log of all intended orders generated during the backtest.
+        self._order_intents: list[OrderIntent] = []
+
         # Per-symbol state used to detect session boundaries.
         # We need the *previous* bar's date, timestamp, and close so that a
         # session-end exit is priced at the last bar of the closing session,
@@ -126,6 +130,7 @@ class BacktestEngine:
 
         # 1. Reset strategy state so re-running the same instance is safe.
         self._strategy.reset()
+        self._order_intents  = []
         self._last_bar_date  = {}
         self._last_bar_ts    = {}
         self._last_bar_close = {}
@@ -138,7 +143,7 @@ class BacktestEngine:
 
         if all_timestamps.empty:
             logger.error("No bar data loaded — aborting.")
-            return {"metrics": {}, "trades": [], "equity_curve": pd.DataFrame()}
+            return {"metrics": {}, "trades": [], "equity_curve": pd.DataFrame(), "order_intents": []}
 
         logger.info("Total bars in timeline: %d", len(all_timestamps))
 
@@ -161,9 +166,10 @@ class BacktestEngine:
         logger.info("=== Backtest complete ===")
 
         return {
-            "metrics":      metrics,
-            "trades":       self._portfolio.trades,
-            "equity_curve": equity_curve,
+            "metrics":       metrics,
+            "trades":        self._portfolio.trades,
+            "equity_curve":  equity_curve,
+            "order_intents": self._order_intents,
         }
 
     # ------------------------------------------------------------------
@@ -229,6 +235,8 @@ class BacktestEngine:
                     "closing at prev-session close=%.4f @ %s",
                     symbol, last_date, bar_date, prev_close, prev_ts,
                 )
+                qty = self._portfolio.positions[symbol].shares
+                self._record_exit_intent(symbol, qty, prev_close, "session_end", prev_ts)
                 self._portfolio.close_position(symbol, prev_close, prev_ts, "session_end")
 
         # ---- Risk: check exits BEFORE generating new signals ----------
@@ -239,6 +247,8 @@ class BacktestEngine:
             bar_data=bar_data,
         )
         for symbol, exit_price, reason in exit_orders:
+            qty = self._portfolio.positions[symbol].shares
+            self._record_exit_intent(symbol, qty, exit_price, reason, ts)
             self._portfolio.close_position(symbol, exit_price, ts, reason)
 
         # ---- Strategy: generate signals for each symbol ---------------
@@ -280,6 +290,24 @@ class BacktestEngine:
                 )
                 if pos is not None:
                     self._risk_manager.record_trade_taken(symbol, bar_date)
+                    smeta = signal.meta or {}
+                    self._order_intents.append(OrderIntent(
+                        symbol=signal.symbol,
+                        side="buy",
+                        quantity=pos.shares,
+                        order_type="market",
+                        reason="entry",
+                        timestamp=ts,
+                        metadata={
+                            "strategy":         self._strategy.__class__.__name__,
+                            "entry_price":      signal.entry_price,
+                            "stop_loss":        signal.stop_loss,
+                            "or_high":          smeta.get("or_high"),
+                            "or_low":           smeta.get("or_low"),
+                            "breakout_trigger": smeta.get("breakout_trigger"),
+                            "trigger_val":      smeta.get("trigger_val"),
+                        },
+                    ))
 
         # ---- Update per-symbol last-seen bar info ---------------------
         for symbol, bar in bar_data.items():
@@ -291,6 +319,29 @@ class BacktestEngine:
         current_prices = {sym: d["close"] for sym, d in bar_data.items()}
         self._portfolio.record_equity(ts, current_prices)
 
+    def _record_exit_intent(
+        self,
+        symbol: str,
+        qty: float,
+        price: float,
+        reason: str,
+        ts: pd.Timestamp,
+    ) -> None:
+        """Append a sell OrderIntent with a consistent metadata schema."""
+        self._order_intents.append(OrderIntent(
+            symbol=symbol,
+            side="sell",
+            quantity=qty,
+            order_type="market",
+            reason=reason,
+            timestamp=ts,
+            metadata={
+                "exit_price":      price,
+                "exit_reason":     reason,
+                "stop_execution":  self._stop_execution,
+            },
+        ))
+
     def _close_all_open_positions(self, ts: pd.Timestamp) -> None:
         """Force-close any positions still open at the final bar."""
         for symbol in list(self._portfolio.positions.keys()):
@@ -299,6 +350,8 @@ class BacktestEngine:
                 price = float(df.loc[ts, "close"])
             else:
                 price = self._portfolio.positions[symbol].entry_price
+            qty = self._portfolio.positions[symbol].shares
+            self._record_exit_intent(symbol, qty, price, "end_of_backtest", ts)
             self._portfolio.close_position(symbol, price, ts, "end_of_backtest")
 
     # ------------------------------------------------------------------

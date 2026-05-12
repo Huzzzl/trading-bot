@@ -17,6 +17,7 @@ import pandas as pd
 
 from src.backtest.trade import Trade
 from src.config.loader import AppConfig
+from src.execution.order_intent import OrderIntent
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -128,6 +129,7 @@ class ReportGenerator:
         config: AppConfig,
         output_dir: str | Path,
         open_positions_count: int = 0,
+        order_intents: list[OrderIntent] | None = None,
     ) -> None:
         self._metrics               = metrics
         self._trades                = trades
@@ -135,6 +137,7 @@ class ReportGenerator:
         self._config                = config
         self._output_dir            = Path(output_dir)
         self._open_positions_count  = open_positions_count
+        self._order_intents: list[OrderIntent] = order_intents or []
         self._output_dir.mkdir(parents=True, exist_ok=True)
 
         self._force_exit_time: str = config.strategy.params.get("force_exit_time", "15:55")
@@ -144,10 +147,11 @@ class ReportGenerator:
     # ------------------------------------------------------------------
 
     def generate_all(self) -> None:
-        """Write all four artefacts and log output paths."""
+        """Write all artefacts and log output paths."""
         self._write_metrics_json()
         self._write_trade_log_csv()
         self._write_daily_summary_csv()
+        self._write_order_intents_csv()
         validation_results = self._run_validation_checks()
         self._write_markdown_report(validation_results)
 
@@ -213,6 +217,37 @@ class ReportGenerator:
             logger.info("No trades — empty trade log (header only) saved to %s", path)
         else:
             logger.info("Trade log (%d trades) saved to %s", len(df), path)
+
+    # ------------------------------------------------------------------
+    # order_intents.csv
+    # ------------------------------------------------------------------
+
+    def _write_order_intents_csv(self) -> None:
+        rows: list[dict[str, Any]] = []
+        for oi in self._order_intents:
+            rows.append({
+                "timestamp":   str(oi.timestamp),
+                "symbol":      oi.symbol,
+                "side":        oi.side,
+                "quantity":    oi.quantity,
+                "order_type":  oi.order_type,
+                "reason":      oi.reason,
+                "limit_price": oi.limit_price,
+                "stop_price":  oi.stop_price,
+                "metadata_json": json.dumps(
+                    {k: v for k, v in oi.metadata.items() if v is not None},
+                    default=str,
+                ),
+            })
+
+        columns = [
+            "timestamp", "symbol", "side", "quantity", "order_type",
+            "reason", "limit_price", "stop_price", "metadata_json",
+        ]
+        df   = pd.DataFrame(rows, columns=columns) if rows else pd.DataFrame(columns=columns)
+        path = self._output_dir / "order_intents.csv"
+        df.to_csv(path, index=False)
+        logger.info("Order intents (%d) saved to %s", len(rows), path)
 
     # ------------------------------------------------------------------
     # daily_summary.csv

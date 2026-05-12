@@ -190,6 +190,7 @@ def main() -> None:
             config=cfg,
             output_dir=output_dir,
             open_positions_count=open_positions_count,
+            order_intents=results.get("order_intents", []),
         )
         reporter.generate_all()
         return
