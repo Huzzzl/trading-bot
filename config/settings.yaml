@@ -18,6 +18,8 @@ data:
   provider: yahoo           # currently only "yahoo" is supported
   bar_interval: "5m"        # yfinance interval string
   timezone: "America/New_York"
+  cache_enabled: true       # persist fetched bars to disk to avoid re-downloading
+  cache_dir: "data/cache"   # directory for cached parquet/csv files
 
 strategy:
   name: opening_range_breakout

@@ -33,6 +33,8 @@ class DataConfig:
     provider: str
     bar_interval: str
     timezone: str
+    cache_enabled: bool = True
+    cache_dir: str = "data/cache"
 
 
 @dataclass
@@ -115,6 +117,8 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
         provider=d["provider"],
         bar_interval=d["bar_interval"],
         timezone=d["timezone"],
+        cache_enabled=bool(d.get("cache_enabled", True)),
+        cache_dir=str(d.get("cache_dir", "data/cache")),
     )
 
     s = raw["strategy"]

@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.backtest.engine import BacktestEngine
 from src.config.loader import load_config, AppConfig
+from src.data.cached_provider import CachedMarketDataProvider
 from src.data.yahoo_provider import YahooDataProvider
 from src.portfolio.portfolio import Portfolio
 from src.reporting.report_generator import ReportGenerator
@@ -76,7 +77,12 @@ def build_engine(cfg: AppConfig) -> BacktestEngine:
     strategy = OpeningRangeBreakout(params=cfg.strategy.params)
 
     # TODO (Alpaca): replace with AlpacaDataProvider(api_key=…, secret=…)
-    data_provider = YahooDataProvider()
+    raw = YahooDataProvider()
+    data_provider = (
+        CachedMarketDataProvider(raw, cache_dir=cfg.data.cache_dir)
+        if cfg.data.cache_enabled
+        else raw
+    )
 
     portfolio = Portfolio(
         initial_capital=cfg.backtest.initial_capital,
@@ -118,13 +124,25 @@ def main() -> None:
 
     if args.mode == "sweep":
         from src.experiments.sweep_runner import SweepRunner
-        sweeper = SweepRunner(base_config=cfg, output_dir=output_dir)
+        raw = YahooDataProvider()
+        disk_provider = (
+            CachedMarketDataProvider(raw, cache_dir=cfg.data.cache_dir)
+            if cfg.data.cache_enabled
+            else raw
+        )
+        sweeper = SweepRunner(base_config=cfg, output_dir=output_dir, data_provider=disk_provider)
         sweeper.run()
         return
 
     if args.mode == "walk-forward":
         from src.experiments.walk_forward_runner import WalkForwardRunner
-        runner = WalkForwardRunner(base_config=cfg, output_dir=output_dir)
+        raw = YahooDataProvider()
+        disk_provider = (
+            CachedMarketDataProvider(raw, cache_dir=cfg.data.cache_dir)
+            if cfg.data.cache_enabled
+            else raw
+        )
+        runner = WalkForwardRunner(base_config=cfg, output_dir=output_dir, data_provider=disk_provider)
         runner.run()
         return
 
