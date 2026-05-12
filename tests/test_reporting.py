@@ -518,3 +518,131 @@ class TestGenerateAll:
         reporter.generate_all()
         df = pd.read_csv(out / "trade_log.csv", index_col="entry_time")
         assert set(df["symbol"]) == {"SPY", "QQQ"}
+
+
+# ===========================================================================
+# Trade Detail columns in backtest_report.md
+# ===========================================================================
+
+class TestMarkdownTradeDetail:
+    """Verify that the Trade Detail section of backtest_report.md contains
+    all columns required for ORB audit, including meta fields."""
+
+    # Required columns as specified in the task.
+    REQUIRED_COLS = [
+        "symbol",
+        "direction",
+        "entry_time",
+        "exit_time",
+        "entry_price",
+        "exit_price",
+        "shares",
+        "pnl",
+        "pnl_pct",
+        "exit_reason",
+        "or_high",
+        "or_low",
+        "breakout_trigger",
+        "trigger_val",
+        "stop_execution",
+    ]
+
+    def _report_text(self, meta: dict | None = None) -> str:
+        trade = _make_trade(meta=meta)
+        reporter, out = _make_reporter(trades=[trade])
+        reporter._write_markdown_report(reporter._run_validation_checks())
+        return (out / "backtest_report.md").read_text()
+
+    def test_trade_detail_section_present(self):
+        assert "Trade Detail" in self._report_text()
+
+    @pytest.mark.parametrize("col", REQUIRED_COLS)
+    def test_required_column_present(self, col):
+        content = self._report_text()
+        assert col in content, f"Column '{col}' missing from Trade Detail"
+
+    def test_all_required_columns_in_header_row(self):
+        content = self._report_text()
+        # Find the header row of the Trade Detail table.
+        for line in content.splitlines():
+            if "symbol" in line and "entry_time" in line and "stop_execution" in line:
+                for col in self.REQUIRED_COLS:
+                    assert col in line, f"Column '{col}' absent from header row"
+                return
+        pytest.fail("No Trade Detail header row found containing all expected columns")
+
+    def test_stop_execution_value_rendered_from_meta(self):
+        trade = _make_trade(meta={
+            "or_high": 471.0, "or_low": 468.0,
+            "breakout_trigger": "close", "trigger_val": 471.5,
+            "stop_execution": "stop_price",
+        })
+        reporter, out = _make_reporter(trades=[trade])
+        reporter._write_markdown_report(reporter._run_validation_checks())
+        content = (out / "backtest_report.md").read_text()
+        assert "stop_price" in content
+
+    def test_stop_execution_blank_when_meta_missing(self):
+        # Trade with empty meta should render blank (not crash).
+        trade = _make_trade(meta={})
+        reporter, out = _make_reporter(trades=[trade])
+        reporter._write_markdown_report(reporter._run_validation_checks())
+        content = (out / "backtest_report.md").read_text()
+        assert "Trade Detail" in content  # report still generated
+
+    def test_or_high_value_rendered(self):
+        content = self._report_text()
+        assert "471.0" in content  # or_high from default _make_trade meta
+
+    def test_or_low_value_rendered(self):
+        content = self._report_text()
+        assert "468.0" in content  # or_low from default _make_trade meta
+
+    def test_breakout_trigger_value_rendered(self):
+        content = self._report_text()
+        assert "close" in content  # breakout_trigger from default meta
+
+    def test_entry_time_column_present(self):
+        """entry_time must appear in Trade Detail (was missing in original impl)."""
+        content = self._report_text()
+        # Check it appears in the detail table, not just the header
+        detail_idx = content.find("Trade Detail")
+        assert detail_idx != -1
+        detail_section = content[detail_idx:]
+        assert "entry_time" in detail_section
+
+    def test_no_trades_does_not_crash(self):
+        reporter, out = _make_reporter(trades=[])
+        reporter._write_markdown_report([])
+        content = (out / "backtest_report.md").read_text()
+        assert "backtest" in content.lower()
+
+
+# ===========================================================================
+# stop_execution column in trade_log.csv
+# ===========================================================================
+
+class TestTradeLogStopExecutionColumn:
+    def test_stop_execution_column_in_csv_schema(self):
+        from src.reporting.report_generator import TRADE_LOG_COLUMNS
+        assert "stop_execution" in TRADE_LOG_COLUMNS
+
+    def test_stop_execution_value_written_to_csv(self):
+        trade = _make_trade(meta={
+            "or_high": 471.0, "or_low": 468.0,
+            "breakout_trigger": "close", "trigger_val": 471.5,
+            "stop_execution": "bar_close",
+        })
+        reporter, out = _make_reporter(trades=[trade])
+        reporter._write_trade_log_csv()
+        df = pd.read_csv(out / "trade_log.csv", index_col="entry_time")
+        assert "stop_execution" in df.columns
+        assert df["stop_execution"].iloc[0] == "bar_close"
+
+    def test_stop_execution_blank_when_not_in_meta(self):
+        trade = _make_trade(meta={})
+        reporter, out = _make_reporter(trades=[trade])
+        reporter._write_trade_log_csv()
+        df = pd.read_csv(out / "trade_log.csv", index_col="entry_time")
+        assert "stop_execution" in df.columns
+        assert str(df["stop_execution"].iloc[0]) in ("", "nan", "NaN")
