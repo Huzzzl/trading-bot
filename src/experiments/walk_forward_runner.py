@@ -45,20 +45,6 @@ CANDIDATES: dict[str, dict[str, Any]] = {
         "position_size_pct":  0.95,
         "entry_cutoff_time":  None,
     },
-    "B": {
-        "symbols":            ["QQQ"],
-        "opening_range_end":  "09:45",
-        "breakout_trigger":   "close",
-        "position_size_pct":  0.50,
-        "entry_cutoff_time":  None,
-    },
-    "C": {
-        "symbols":            ["QQQ"],
-        "opening_range_end":  "10:00",
-        "breakout_trigger":   "high",
-        "position_size_pct":  0.50,
-        "entry_cutoff_time":  None,
-    },
     "B0": {
         "symbols":            ["QQQ"],
         "opening_range_end":  "09:45",
@@ -72,6 +58,13 @@ CANDIDATES: dict[str, dict[str, Any]] = {
         "breakout_trigger":   "close",
         "position_size_pct":  0.50,
         "entry_cutoff_time":  "11:30",
+    },
+    "C": {
+        "symbols":            ["QQQ"],
+        "opening_range_end":  "10:00",
+        "breakout_trigger":   "high",
+        "position_size_pct":  0.50,
+        "entry_cutoff_time":  None,
     },
 }
 

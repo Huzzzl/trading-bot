@@ -123,8 +123,8 @@ def _make_runner(
 # ===========================================================================
 
 class TestConstants:
-    def test_five_candidates(self):
-        assert set(CANDIDATES.keys()) == {"A", "B", "C", "B0", "B1130"}
+    def test_four_candidates(self):
+        assert set(CANDIDATES.keys()) == {"A", "B0", "B1130", "C"}
 
     def test_all_candidates_use_qqq(self):
         for cid, params in CANDIDATES.items():
@@ -135,12 +135,6 @@ class TestConstants:
         assert p["opening_range_end"] == "09:45"
         assert p["breakout_trigger"]  == "close"
         assert p["position_size_pct"] == 0.95
-
-    def test_candidate_b_params(self):
-        p = CANDIDATES["B"]
-        assert p["opening_range_end"] == "09:45"
-        assert p["breakout_trigger"]  == "close"
-        assert p["position_size_pct"] == 0.50
 
     def test_candidate_c_params(self):
         p = CANDIDATES["C"]
@@ -256,24 +250,24 @@ class TestOutputStructure:
     def test_row_count_candidates_times_windows(self):
         runner, _ = _make_runner(windows=[10, 20])
         df = runner.run()
-        assert len(df) == 5 * 2  # 5 candidates × 2 windows
+        assert len(df) == 4 * 2  # 4 candidates × 2 windows
 
-    def test_single_window_gives_five_rows(self):
+    def test_single_window_gives_four_rows(self):
         runner, _ = _make_runner(windows=[10])
         df = runner.run()
-        assert len(df) == 5
+        assert len(df) == 4
 
-    def test_candidate_ids_are_a_b_c_b0_b1130(self):
+    def test_candidate_ids_are_a_b0_b1130_c(self):
         runner, _ = _make_runner(windows=[10])
         df = runner.run()
-        assert set(df["candidate_id"]) == {"A", "B", "C", "B0", "B1130"}
+        assert set(df["candidate_id"]) == {"A", "B0", "B1130", "C"}
 
     def test_window_ordering_in_csv(self):
         runner, _ = _make_runner(windows=[10, 20, 30])
         df = runner.run()
-        # Rows come out window-major: first all 5 candidates for window 10, then 20, then 30
-        assert df["start_date"].iloc[0] == df["start_date"].iloc[4]  # all 5 share window 10
-        assert df["start_date"].iloc[0] != df["start_date"].iloc[5]  # next window starts at 5
+        # Rows come out window-major: first all 4 candidates for window 10, then 20, then 30
+        assert df["start_date"].iloc[0] == df["start_date"].iloc[3]  # all 4 share window 10
+        assert df["start_date"].iloc[0] != df["start_date"].iloc[4]  # next window starts at 4
 
     def test_csv_has_no_extra_index_column(self):
         runner, out = _make_runner()
@@ -330,10 +324,10 @@ class TestColumnValues:
     def test_position_size_matches_candidate(self):
         runner, _ = _make_runner(windows=[10])
         df = runner.run()
-        row_a = df[df["candidate_id"] == "A"].iloc[0]
-        row_b = df[df["candidate_id"] == "B"].iloc[0]
+        row_a  = df[df["candidate_id"] == "A"].iloc[0]
+        row_b0 = df[df["candidate_id"] == "B0"].iloc[0]
         assert abs(row_a["position_size_pct"] - 0.95) < 1e-9
-        assert abs(row_b["position_size_pct"] - 0.50) < 1e-9
+        assert abs(row_b0["position_size_pct"] - 0.50) < 1e-9
 
     def test_metrics_are_numeric_on_success(self):
         runner, _ = _make_runner(windows=[10])
@@ -500,10 +494,10 @@ class TestEntryCutoffWalkForward:
         row = df[df["candidate_id"] == "B0"].iloc[0]
         assert pd.isna(row["entry_cutoff_time"]) or row["entry_cutoff_time"] is None
 
-    def test_a_b_c_have_null_cutoff(self):
+    def test_a_b0_c_have_null_cutoff(self):
         runner, _ = _make_runner(windows=[10])
         df = runner.run()
-        for cid in ("A", "B", "C"):
+        for cid in ("A", "B0", "C"):
             row = df[df["candidate_id"] == cid].iloc[0]
             assert pd.isna(row["entry_cutoff_time"]) or row["entry_cutoff_time"] is None
 
