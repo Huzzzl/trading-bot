@@ -401,3 +401,78 @@ class TestFakeBrokerInspectionHelpers:
         lst = fb.all_orders()
         lst.clear()
         assert fb.order_count == 1
+
+
+# ===========================================================================
+# FakeBrokerAdapter — position accounting correctness
+# ===========================================================================
+
+class TestFakeBrokerPositionAccounting:
+    """Verify that avg_price is tracked correctly across buys and sells."""
+
+    def _fb(self) -> FakeBrokerAdapter:
+        return FakeBrokerAdapter(fill_immediately=True, initial_cash=100_000.0)
+
+    def test_single_buy_creates_correct_position(self):
+        fb = self._fb()
+        fb.submit_order(_intent(symbol="SPY", side="buy", quantity=100.0, limit_price=10.0))
+        pos = fb.get_positions()
+        assert pos["SPY"]["quantity"]  == 100.0
+        assert pos["SPY"]["avg_price"] == 10.0
+
+    def test_two_buys_weighted_average(self):
+        fb = self._fb()
+        fb.submit_order(_intent(symbol="SPY", side="buy", quantity=100.0, limit_price=10.0))
+        fb.submit_order(_intent(symbol="SPY", side="buy", quantity=100.0, limit_price=20.0))
+        pos = fb.get_positions()
+        assert pos["SPY"]["quantity"]  == 200.0
+        assert pos["SPY"]["avg_price"] == 15.0
+
+    def test_partial_sell_preserves_avg_price(self):
+        fb = self._fb()
+        fb.submit_order(_intent(symbol="SPY", side="buy",  quantity=100.0, limit_price=10.0))
+        fb.submit_order(_intent(symbol="SPY", side="sell", quantity=50.0,  limit_price=12.0))
+        pos = fb.get_positions()
+        assert pos["SPY"]["quantity"]  == 50.0
+        assert pos["SPY"]["avg_price"] == 10.0  # unchanged by sell
+
+    def test_full_sell_removes_position(self):
+        fb = self._fb()
+        fb.submit_order(_intent(symbol="SPY", side="buy",  quantity=100.0, limit_price=10.0))
+        fb.submit_order(_intent(symbol="SPY", side="sell", quantity=100.0, limit_price=12.0))
+        assert fb.get_positions() == {}
+
+    def test_oversized_sell_is_rejected(self):
+        fb     = self._fb()
+        fb.submit_order(_intent(symbol="SPY", side="buy",  quantity=100.0, limit_price=10.0))
+        result = fb.submit_order(_intent(symbol="SPY", side="sell", quantity=150.0, limit_price=12.0))
+        assert result.status       == "rejected"
+        assert result.filled_price is None
+        assert result.filled_at    is None
+
+    def test_rejected_sell_does_not_change_position(self):
+        fb = self._fb()
+        fb.submit_order(_intent(symbol="SPY", side="buy",  quantity=100.0, limit_price=10.0))
+        fb.submit_order(_intent(symbol="SPY", side="sell", quantity=150.0, limit_price=12.0))
+        pos = fb.get_positions()
+        assert pos["SPY"]["quantity"]  == 100.0
+        assert pos["SPY"]["avg_price"] == 10.0
+
+    def test_rejected_sell_does_not_affect_cash(self):
+        fb = self._fb()
+        fb.submit_order(_intent(symbol="SPY", side="buy",  quantity=100.0, limit_price=10.0))
+        cash_after_buy = fb.get_account()["cash"]
+        fb.submit_order(_intent(symbol="SPY", side="sell", quantity=150.0, limit_price=12.0))
+        assert fb.get_account()["cash"] == cash_after_buy
+
+    def test_sell_with_no_position_is_rejected(self):
+        fb     = self._fb()
+        result = fb.submit_order(_intent(symbol="SPY", side="sell", quantity=10.0, limit_price=12.0))
+        assert result.status == "rejected"
+
+    def test_get_positions_returns_independent_copy(self):
+        fb = self._fb()
+        fb.submit_order(_intent(symbol="SPY", side="buy", quantity=100.0, limit_price=10.0))
+        pos = fb.get_positions()
+        pos["SPY"]["quantity"] = 999.0
+        assert fb.get_positions()["SPY"]["quantity"] == 100.0

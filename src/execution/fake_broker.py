@@ -59,6 +59,8 @@ class FakeBrokerAdapter(BrokerAdapter):
         self._next_id: int     = 1
         # order_id → (intent, result)
         self._orders: dict[str, tuple[OrderIntent, OrderResult]] = {}
+        # symbol → {"quantity": float, "avg_price": float}
+        self._positions: dict[str, dict] = {}
 
     # ------------------------------------------------------------------
     # BrokerAdapter interface
@@ -69,6 +71,7 @@ class FakeBrokerAdapter(BrokerAdapter):
 
         Market orders with a resolvable fill price are immediately filled
         when ``fill_immediately=True``; all others are left as ``"accepted"``.
+        A sell that exceeds the current long position is ``"rejected"``.
         """
         order_id = self._next_order_id()
         now      = intent.timestamp
@@ -82,13 +85,23 @@ class FakeBrokerAdapter(BrokerAdapter):
                 or intent.metadata.get("price")
             )
 
+        status:    str              = "accepted"
+        filled_at: pd.Timestamp | None = None
+        result_fill_price: float | None = None
+
         if self._fill_immediately and intent.order_type == "market" and fill_price is not None:
-            status    = "filled"
-            filled_at = now
-        else:
-            status    = "accepted"
-            filled_at = None
-            fill_price = None  # not filled yet
+            if intent.side == "sell":
+                current_qty = self._positions.get(intent.symbol, {}).get("quantity", 0.0)
+                if intent.quantity > current_qty + 1e-9:
+                    status = "rejected"
+                else:
+                    status            = "filled"
+                    filled_at         = now
+                    result_fill_price = fill_price
+            else:
+                status            = "filled"
+                filled_at         = now
+                result_fill_price = fill_price
 
         result = OrderResult(
             order_id     = order_id,
@@ -99,11 +112,14 @@ class FakeBrokerAdapter(BrokerAdapter):
             submitted_at = now,
             reason       = intent.reason,
             filled_at    = filled_at,
-            filled_price = fill_price,
+            filled_price = result_fill_price,
             metadata     = dict(intent.metadata),
         )
 
         self._orders[order_id] = (intent, result)
+        if status == "filled":
+            self._apply_fill(intent.symbol, intent.side, intent.quantity, result_fill_price)  # type: ignore[arg-type]
+
         logger.debug(
             "FakeBroker submit %s %s %.0f %s → %s  id=%s",
             intent.side, intent.symbol, intent.quantity,
@@ -112,34 +128,15 @@ class FakeBrokerAdapter(BrokerAdapter):
         return result
 
     def get_positions(self) -> dict[str, Any]:
-        """Return net open positions derived from filled orders.
+        """Return a copy of the current open position state.
 
         Returns
         -------
         dict
-            ``{symbol: {"quantity": float, "avg_price": float}}`` for symbols
-            with a non-zero net quantity.  Only ``"filled"`` orders are counted.
+            ``{symbol: {"quantity": float, "avg_price": float}}`` for all
+            symbols with a non-zero net long position.
         """
-        net_qty:   dict[str, float] = {}
-        cost_basis: dict[str, float] = {}
-
-        for _, (intent, result) in self._orders.items():
-            if result.status != "filled" or result.filled_price is None:
-                continue
-            qty   = result.quantity if intent.side == "buy" else -result.quantity
-            value = abs(qty) * result.filled_price
-            net_qty[intent.symbol]    = net_qty.get(intent.symbol, 0.0)    + qty
-            cost_basis[intent.symbol] = cost_basis.get(intent.symbol, 0.0) + value
-
-        positions: dict[str, Any] = {}
-        for sym, qty in net_qty.items():
-            if abs(qty) > 1e-9:
-                filled_qty = abs(qty)
-                positions[sym] = {
-                    "quantity":  round(qty, 6),
-                    "avg_price": round(cost_basis[sym] / filled_qty, 6) if filled_qty else 0.0,
-                }
-        return positions
+        return {sym: dict(pos) for sym, pos in self._positions.items()}
 
     def get_account(self) -> dict[str, Any]:
         """Return a static account snapshot.
@@ -219,6 +216,35 @@ class FakeBrokerAdapter(BrokerAdapter):
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _apply_fill(self, symbol: str, side: str, quantity: float, price: float) -> None:
+        """Update in-memory position state after a confirmed fill."""
+        if side == "buy":
+            pos = self._positions.get(symbol)
+            if pos is None:
+                self._positions[symbol] = {
+                    "quantity":  round(quantity, 6),
+                    "avg_price": round(price, 6),
+                }
+            else:
+                old_qty = pos["quantity"]
+                old_avg = pos["avg_price"]
+                new_qty = old_qty + quantity
+                new_avg = (old_qty * old_avg + quantity * price) / new_qty
+                self._positions[symbol] = {
+                    "quantity":  round(new_qty, 6),
+                    "avg_price": round(new_avg, 6),
+                }
+        else:  # sell
+            pos     = self._positions[symbol]
+            new_qty = pos["quantity"] - quantity
+            if abs(new_qty) < 1e-9:
+                del self._positions[symbol]
+            else:
+                self._positions[symbol] = {
+                    "quantity":  round(new_qty, 6),
+                    "avg_price": pos["avg_price"],
+                }
 
     def _next_order_id(self) -> str:
         oid = f"FAKE-{self._next_id:06d}"
