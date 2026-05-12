@@ -65,6 +65,10 @@ class BacktestEngine:
         Bar width string accepted by the data provider (e.g. ``"5m"``).
     position_size_pct:
         Fraction of available cash used for each entry.
+    stop_execution:
+        Stop-loss fill mode — ``"bar_close"`` or ``"stop_price"``.  Must match
+        the value passed to :class:`~src.risk.risk_manager.RiskManager`.
+        Stored here so it is recorded in position/trade meta.
     """
 
     def __init__(
@@ -78,6 +82,7 @@ class BacktestEngine:
         end_date: str,
         bar_interval: str = "5m",
         position_size_pct: float = 0.95,
+        stop_execution: str = "bar_close",
     ) -> None:
         self._strategy          = strategy
         self._data_provider     = data_provider
@@ -88,6 +93,7 @@ class BacktestEngine:
         self._end_date          = end_date
         self._bar_interval      = bar_interval
         self._position_size_pct = position_size_pct
+        self._stop_execution    = stop_execution
 
         # Loaded bar data: {symbol: DataFrame}
         self._bars: dict[str, pd.DataFrame] = {}
@@ -262,13 +268,15 @@ class BacktestEngine:
                 if not approved:
                     continue
 
+                meta = dict(signal.meta) if signal.meta else {}
+                meta["stop_execution"] = self._stop_execution
                 pos = self._portfolio.open_long(
                     symbol=signal.symbol,
                     entry_price=signal.entry_price,
                     timestamp=ts,
                     position_size_pct=self._position_size_pct,
                     stop_loss=signal.stop_loss,
-                    meta=signal.meta,
+                    meta=meta,
                 )
                 if pos is not None:
                     self._risk_manager.record_trade_taken(symbol, bar_date)

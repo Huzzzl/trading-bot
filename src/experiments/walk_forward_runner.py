@@ -262,10 +262,12 @@ class WalkForwardRunner:
             commission_per_share=cfg.backtest.commission_per_share,
             slippage_per_share=cfg.backtest.slippage_per_share,
         )
-        force_exit = cfg.strategy.params.get("force_exit_time", "15:55")
+        force_exit     = cfg.strategy.params.get("force_exit_time", "15:55")
+        stop_execution = cfg.strategy.params.get("stop_execution", "bar_close")
         risk_manager = RiskManager(
             force_exit_time=force_exit,
             max_open_positions=cfg.risk.max_open_positions,
+            stop_execution=stop_execution,
         )
         return BacktestEngine(
             strategy=strategy,
@@ -277,4 +279,5 @@ class WalkForwardRunner:
             end_date=cfg.backtest.end_date,
             bar_interval=cfg.data.bar_interval,
             position_size_pct=cfg.strategy.params.get("position_size_pct", 0.95),
+            stop_execution=stop_execution,
         )

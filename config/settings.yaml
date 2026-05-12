@@ -30,6 +30,7 @@ strategy:
     position_size_pct:   0.95      # fraction of available cash per trade
     long_only: true                # only long signals for MVP
     breakout_trigger: "close"      # "close" or "high" — field that must exceed or_high
+    stop_execution: "bar_close"    # "bar_close" or "stop_price" — how stop-loss exits are priced
 
 risk:
   # Limit concurrent open positions for deterministic multi-symbol behavior.

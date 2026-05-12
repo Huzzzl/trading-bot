@@ -32,6 +32,9 @@ logger = get_logger(__name__)
 _EASTERN = ZoneInfo("America/New_York")
 
 
+_VALID_STOP_EXECUTION = {"bar_close", "stop_price"}
+
+
 class RiskManager:
     """Apply pre-trade and per-bar risk rules.
 
@@ -48,6 +51,12 @@ class RiskManager:
         ``None`` means unlimited.  Set to ``1`` for strictly sequential
         trading (deterministic results when multiple symbols trigger
         simultaneously).
+    stop_execution:
+        How to price a stop-loss exit when ``bar.low <= stop_loss``.
+
+        ``"bar_close"``  — exit at the bar's closing price (default).
+        ``"stop_price"`` — exit at the exact stop-loss price; Portfolio will
+        still deduct normal sell-side slippage and commission on top.
     """
 
     def __init__(
@@ -55,10 +64,17 @@ class RiskManager:
         force_exit_time: str = "15:55",
         max_trades_per_symbol_per_day: int = 1,
         max_open_positions: int | None = None,
+        stop_execution: str = "bar_close",
     ) -> None:
+        if stop_execution not in _VALID_STOP_EXECUTION:
+            raise ValueError(
+                f"Invalid stop_execution={stop_execution!r}. "
+                f"Must be one of {sorted(_VALID_STOP_EXECUTION)}."
+            )
         self._force_exit_time = force_exit_time
         self._max_trades_per_day = max_trades_per_symbol_per_day
         self._max_open_positions = max_open_positions
+        self._stop_execution = stop_execution
         # Tracks {date_str: {symbol: trade_count}}
         self._daily_trade_count: dict[str, dict[str, int]] = {}
 
@@ -167,11 +183,14 @@ class RiskManager:
 
             # Priority 1: stop-loss
             if pos.stop_loss is not None and low_px <= pos.stop_loss:
-                # Assume we fill at the stop price (conservative)
-                exit_px = min(pos.stop_loss, close_px)
+                if self._stop_execution == "stop_price":
+                    exit_px = pos.stop_loss
+                else:  # "bar_close"
+                    exit_px = close_px
                 exits.append((symbol, exit_px, "stop_loss"))
                 logger.debug(
-                    "STOP   %s — low=%.4f <= stop=%.4f", symbol, low_px, pos.stop_loss
+                    "STOP   %s — low=%.4f <= stop=%.4f  exit_px=%.4f  mode=%s",
+                    symbol, low_px, pos.stop_loss, exit_px, self._stop_execution,
                 )
                 continue  # don't also force-exit the same position
 
