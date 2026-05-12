@@ -281,6 +281,8 @@ class WalkForwardRunner:
             force_exit_time=force_exit,
             max_open_positions=cfg.risk.max_open_positions,
             stop_execution=stop_execution,
+            daily_loss_limit_pct=cfg.risk.daily_loss_limit_pct,
+            daily_loss_action=cfg.risk.daily_loss_action,
         )
         return BacktestEngine(
             strategy=strategy,

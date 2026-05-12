@@ -43,9 +43,14 @@ class StrategyConfig:
     params: dict[str, Any] = field(default_factory=dict)
 
 
+_VALID_DAILY_LOSS_ACTIONS = {"block_new_entries", "close_all"}
+
+
 @dataclass
 class RiskConfig:
     max_open_positions: int | None = None
+    daily_loss_limit_pct: float | None = None
+    daily_loss_action: str = "block_new_entries"
 
 
 @dataclass
@@ -128,8 +133,16 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
     )
 
     r = raw.get("risk", {})
+    raw_action = r.get("daily_loss_action", "block_new_entries")
+    if raw_action not in _VALID_DAILY_LOSS_ACTIONS:
+        raise ValueError(
+            f"Invalid daily_loss_action={raw_action!r}. "
+            f"Must be one of {sorted(_VALID_DAILY_LOSS_ACTIONS)}."
+        )
     risk_cfg = RiskConfig(
         max_open_positions=r.get("max_open_positions", None),
+        daily_loss_limit_pct=r.get("daily_loss_limit_pct") or None,
+        daily_loss_action=raw_action,
     )
 
     lg = raw.get("logging", {})

@@ -382,6 +382,9 @@ class ReportGenerator:
             lines.append(f"| strategy.{k} | `{v}` |")
         if cfg.risk.max_open_positions is not None:
             lines.append(f"| Max open positions | {cfg.risk.max_open_positions} |")
+        if cfg.risk.daily_loss_limit_pct is not None:
+            lines.append(f"| Daily loss limit | {cfg.risk.daily_loss_limit_pct:.2f}% |")
+            lines.append(f"| Daily loss action | `{cfg.risk.daily_loss_action}` |")
         lines.append("")
 
         # --- Performance Metrics ---
