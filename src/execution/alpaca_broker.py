@@ -135,6 +135,50 @@ class AlpacaBrokerAdapter(BrokerAdapter):
         if intent.side not in {"buy", "sell"}:
             raise ValueError("side must be buy or sell")
 
+    @staticmethod
+    def _normalize_status(status: str) -> str:
+        """Map an Alpaca order status string to an internal ``OrderResult.status``.
+
+        Parameters
+        ----------
+        status:
+            Raw status string from the Alpaca API.  Leading/trailing whitespace
+            is stripped and comparison is case-insensitive.
+
+        Returns
+        -------
+        str
+            One of ``"accepted"``, ``"filled"``, ``"cancelled"``, or
+            ``"rejected"``.
+
+        Raises
+        ------
+        ValueError
+            If *status* does not match any known Alpaca status.
+        """
+        s = status.strip().lower()
+        if s in {"new", "pending_new", "accepted", "accepted_for_bidding"}:
+            return "accepted"
+        if s in {"filled", "partially_filled"}:
+            return "filled"
+        if s in {"canceled", "cancelled", "expired", "replaced"}:
+            return "cancelled"
+        if s in {"rejected", "stopped", "suspended", "calculated"}:
+            return "rejected"
+        raise ValueError(f"Unknown Alpaca order status: {status!r}")
+
+    @staticmethod
+    def _is_partial_fill(status: str) -> bool:
+        """Return ``True`` if *status* indicates a partial fill.
+
+        Parameters
+        ----------
+        status:
+            Raw status string from the Alpaca API.  Leading/trailing whitespace
+            is stripped and comparison is case-insensitive.
+        """
+        return status.strip().lower() == "partially_filled"
+
     # ------------------------------------------------------------------
     # BrokerAdapter interface (not yet implemented)
     # ------------------------------------------------------------------
