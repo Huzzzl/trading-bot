@@ -408,3 +408,134 @@ class TestOrderIntentsCSV:
         )
         reporter.generate_all()
         assert (out_dir / "order_intents.csv").exists()
+
+
+# ===========================================================================
+# Schema consistency fixes
+# ===========================================================================
+
+class TestEmptyDataReturn:
+    def test_no_bar_data_returns_order_intents_key(self):
+        eng = _build_engine({})
+        result = eng.run()
+        assert "order_intents" in result
+
+    def test_no_bar_data_order_intents_is_empty_list(self):
+        eng = _build_engine({})
+        result = eng.run()
+        assert result["order_intents"] == []
+
+    def test_no_bar_data_result_has_all_keys(self):
+        eng = _build_engine({})
+        result = eng.run()
+        for key in ("metrics", "trades", "equity_curve", "order_intents"):
+            assert key in result
+
+
+class TestExitIntentStopExecutionConsistency:
+    """All exit paths must include stop_execution in their metadata."""
+
+    def _sell_intents_by_reason(self, reason: str) -> list:
+        """Return sell intents matching a specific reason from a two-day run."""
+        bars = {"SPY": _make_two_day_bars()}
+        result = _build_engine(bars).run()
+        return [oi for oi in result["order_intents"] if oi.side == "sell" and oi.reason == reason]
+
+    def test_force_exit_metadata_contains_stop_execution(self):
+        intents = self._sell_intents_by_reason("force_exit")
+        assert intents, "Expected at least one force_exit sell intent"
+        for oi in intents:
+            assert "stop_execution" in oi.metadata
+
+    def test_force_exit_stop_execution_value_is_string(self):
+        intents = self._sell_intents_by_reason("force_exit")
+        for oi in intents:
+            assert isinstance(oi.metadata["stop_execution"], str)
+
+    def test_end_of_backtest_metadata_contains_stop_execution(self):
+        """Produce an end_of_backtest exit by leaving a position open at last bar."""
+        # Use a single day with NO force_exit bar so position survives to end
+        rows = {
+            _ts("2024-01-02", "09:30"): (480, 485, 475, 482),
+            _ts("2024-01-02", "09:50"): (482, 490, 476, 488),
+            _ts("2024-01-02", "10:00"): (488, 491, 477, 490),
+            _ts("2024-01-02", "10:05"): (490, 496, 488, 495),  # breakout — entry here
+            _ts("2024-01-02", "10:10"): (495, 497, 493, 496),  # no force_exit bar
+        }
+        df = pd.DataFrame.from_dict(rows, orient="index", columns=["open","high","low","close"])
+        df["volume"] = 1_000_000
+        df.index = pd.DatetimeIndex(df.index)
+        result = _build_engine({"SPY": df.sort_index()}).run()
+        eob = [oi for oi in result["order_intents"] if oi.reason == "end_of_backtest"]
+        assert eob, "Expected at least one end_of_backtest sell intent"
+        for oi in eob:
+            assert "stop_execution" in oi.metadata
+
+    def test_end_of_backtest_stop_execution_value_is_string(self):
+        rows = {
+            _ts("2024-01-02", "09:30"): (480, 485, 475, 482),
+            _ts("2024-01-02", "09:50"): (482, 490, 476, 488),
+            _ts("2024-01-02", "10:00"): (488, 491, 477, 490),
+            _ts("2024-01-02", "10:05"): (490, 496, 488, 495),
+            _ts("2024-01-02", "10:10"): (495, 497, 493, 496),
+        }
+        df = pd.DataFrame.from_dict(rows, orient="index", columns=["open","high","low","close"])
+        df["volume"] = 1_000_000
+        df.index = pd.DatetimeIndex(df.index)
+        result = _build_engine({"SPY": df.sort_index()}).run()
+        eob = [oi for oi in result["order_intents"] if oi.reason == "end_of_backtest"]
+        for oi in eob:
+            assert isinstance(oi.metadata["stop_execution"], str)
+
+    def test_session_end_metadata_contains_stop_execution(self):
+        """session_end fires when a position is open at the start of a new trading day."""
+        # Day 1: entry fires but NO force_exit bar → position survives overnight
+        rows_d1 = {
+            _ts("2024-01-02", "09:30"): (480, 485, 475, 482),
+            _ts("2024-01-02", "09:50"): (482, 490, 476, 488),
+            _ts("2024-01-02", "10:00"): (488, 491, 477, 490),
+            _ts("2024-01-02", "10:05"): (490, 496, 488, 495),  # breakout — entry
+            _ts("2024-01-02", "10:10"): (495, 497, 493, 496),  # session continues, no close
+        }
+        # Day 2: any bar triggers session_end for the surviving position
+        rows_d2 = {
+            _ts("2024-01-03", "09:30"): (496, 498, 494, 497),
+        }
+        all_rows = {**rows_d1, **rows_d2}
+        df = pd.DataFrame.from_dict(all_rows, orient="index", columns=["open","high","low","close"])
+        df["volume"] = 1_000_000
+        df.index = pd.DatetimeIndex(df.index)
+        result = _build_engine({"SPY": df.sort_index()}).run()
+        se = [oi for oi in result["order_intents"] if oi.reason == "session_end"]
+        assert se, "Expected at least one session_end sell intent"
+        for oi in se:
+            assert "stop_execution" in oi.metadata
+
+    def test_session_end_stop_execution_value_is_string(self):
+        rows_d1 = {
+            _ts("2024-01-02", "09:30"): (480, 485, 475, 482),
+            _ts("2024-01-02", "09:50"): (482, 490, 476, 488),
+            _ts("2024-01-02", "10:00"): (488, 491, 477, 490),
+            _ts("2024-01-02", "10:05"): (490, 496, 488, 495),
+            _ts("2024-01-02", "10:10"): (495, 497, 493, 496),
+        }
+        rows_d2 = {_ts("2024-01-03", "09:30"): (496, 498, 494, 497)}
+        all_rows = {**rows_d1, **rows_d2}
+        df = pd.DataFrame.from_dict(all_rows, orient="index", columns=["open","high","low","close"])
+        df["volume"] = 1_000_000
+        df.index = pd.DatetimeIndex(df.index)
+        result = _build_engine({"SPY": df.sort_index()}).run()
+        se = [oi for oi in result["order_intents"] if oi.reason == "session_end"]
+        for oi in se:
+            assert isinstance(oi.metadata["stop_execution"], str)
+
+    def test_all_sell_intents_have_stop_execution(self):
+        """Regression: every sell intent from any exit path has stop_execution."""
+        bars = {"SPY": _make_two_day_bars()}
+        result = _build_engine(bars).run()
+        sells = [oi for oi in result["order_intents"] if oi.side == "sell"]
+        assert sells
+        for oi in sells:
+            assert "stop_execution" in oi.metadata, (
+                f"Missing stop_execution on sell intent reason={oi.reason!r}"
+            )

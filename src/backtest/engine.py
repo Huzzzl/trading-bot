@@ -143,7 +143,7 @@ class BacktestEngine:
 
         if all_timestamps.empty:
             logger.error("No bar data loaded — aborting.")
-            return {"metrics": {}, "trades": [], "equity_curve": pd.DataFrame()}
+            return {"metrics": {}, "trades": [], "equity_curve": pd.DataFrame(), "order_intents": []}
 
         logger.info("Total bars in timeline: %d", len(all_timestamps))
 
@@ -236,11 +236,7 @@ class BacktestEngine:
                     symbol, last_date, bar_date, prev_close, prev_ts,
                 )
                 qty = self._portfolio.positions[symbol].shares
-                self._order_intents.append(OrderIntent(
-                    symbol=symbol, side="sell", quantity=qty,
-                    order_type="market", reason="session_end", timestamp=prev_ts,
-                    metadata={"exit_price": prev_close, "exit_reason": "session_end"},
-                ))
+                self._record_exit_intent(symbol, qty, prev_close, "session_end", prev_ts)
                 self._portfolio.close_position(symbol, prev_close, prev_ts, "session_end")
 
         # ---- Risk: check exits BEFORE generating new signals ----------
@@ -252,14 +248,7 @@ class BacktestEngine:
         )
         for symbol, exit_price, reason in exit_orders:
             qty = self._portfolio.positions[symbol].shares
-            exit_meta: dict[str, Any] = {"exit_price": exit_price, "exit_reason": reason}
-            if self._stop_execution:
-                exit_meta["stop_execution"] = self._stop_execution
-            self._order_intents.append(OrderIntent(
-                symbol=symbol, side="sell", quantity=qty,
-                order_type="market", reason=reason, timestamp=ts,
-                metadata=exit_meta,
-            ))
+            self._record_exit_intent(symbol, qty, exit_price, reason, ts)
             self._portfolio.close_position(symbol, exit_price, ts, reason)
 
         # ---- Strategy: generate signals for each symbol ---------------
@@ -330,6 +319,29 @@ class BacktestEngine:
         current_prices = {sym: d["close"] for sym, d in bar_data.items()}
         self._portfolio.record_equity(ts, current_prices)
 
+    def _record_exit_intent(
+        self,
+        symbol: str,
+        qty: float,
+        price: float,
+        reason: str,
+        ts: pd.Timestamp,
+    ) -> None:
+        """Append a sell OrderIntent with a consistent metadata schema."""
+        self._order_intents.append(OrderIntent(
+            symbol=symbol,
+            side="sell",
+            quantity=qty,
+            order_type="market",
+            reason=reason,
+            timestamp=ts,
+            metadata={
+                "exit_price":      price,
+                "exit_reason":     reason,
+                "stop_execution":  self._stop_execution,
+            },
+        ))
+
     def _close_all_open_positions(self, ts: pd.Timestamp) -> None:
         """Force-close any positions still open at the final bar."""
         for symbol in list(self._portfolio.positions.keys()):
@@ -339,11 +351,7 @@ class BacktestEngine:
             else:
                 price = self._portfolio.positions[symbol].entry_price
             qty = self._portfolio.positions[symbol].shares
-            self._order_intents.append(OrderIntent(
-                symbol=symbol, side="sell", quantity=qty,
-                order_type="market", reason="end_of_backtest", timestamp=ts,
-                metadata={"exit_price": price, "exit_reason": "end_of_backtest"},
-            ))
+            self._record_exit_intent(symbol, qty, price, "end_of_backtest", ts)
             self._portfolio.close_position(symbol, price, ts, "end_of_backtest")
 
     # ------------------------------------------------------------------
