@@ -8,6 +8,10 @@ status of this codebase.
 `execution.mode = "paper"` raises `NotImplementedError`.
 No Alpaca integration exists.  No API keys are present.
 
+The Alpaca adapter is **design-only** — see
+[docs/alpaca_adapter_design.md](alpaca_adapter_design.md) for the full
+specification.  Implementation is still blocked.
+
 ---
 
 ## 1. Strategy Readiness
@@ -58,7 +62,7 @@ No Alpaca integration exists.  No API keys are present.
       PASS/WARN status written to `order_reconciliation.json`
 - [x] `execution.mode = "paper"` raises `NotImplementedError` — paper trading
       is explicitly blocked until all checklist items are satisfied
-- [ ] Real broker adapter implemented (Alpaca or equivalent) — **not yet**
+- [ ] Real broker adapter implemented (Alpaca or equivalent) — **design only, not yet implemented** (see [alpaca_adapter_design.md](alpaca_adapter_design.md))
 - [ ] No Alpaca integration — no `ALPACA_API_KEY` or `ALPACA_SECRET_KEY`
 - [ ] Order acknowledgement and fill confirmation loop
 - [ ] Partial-fill handling
@@ -117,6 +121,6 @@ Before enabling paper trading, a human must confirm all of the following:
 
 The following are intentionally deferred:
 
-- **Alpaca integration** — no `AlpacaBrokerAdapter`, no API keys, no live feed
+- **Alpaca integration** — design complete ([alpaca_adapter_design.md](alpaca_adapter_design.md)); implementation not yet started; no API keys
 - **Paper mode** — `execution.mode = "paper"` raises `NotImplementedError`
 - **Live mode** — not planned until paper trading is stable for ≥ 30 days
