@@ -261,7 +261,7 @@ class TestAlpacaBrokerAdapterNotImplemented:
         )
 
     def test_submit_order_raises(self):
-        with pytest.raises(NotImplementedError, match="AlpacaBrokerAdapter is not implemented yet"):
+        with pytest.raises(NotImplementedError, match="Alpaca client is not implemented yet"):
             self._adapter().submit_order(self._make_intent())
 
     def test_get_positions_raises(self):
@@ -433,7 +433,7 @@ class TestValidateOrderIntent:
     # --- submit_order still blocked ---
 
     def test_submit_order_still_raises_not_implemented(self):
-        with pytest.raises(NotImplementedError, match="AlpacaBrokerAdapter is not implemented yet"):
+        with pytest.raises(NotImplementedError, match="Alpaca client is not implemented yet"):
             self._adapter().submit_order(self._intent())
 
 
@@ -531,7 +531,7 @@ class TestBuildOrderPayload:
     # --- submit_order still blocked ---
 
     def test_submit_order_still_raises_not_implemented(self):
-        with pytest.raises(NotImplementedError, match="AlpacaBrokerAdapter is not implemented yet"):
+        with pytest.raises(NotImplementedError, match="Alpaca client is not implemented yet"):
             self._adapter().submit_order(self._intent())
 
 
@@ -872,7 +872,7 @@ class TestOrderResponseToResult:
     # --- submit_order still blocked ---
 
     def test_submit_order_still_raises_not_implemented(self):
-        with pytest.raises(NotImplementedError, match="AlpacaBrokerAdapter is not implemented yet"):
+        with pytest.raises(NotImplementedError, match="Alpaca client is not implemented yet"):
             self._adapter().submit_order(self._intent())
 
 
@@ -947,6 +947,235 @@ class TestClientInjection:
             adapter._get_client()
 
     def test_submit_order_still_raises_not_implemented(self):
-        fake = object()
-        with pytest.raises(NotImplementedError, match="AlpacaBrokerAdapter is not implemented yet"):
-            self._adapter(client=fake).submit_order(self._intent())
+        # No client injected → NotImplementedError before market-hours check
+        with pytest.raises(NotImplementedError, match="Alpaca client is not implemented yet"):
+            self._adapter().submit_order(self._intent())
+
+
+# ---------------------------------------------------------------------------
+# submit_order (mock-client path)
+# ---------------------------------------------------------------------------
+
+class TestSubmitOrderMockClient:
+    """Tests for submit_order() exercised through an injected mock client."""
+
+    _RTH = datetime(2024, 1, 15, 10, 0, tzinfo=ZoneInfo("America/New_York"))
+
+    def _adapter(self, client=None):
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        return AlpacaBrokerAdapter(client=client)
+
+    def _intent(self, **overrides):
+        from src.execution.order_intent import OrderIntent
+        defaults = dict(
+            symbol="SPY", side="buy", quantity=10.0,
+            order_type="market", reason="entry",
+            timestamp=pd.Timestamp("2024-01-15 10:00:00", tz="America/New_York"),
+            client_order_id="BT-000001",
+        )
+        defaults.update(overrides)
+        return OrderIntent(**defaults)
+
+    def _mock_response(self, **overrides):
+        base = {
+            "id":               "alpaca-uuid-001",
+            "symbol":           "SPY",
+            "side":             "buy",
+            "qty":              "10",
+            "status":           "accepted",
+            "submitted_at":     "2024-01-15T10:00:00-05:00",
+            "filled_at":        None,
+            "filled_avg_price": None,
+            "filled_qty":       None,
+            "client_order_id":  "BT-000001",
+        }
+        base.update(overrides)
+        return base
+
+    def _rth_patch(self):
+        """Context manager: freeze _ensure_market_hours to always pass."""
+        return mock.patch(
+            "src.execution.alpaca_broker.AlpacaBrokerAdapter._ensure_market_hours"
+        )
+
+    # --- no client → NotImplementedError ---
+
+    def test_no_client_raises_not_implemented(self):
+        with pytest.raises(NotImplementedError, match="Alpaca client is not implemented yet"):
+            with self._rth_patch():
+                self._adapter()._ensure_market_hours = mock.Mock()
+            self._adapter().submit_order(self._intent())
+
+    def test_no_client_raises_not_implemented_direct(self):
+        adapter = self._adapter(client=None)
+        with pytest.raises(NotImplementedError, match="Alpaca client is not implemented yet"):
+            adapter.submit_order(self._intent())
+
+    # --- submit_order method ---
+
+    def test_client_submit_order_called_with_payload(self):
+        response = self._mock_response()
+        client = mock.MagicMock(spec=["submit_order"])
+        client.submit_order.return_value = response
+        with mock.patch.object(self._adapter(client=client), "_ensure_market_hours"):
+            adapter = self._adapter(client=client)
+            with mock.patch.object(adapter, "_ensure_market_hours"):
+                result = adapter.submit_order(self._intent())
+        assert client.submit_order.called
+        payload = client.submit_order.call_args[0][0]
+        assert payload["symbol"] == "SPY"
+        assert payload["side"] == "buy"
+        assert payload["type"] == "market"
+        assert payload["client_order_id"] == "BT-000001"
+
+    # --- create_order fallback ---
+
+    def test_client_create_order_called_when_no_submit_order(self):
+        response = self._mock_response()
+        client = mock.MagicMock(spec=["create_order"])
+        client.create_order.return_value = response
+        adapter = self._adapter(client=client)
+        with mock.patch.object(adapter, "_ensure_market_hours"):
+            adapter.submit_order(self._intent())
+        assert client.create_order.called
+
+    # --- prefers submit_order when both exist ---
+
+    def test_prefers_submit_order_over_create_order(self):
+        response = self._mock_response()
+        client = mock.MagicMock(spec=["submit_order", "create_order"])
+        client.submit_order.return_value = response
+        adapter = self._adapter(client=client)
+        with mock.patch.object(adapter, "_ensure_market_hours"):
+            adapter.submit_order(self._intent())
+        assert client.submit_order.called
+        assert not client.create_order.called
+
+    # --- returns OrderResult ---
+
+    def test_returns_order_result(self):
+        from src.execution.broker import OrderResult
+        response = self._mock_response()
+        client = mock.MagicMock(spec=["submit_order"])
+        client.submit_order.return_value = response
+        adapter = self._adapter(client=client)
+        with mock.patch.object(adapter, "_ensure_market_hours"):
+            result = adapter.submit_order(self._intent())
+        assert isinstance(result, OrderResult)
+        assert result.status == "accepted"
+        assert result.symbol == "SPY"
+        assert result.client_order_id == "BT-000001"
+
+    # --- market hours enforced ---
+
+    def test_ensure_market_hours_called_before_client(self):
+        call_order = []
+        response = self._mock_response()
+
+        client = mock.MagicMock(spec=["submit_order"])
+        client.submit_order.side_effect = lambda p: (call_order.append("client"), response)[1]
+
+        adapter = self._adapter(client=client)
+        original_emh = adapter._ensure_market_hours
+
+        def tracking_emh(now=None):
+            call_order.append("market_hours")
+            return original_emh(now=self._RTH)
+
+        with mock.patch.object(adapter, "_ensure_market_hours", side_effect=tracking_emh):
+            adapter.submit_order(self._intent())
+
+        assert call_order[0] == "market_hours"
+        assert "client" in call_order
+
+    def test_outside_market_hours_raises_and_does_not_call_client(self):
+        client = mock.MagicMock(spec=["submit_order"])
+        adapter = self._adapter(client=client)
+        outside = datetime(2024, 1, 15, 8, 0, tzinfo=ZoneInfo("America/New_York"))
+        with pytest.raises(RuntimeError, match="Outside regular market hours"):
+            adapter.submit_order(self._intent())  # real clock check; force via now kwarg
+        # client must not have been called
+        client.submit_order.assert_not_called()
+
+    def test_outside_market_hours_via_inject(self):
+        client = mock.MagicMock(spec=["submit_order"])
+        adapter = self._adapter(client=client)
+        outside = datetime(2024, 1, 14, 10, 0, tzinfo=ZoneInfo("America/New_York"))  # Sunday
+        with mock.patch.object(adapter, "_ensure_market_hours",
+                               side_effect=RuntimeError("Outside regular market hours")):
+            with pytest.raises(RuntimeError, match="Outside regular market hours"):
+                adapter.submit_order(self._intent())
+        client.submit_order.assert_not_called()
+
+    # --- validation errors propagate before client call ---
+
+    def test_invalid_intent_raises_before_client_call(self):
+        client = mock.MagicMock(spec=["submit_order"])
+        adapter = self._adapter(client=client)
+        intent = self._intent(client_order_id=None)
+        with pytest.raises(ValueError, match="client_order_id is required"):
+            with mock.patch.object(adapter, "_ensure_market_hours"):
+                adapter.submit_order(intent)
+        client.submit_order.assert_not_called()
+
+    def test_limit_order_raises_before_client_call(self):
+        client = mock.MagicMock(spec=["submit_order"])
+        adapter = self._adapter(client=client)
+        intent = self._intent(order_type="limit", limit_price=470.0)
+        with pytest.raises(NotImplementedError, match="Only market orders are supported"):
+            with mock.patch.object(adapter, "_ensure_market_hours"):
+                adapter.submit_order(intent)
+        client.submit_order.assert_not_called()
+
+    # --- _validate_credentials is not called ---
+
+    def test_validate_credentials_not_called(self):
+        response = self._mock_response()
+        client = mock.MagicMock(spec=["submit_order"])
+        client.submit_order.return_value = response
+        adapter = self._adapter(client=client)
+        with mock.patch.object(adapter, "_ensure_market_hours"), \
+             mock.patch.object(adapter, "_validate_credentials",
+                               side_effect=AssertionError("should not be called")):
+            adapter.submit_order(self._intent())  # must not raise
+
+    # --- env vars are not read ---
+
+    def test_does_not_read_env_vars(self):
+        response = self._mock_response()
+        client = mock.MagicMock(spec=["submit_order"])
+        client.submit_order.return_value = response
+        adapter = self._adapter(client=client)
+        clean = {k: v for k, v in os.environ.items()
+                 if k not in ("ALPACA_API_KEY", "ALPACA_SECRET_KEY")}
+        with mock.patch.dict(os.environ, clean, clear=True), \
+             mock.patch.object(adapter, "_ensure_market_hours"):
+            adapter.submit_order(self._intent())  # must not raise
+
+    # --- main.py paper guard still fires ---
+
+    def test_main_paper_guard_still_raises(self):
+        from src.config.loader import (
+            AppConfig, BacktestConfig, DataConfig, ExecutionConfig,
+            LoggingConfig, RiskConfig, StrategyConfig,
+        )
+        cfg = AppConfig(
+            backtest=BacktestConfig(
+                start_date="2024-01-15", end_date="2024-01-15",
+                initial_capital=100_000, commission_per_share=0.0, slippage_per_share=0.0,
+            ),
+            symbols=["SPY"],
+            data=DataConfig(provider="yahoo", bar_interval="5m", timezone="America/New_York"),
+            strategy=StrategyConfig(name="opening_range_breakout", params={
+                "opening_range_start": "09:30", "opening_range_end": "10:00",
+                "force_exit_time": "15:55", "position_size_pct": 0.95, "long_only": True,
+            }),
+            risk=RiskConfig(),
+            logging=LoggingConfig(level="WARNING", format="%(message)s"),
+            execution=ExecutionConfig(mode="paper", dry_run_broker=False),
+        )
+        with mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog"]):
+            from src.main import main as _main
+            with pytest.raises(NotImplementedError):
+                _main()
