@@ -45,6 +45,10 @@ class AlpacaBrokerAdapter(BrokerAdapter):
     paper:
         Must be ``True`` (default).  ``False`` raises :exc:`ValueError`
         immediately — live trading is not supported.
+    client:
+        Optional pre-built broker client (e.g. a mock).  When ``None``
+        (default), :meth:`_get_client` raises :exc:`NotImplementedError`
+        until a real client factory is wired in.
     """
 
     def __init__(
@@ -52,16 +56,31 @@ class AlpacaBrokerAdapter(BrokerAdapter):
         api_key: str | None = None,
         secret_key: str | None = None,
         paper: bool = True,
+        client: Any | None = None,
     ) -> None:
         if not paper:
             raise ValueError("Live trading is not supported")
         self.api_key    = api_key
         self.secret_key = secret_key
         self.paper      = paper
+        self._client    = client
 
     # ------------------------------------------------------------------
     # Private safety helpers
     # ------------------------------------------------------------------
+
+    def _get_client(self) -> Any:
+        """Return the injected broker client.
+
+        Raises
+        ------
+        NotImplementedError
+            If no client was injected at construction time.  A real client
+            factory will be wired in once the Alpaca SDK dependency is added.
+        """
+        if self._client is not None:
+            return self._client
+        raise NotImplementedError("Alpaca client is not implemented yet.")
 
     def _validate_credentials(self) -> tuple[str, str]:
         """Resolve and validate Alpaca API credentials.

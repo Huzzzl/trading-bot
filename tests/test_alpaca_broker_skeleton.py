@@ -874,3 +874,79 @@ class TestOrderResponseToResult:
     def test_submit_order_still_raises_not_implemented(self):
         with pytest.raises(NotImplementedError, match="AlpacaBrokerAdapter is not implemented yet"):
             self._adapter().submit_order(self._intent())
+
+
+# ---------------------------------------------------------------------------
+# Client injection / _get_client
+# ---------------------------------------------------------------------------
+
+class TestClientInjection:
+    def _adapter(self, **kwargs):
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        return AlpacaBrokerAdapter(**kwargs)
+
+    def _intent(self):
+        from src.execution.order_intent import OrderIntent
+        return OrderIntent(
+            symbol="SPY", side="buy", quantity=10.0,
+            order_type="market", reason="entry",
+            timestamp=pd.Timestamp("2024-01-15 10:00:00", tz="America/New_York"),
+            client_order_id="BT-000001",
+        )
+
+    def test_constructor_accepts_client(self):
+        fake = object()
+        adapter = self._adapter(client=fake)
+        assert adapter._client is fake
+
+    def test_constructor_default_client_is_none(self):
+        assert self._adapter()._client is None
+
+    def test_constructor_does_not_read_env_vars(self):
+        clean = {k: v for k, v in os.environ.items()
+                 if k not in ("ALPACA_API_KEY", "ALPACA_SECRET_KEY")}
+        with mock.patch.dict(os.environ, clean, clear=True):
+            adapter = self._adapter()
+        assert adapter._client is None
+
+    def test_get_client_returns_injected_client(self):
+        fake = object()
+        adapter = self._adapter(client=fake)
+        assert adapter._get_client() is fake
+
+    def test_get_client_returns_same_object_each_call(self):
+        fake = {"mock": True}
+        adapter = self._adapter(client=fake)
+        assert adapter._get_client() is adapter._get_client()
+
+    def test_get_client_without_client_raises_not_implemented(self):
+        with pytest.raises(NotImplementedError, match="Alpaca client is not implemented yet"):
+            self._adapter()._get_client()
+
+    def test_get_client_does_not_read_env_vars(self):
+        fake = object()
+        adapter = self._adapter(client=fake)
+        clean = {k: v for k, v in os.environ.items()
+                 if k not in ("ALPACA_API_KEY", "ALPACA_SECRET_KEY")}
+        with mock.patch.dict(os.environ, clean, clear=True):
+            result = adapter._get_client()
+        assert result is fake
+
+    def test_get_client_does_not_call_validate_credentials(self):
+        fake = object()
+        adapter = self._adapter(client=fake)
+        with mock.patch.object(adapter, "_validate_credentials",
+                               side_effect=AssertionError("should not be called")):
+            adapter._get_client()
+
+    def test_get_client_does_not_call_ensure_market_hours(self):
+        fake = object()
+        adapter = self._adapter(client=fake)
+        with mock.patch.object(adapter, "_ensure_market_hours",
+                               side_effect=AssertionError("should not be called")):
+            adapter._get_client()
+
+    def test_submit_order_still_raises_not_implemented(self):
+        fake = object()
+        with pytest.raises(NotImplementedError, match="AlpacaBrokerAdapter is not implemented yet"):
+            self._adapter(client=fake).submit_order(self._intent())
