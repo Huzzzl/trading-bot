@@ -183,6 +183,13 @@ def main() -> None:
         chart_path   = output_dir / "equity_curve.png"
         BacktestEngine.plot_equity_curve(equity_curve, output_path=chart_path)
 
+        order_results = None
+        if cfg.execution.dry_run_broker:
+            from src.execution.fake_broker import FakeBrokerAdapter
+            broker = FakeBrokerAdapter(fill_immediately=True)
+            order_results = [broker.submit_order(oi) for oi in results.get("order_intents", [])]
+            logger.info("Dry-run broker: submitted %d intents → %d results", len(order_results), len(order_results))
+
         reporter = ReportGenerator(
             metrics=results["metrics"],
             trades=results["trades"],
@@ -191,6 +198,7 @@ def main() -> None:
             output_dir=output_dir,
             open_positions_count=open_positions_count,
             order_intents=results.get("order_intents", []),
+            order_results=order_results,
         )
         reporter.generate_all()
         return

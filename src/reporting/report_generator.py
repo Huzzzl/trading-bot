@@ -17,6 +17,7 @@ import pandas as pd
 
 from src.backtest.trade import Trade
 from src.config.loader import AppConfig
+from src.execution.broker import OrderResult
 from src.execution.order_intent import OrderIntent
 from src.utils.logger import get_logger
 
@@ -130,6 +131,7 @@ class ReportGenerator:
         output_dir: str | Path,
         open_positions_count: int = 0,
         order_intents: list[OrderIntent] | None = None,
+        order_results: list[OrderResult] | None = None,
     ) -> None:
         self._metrics               = metrics
         self._trades                = trades
@@ -137,7 +139,8 @@ class ReportGenerator:
         self._config                = config
         self._output_dir            = Path(output_dir)
         self._open_positions_count  = open_positions_count
-        self._order_intents: list[OrderIntent] = order_intents or []
+        self._order_intents: list[OrderIntent]        = order_intents or []
+        self._order_results: list[OrderResult] | None = order_results
         self._output_dir.mkdir(parents=True, exist_ok=True)
 
         self._force_exit_time: str = config.strategy.params.get("force_exit_time", "15:55")
@@ -152,6 +155,8 @@ class ReportGenerator:
         self._write_trade_log_csv()
         self._write_daily_summary_csv()
         self._write_order_intents_csv()
+        if self._order_results is not None:
+            self._write_order_results_csv()
         validation_results = self._run_validation_checks()
         self._write_markdown_report(validation_results)
 
@@ -248,6 +253,34 @@ class ReportGenerator:
         path = self._output_dir / "order_intents.csv"
         df.to_csv(path, index=False)
         logger.info("Order intents (%d) saved to %s", len(rows), path)
+
+    # ------------------------------------------------------------------
+    # order_results.csv
+    # ------------------------------------------------------------------
+
+    def _write_order_results_csv(self) -> None:
+        columns = [
+            "order_id", "symbol", "side", "quantity", "status",
+            "submitted_at", "filled_at", "filled_price", "reason", "metadata_json",
+        ]
+        rows: list[dict[str, Any]] = []
+        for r in self._order_results:
+            rows.append({
+                "order_id":      r.order_id,
+                "symbol":        r.symbol,
+                "side":          r.side,
+                "quantity":      r.quantity,
+                "status":        r.status,
+                "submitted_at":  str(r.submitted_at),
+                "filled_at":     str(r.filled_at) if r.filled_at is not None else None,
+                "filled_price":  r.filled_price,
+                "reason":        r.reason,
+                "metadata_json": json.dumps(dict(r.metadata), default=str),
+            })
+        df   = pd.DataFrame(rows, columns=columns)
+        path = self._output_dir / "order_results.csv"
+        df.to_csv(path, index=False)
+        logger.info("Order results (%d) saved to %s", len(rows), path)
 
     # ------------------------------------------------------------------
     # daily_summary.csv
