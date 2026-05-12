@@ -8,6 +8,9 @@ Usage
     # Single backtest with full reporting (default)
     python -m src.main
 
+    # Candidate B backtest — QQQ, 09:45 OR end, close trigger, 50 % size
+    python -m src.main --mode candidate-b
+
     # Parameter sweep — writes output/experiments.csv
     python -m src.main --mode sweep
 
@@ -23,8 +26,10 @@ TODO (Alpaca integration):
 from __future__ import annotations
 
 import argparse
+import copy
 import sys
 from pathlib import Path
+from typing import Any
 
 # Make sure ``src/`` is importable when running ``python src/main.py`` directly
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -38,6 +43,33 @@ from src.reporting.report_generator import ReportGenerator
 from src.risk.risk_manager import RiskManager
 from src.strategy.opening_range_breakout import OpeningRangeBreakout
 from src.utils.logger import configure_logging, get_logger
+
+
+# ---------------------------------------------------------------------------
+# Candidate B — parameter overrides from walk-forward validation
+# ---------------------------------------------------------------------------
+
+CANDIDATE_B_OVERRIDES: dict[str, Any] = {
+    "symbols":           ["QQQ"],
+    "opening_range_end": "09:45",
+    "breakout_trigger":  "close",
+    "position_size_pct": 0.50,
+}
+
+
+def apply_candidate_b(cfg: AppConfig) -> AppConfig:
+    """Return a deep copy of *cfg* with Candidate B parameter overrides applied.
+
+    Overrides: symbols=["QQQ"], opening_range_end="09:45",
+    breakout_trigger="close", position_size_pct=0.50.
+    The original *cfg* is never mutated.
+    """
+    cfg = copy.deepcopy(cfg)
+    cfg.symbols = list(CANDIDATE_B_OVERRIDES["symbols"])
+    cfg.strategy.params["opening_range_end"] = CANDIDATE_B_OVERRIDES["opening_range_end"]
+    cfg.strategy.params["breakout_trigger"]  = CANDIDATE_B_OVERRIDES["breakout_trigger"]
+    cfg.strategy.params["position_size_pct"] = CANDIDATE_B_OVERRIDES["position_size_pct"]
+    return cfg
 
 
 def parse_args() -> argparse.Namespace:
@@ -56,10 +88,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--mode",
-        choices=["backtest", "sweep", "walk-forward"],
+        choices=["backtest", "candidate-b", "sweep", "walk-forward"],
         default="backtest",
         help=(
             "'backtest' runs a single backtest with full reporting; "
+            "'candidate-b' runs Candidate B (QQQ, 09:45 OR end, close trigger, 50%% size); "
             "'sweep' runs a parameter grid search and writes experiments.csv; "
             "'walk-forward' tests candidate configs across multiple time windows"
         ),
@@ -122,6 +155,34 @@ def main() -> None:
     logger.info("Loaded config: strategy=%s  symbols=%s  mode=%s",
                 cfg.strategy.name, cfg.symbols, args.mode)
 
+    if args.mode == "candidate-b":
+        cfg = apply_candidate_b(cfg)
+        logger.info("Candidate B overrides applied: symbols=%s  or_end=%s  trigger=%s  size=%.2f",
+                    cfg.symbols,
+                    cfg.strategy.params["opening_range_end"],
+                    cfg.strategy.params["breakout_trigger"],
+                    cfg.strategy.params["position_size_pct"])
+
+    if args.mode in ("backtest", "candidate-b"):
+        engine = build_engine(cfg)
+        results = engine.run()
+        open_positions_count = len(engine._portfolio.positions)
+
+        equity_curve = results["equity_curve"]
+        chart_path   = output_dir / "equity_curve.png"
+        BacktestEngine.plot_equity_curve(equity_curve, output_path=chart_path)
+
+        reporter = ReportGenerator(
+            metrics=results["metrics"],
+            trades=results["trades"],
+            equity_curve=equity_curve,
+            config=cfg,
+            output_dir=output_dir,
+            open_positions_count=open_positions_count,
+        )
+        reporter.generate_all()
+        return
+
     if args.mode == "sweep":
         from src.experiments.sweep_runner import SweepRunner
         raw = YahooDataProvider()
@@ -145,30 +206,6 @@ def main() -> None:
         runner = WalkForwardRunner(base_config=cfg, output_dir=output_dir, data_provider=disk_provider)
         runner.run()
         return
-
-    # ---- backtest mode (default) -----------------------------------------
-    engine = build_engine(cfg)
-    results = engine.run()
-    # Capture remaining open positions immediately after run() returns so the
-    # validation check in ReportGenerator reflects reality.
-    open_positions_count = len(engine._portfolio.positions)
-
-    # Equity curve chart
-    equity_curve = results["equity_curve"]
-    chart_path   = output_dir / "equity_curve.png"
-    BacktestEngine.plot_equity_curve(equity_curve, output_path=chart_path)
-
-    # Full reporting artefacts (metrics.json, trade_log.csv, daily_summary.csv,
-    # backtest_report.md) plus validation checks
-    reporter = ReportGenerator(
-        metrics=results["metrics"],
-        trades=results["trades"],
-        equity_curve=equity_curve,
-        config=cfg,
-        output_dir=output_dir,
-        open_positions_count=open_positions_count,
-    )
-    reporter.generate_all()
 
 
 if __name__ == "__main__":
