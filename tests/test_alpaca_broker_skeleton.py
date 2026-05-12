@@ -571,3 +571,208 @@ class TestIsPartialFill:
 
     def test_empty_returns_false(self):
         assert self._ipf("") is False
+
+
+# ---------------------------------------------------------------------------
+# _order_response_to_result
+# ---------------------------------------------------------------------------
+
+class TestOrderResponseToResult:
+    """Tests for the Alpaca response → OrderResult mapping helper."""
+
+    def _adapter(self):
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        return AlpacaBrokerAdapter()
+
+    def _intent(self, **overrides):
+        from src.execution.order_intent import OrderIntent
+        defaults = dict(
+            symbol="SPY", side="buy", quantity=10.0,
+            order_type="market", reason="entry",
+            timestamp=pd.Timestamp("2024-01-15 10:00:00", tz="America/New_York"),
+            client_order_id="BT-000001",
+        )
+        defaults.update(overrides)
+        return OrderIntent(**defaults)
+
+    def _filled_dict(self, **overrides):
+        base = {
+            "id":               "alpaca-uuid-001",
+            "symbol":           "SPY",
+            "side":             "buy",
+            "qty":              "10",
+            "status":           "filled",
+            "submitted_at":     "2024-01-15T10:00:00-05:00",
+            "filled_at":        "2024-01-15T10:00:01-05:00",
+            "filled_avg_price": "471.25",
+            "filled_qty":       "10",
+            "client_order_id":  "BT-000001",
+        }
+        base.update(overrides)
+        return base
+
+    # --- dict-style: filled ---
+
+    def test_filled_dict_order_id(self):
+        r = self._adapter()._order_response_to_result(self._filled_dict(), self._intent())
+        assert r.order_id == "alpaca-uuid-001"
+
+    def test_filled_dict_symbol(self):
+        r = self._adapter()._order_response_to_result(self._filled_dict(), self._intent())
+        assert r.symbol == "SPY"
+
+    def test_filled_dict_side(self):
+        r = self._adapter()._order_response_to_result(self._filled_dict(), self._intent())
+        assert r.side == "buy"
+
+    def test_filled_dict_quantity(self):
+        r = self._adapter()._order_response_to_result(self._filled_dict(), self._intent())
+        assert r.quantity == 10.0
+
+    def test_filled_dict_status(self):
+        r = self._adapter()._order_response_to_result(self._filled_dict(), self._intent())
+        assert r.status == "filled"
+
+    def test_filled_dict_filled_price(self):
+        r = self._adapter()._order_response_to_result(self._filled_dict(), self._intent())
+        assert r.filled_price == 471.25
+
+    def test_filled_dict_filled_at_is_timestamp(self):
+        r = self._adapter()._order_response_to_result(self._filled_dict(), self._intent())
+        assert r.filled_at is not None
+        import pandas as pd
+        assert isinstance(r.filled_at, pd.Timestamp)
+
+    def test_filled_dict_reason_from_intent(self):
+        r = self._adapter()._order_response_to_result(self._filled_dict(), self._intent())
+        assert r.reason == "entry"
+
+    def test_filled_dict_client_order_id(self):
+        r = self._adapter()._order_response_to_result(self._filled_dict(), self._intent())
+        assert r.client_order_id == "BT-000001"
+
+    def test_filled_dict_raw_status_in_metadata(self):
+        r = self._adapter()._order_response_to_result(self._filled_dict(), self._intent())
+        assert r.metadata["raw_status"] == "filled"
+
+    def test_filled_dict_partial_fill_false(self):
+        r = self._adapter()._order_response_to_result(self._filled_dict(), self._intent())
+        assert r.metadata["partial_fill"] is False
+
+    # --- dict-style: accepted ---
+
+    def test_accepted_dict_maps_status(self):
+        d = self._filled_dict(status="new", filled_at=None, filled_avg_price=None, filled_qty=None)
+        r = self._adapter()._order_response_to_result(d, self._intent())
+        assert r.status == "accepted"
+
+    def test_accepted_dict_filled_price_none(self):
+        d = self._filled_dict(status="new", filled_at=None, filled_avg_price=None, filled_qty=None)
+        r = self._adapter()._order_response_to_result(d, self._intent())
+        assert r.filled_price is None
+
+    def test_accepted_dict_filled_at_none(self):
+        d = self._filled_dict(status="new", filled_at=None, filled_avg_price=None, filled_qty=None)
+        r = self._adapter()._order_response_to_result(d, self._intent())
+        assert r.filled_at is None
+
+    # --- dict-style: rejected ---
+
+    def test_rejected_dict_maps_status(self):
+        d = self._filled_dict(status="rejected", filled_at=None, filled_avg_price=None, filled_qty=None)
+        r = self._adapter()._order_response_to_result(d, self._intent())
+        assert r.status == "rejected"
+
+    # --- object-style response ---
+
+    def test_object_style_response(self):
+        class _FakeOrder:
+            id               = "alpaca-uuid-002"
+            symbol           = "QQQ"
+            side             = "sell"
+            qty              = "5"
+            status           = "filled"
+            submitted_at     = "2024-01-15T11:00:00-05:00"
+            filled_at        = "2024-01-15T11:00:01-05:00"
+            filled_avg_price = "380.50"
+            filled_qty       = "5"
+            client_order_id  = "BT-000002"
+
+        intent = self._intent(symbol="QQQ", side="sell", quantity=5.0,
+                              client_order_id="BT-000002", reason="stop_loss")
+        r = self._adapter()._order_response_to_result(_FakeOrder(), intent)
+        assert r.order_id      == "alpaca-uuid-002"
+        assert r.symbol        == "QQQ"
+        assert r.side          == "sell"
+        assert r.quantity      == 5.0
+        assert r.status        == "filled"
+        assert r.filled_price  == 380.50
+        assert r.reason        == "stop_loss"
+        assert r.client_order_id == "BT-000002"
+
+    # --- client_order_id fallback ---
+
+    def test_missing_response_client_order_id_falls_back_to_intent(self):
+        d = self._filled_dict()
+        d.pop("client_order_id")
+        intent = self._intent(client_order_id="BT-FALLBACK")
+        r = self._adapter()._order_response_to_result(d, intent)
+        assert r.client_order_id == "BT-FALLBACK"
+
+    def test_none_response_client_order_id_falls_back_to_intent(self):
+        d = self._filled_dict(client_order_id=None)
+        intent = self._intent(client_order_id="BT-FALLBACK")
+        r = self._adapter()._order_response_to_result(d, intent)
+        assert r.client_order_id == "BT-FALLBACK"
+
+    # --- partial fill ---
+
+    def test_partially_filled_status_filled_and_partial_fill_true(self):
+        d = self._filled_dict(status="partially_filled", filled_qty="6")
+        r = self._adapter()._order_response_to_result(d, self._intent())
+        assert r.status == "filled"
+        assert r.metadata["partial_fill"] is True
+
+    def test_partially_filled_filled_qty_in_metadata(self):
+        d = self._filled_dict(status="partially_filled", filled_qty="6")
+        r = self._adapter()._order_response_to_result(d, self._intent())
+        assert r.metadata["filled_qty"] == "6"
+
+    # --- None prices/timestamps ---
+
+    def test_none_filled_avg_price_gives_none_filled_price(self):
+        d = self._filled_dict(filled_avg_price=None)
+        r = self._adapter()._order_response_to_result(d, self._intent())
+        assert r.filled_price is None
+
+    def test_none_filled_at_gives_none_filled_at(self):
+        d = self._filled_dict(filled_at=None)
+        r = self._adapter()._order_response_to_result(d, self._intent())
+        assert r.filled_at is None
+
+    # --- unknown status ---
+
+    def test_unknown_status_raises_value_error(self):
+        d = self._filled_dict(status="banana")
+        with pytest.raises(ValueError, match="Unknown Alpaca order status"):
+            self._adapter()._order_response_to_result(d, self._intent())
+
+    # --- isolation ---
+
+    def test_does_not_read_env_vars(self):
+        clean = {k: v for k, v in os.environ.items()
+                 if k not in ("ALPACA_API_KEY", "ALPACA_SECRET_KEY")}
+        with mock.patch.dict(os.environ, clean, clear=True):
+            self._adapter()._order_response_to_result(self._filled_dict(), self._intent())
+
+    def test_does_not_call_market_hours_helper(self):
+        adapter = self._adapter()
+        with mock.patch.object(adapter, "_ensure_market_hours",
+                               side_effect=AssertionError("should not be called")):
+            adapter._order_response_to_result(self._filled_dict(), self._intent())
+
+    # --- submit_order still blocked ---
+
+    def test_submit_order_still_raises_not_implemented(self):
+        with pytest.raises(NotImplementedError, match="AlpacaBrokerAdapter is not implemented yet"):
+            self._adapter().submit_order(self._intent())
