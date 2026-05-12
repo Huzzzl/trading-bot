@@ -286,11 +286,37 @@ class AlpacaBrokerAdapter(BrokerAdapter):
         )
 
     # ------------------------------------------------------------------
-    # BrokerAdapter interface (not yet implemented)
+    # BrokerAdapter interface
     # ------------------------------------------------------------------
 
     def submit_order(self, intent: OrderIntent) -> OrderResult:
-        raise NotImplementedError("AlpacaBrokerAdapter is not implemented yet.")
+        """Submit a market order through the injected client.
+
+        Raises
+        ------
+        NotImplementedError
+            If no client was injected (``self._client is None``).
+        RuntimeError
+            If the current time is outside regular market hours.
+        NotImplementedError
+            If ``intent.order_type`` is not ``"market"``.
+        ValueError
+            If any required field on *intent* is invalid.
+        """
+        if self._client is None:
+            raise NotImplementedError("Alpaca client is not implemented yet.")
+
+        self._validate_order_intent(intent)
+        self._ensure_market_hours()
+        payload = self._build_order_payload(intent)
+
+        client = self._get_client()
+        if hasattr(client, "submit_order"):
+            response = client.submit_order(payload)
+        else:
+            response = client.create_order(payload)
+
+        return self._order_response_to_result(response, intent)
 
     def get_positions(self) -> dict[str, Any]:
         raise NotImplementedError("AlpacaBrokerAdapter is not implemented yet.")
