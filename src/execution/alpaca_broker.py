@@ -181,6 +181,27 @@ class AlpacaBrokerAdapter(BrokerAdapter):
         """
         return status.strip().lower() == "partially_filled"
 
+    def _build_order_payload(self, intent: OrderIntent) -> dict[str, Any]:
+        """Convert an :class:`OrderIntent` into an Alpaca market order request dict.
+
+        Calls :meth:`_validate_order_intent` first; any validation error is
+        propagated to the caller unchanged.
+
+        Returns
+        -------
+        dict
+            Ready-to-submit Alpaca order payload (market orders only).
+        """
+        self._validate_order_intent(intent)
+        return {
+            "symbol":          intent.symbol,
+            "side":            intent.side,
+            "qty":             intent.quantity,
+            "type":            "market",
+            "time_in_force":   "day",
+            "client_order_id": intent.client_order_id,
+        }
+
     def _order_response_to_result(self, response: Any, intent: OrderIntent) -> OrderResult:
         """Convert an Alpaca order response to an :class:`OrderResult`.
 

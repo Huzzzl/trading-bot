@@ -438,6 +438,104 @@ class TestValidateOrderIntent:
 
 
 # ---------------------------------------------------------------------------
+# _build_order_payload
+# ---------------------------------------------------------------------------
+
+class TestBuildOrderPayload:
+    def _adapter(self):
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        return AlpacaBrokerAdapter()
+
+    def _intent(self, **overrides):
+        from src.execution.order_intent import OrderIntent
+        defaults = dict(
+            symbol="SPY",
+            side="buy",
+            quantity=10.0,
+            order_type="market",
+            reason="entry",
+            timestamp=pd.Timestamp("2024-01-15 10:00:00", tz="America/New_York"),
+            client_order_id="BT-000001",
+        )
+        defaults.update(overrides)
+        return OrderIntent(**defaults)
+
+    def _payload(self, **overrides):
+        return self._adapter()._build_order_payload(self._intent(**overrides))
+
+    # --- field values ---
+
+    def test_buy_symbol(self):
+        assert self._payload()["symbol"] == "SPY"
+
+    def test_buy_side(self):
+        assert self._payload()["side"] == "buy"
+
+    def test_sell_side(self):
+        assert self._payload(side="sell")["side"] == "sell"
+
+    def test_qty_preserved(self):
+        assert self._payload(quantity=7.0)["qty"] == 7.0
+
+    def test_qty_fractional(self):
+        assert self._payload(quantity=2.5)["qty"] == 2.5
+
+    def test_type_is_market(self):
+        assert self._payload()["type"] == "market"
+
+    def test_time_in_force_is_day(self):
+        assert self._payload()["time_in_force"] == "day"
+
+    def test_client_order_id_propagated(self):
+        assert self._payload(client_order_id="BT-000042")["client_order_id"] == "BT-000042"
+
+    # --- no extra price fields ---
+
+    def test_no_limit_price_key(self):
+        assert "limit_price" not in self._payload()
+
+    def test_no_stop_price_key(self):
+        assert "stop_price" not in self._payload()
+
+    # --- validation errors propagate ---
+
+    def test_limit_order_raises_not_implemented(self):
+        intent = self._intent(order_type="limit", limit_price=470.0)
+        with pytest.raises(NotImplementedError, match="Only market orders are supported"):
+            self._adapter()._build_order_payload(intent)
+
+    def test_missing_client_order_id_raises_value_error(self):
+        intent = self._intent(client_order_id=None)
+        with pytest.raises(ValueError, match="client_order_id is required"):
+            self._adapter()._build_order_payload(intent)
+
+    def test_empty_symbol_raises_value_error(self):
+        intent = self._intent(symbol="")
+        with pytest.raises(ValueError, match="symbol is required"):
+            self._adapter()._build_order_payload(intent)
+
+    # --- isolation ---
+
+    def test_does_not_read_env_vars(self):
+        clean = {k: v for k, v in os.environ.items()
+                 if k not in ("ALPACA_API_KEY", "ALPACA_SECRET_KEY")}
+        with mock.patch.dict(os.environ, clean, clear=True):
+            self._payload()  # must not raise
+
+    def test_does_not_call_market_hours_helper(self):
+        adapter = self._adapter()
+        with mock.patch.object(adapter, "_ensure_market_hours",
+                               side_effect=AssertionError("should not be called")):
+            adapter._build_order_payload(self._intent())  # must not raise
+
+    # --- submit_order still blocked ---
+
+    def test_submit_order_still_raises_not_implemented(self):
+        with pytest.raises(NotImplementedError, match="AlpacaBrokerAdapter is not implemented yet"):
+            self._adapter().submit_order(self._intent())
+
+
+# ---------------------------------------------------------------------------
 # _normalize_status
 # ---------------------------------------------------------------------------
 
