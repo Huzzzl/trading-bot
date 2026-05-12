@@ -56,30 +56,32 @@ class OrderResult:
         broker adapter.
     """
 
-    order_id:     str
-    symbol:       str
-    side:         str
-    quantity:     float
-    status:       str
-    submitted_at: pd.Timestamp
-    reason:       str
-    filled_at:    pd.Timestamp | None  = None
-    filled_price: float | None         = None
-    metadata:     dict[str, Any]       = field(default_factory=dict)
+    order_id:         str
+    symbol:           str
+    side:             str
+    quantity:         float
+    status:           str
+    submitted_at:     pd.Timestamp
+    reason:           str
+    filled_at:        pd.Timestamp | None  = None
+    filled_price:     float | None         = None
+    metadata:         dict[str, Any]       = field(default_factory=dict)
+    client_order_id:  str | None           = None
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-serialisable representation of this result."""
         return {
-            "order_id":     self.order_id,
-            "symbol":       self.symbol,
-            "side":         self.side,
-            "quantity":     self.quantity,
-            "status":       self.status,
-            "submitted_at": str(self.submitted_at),
-            "reason":       self.reason,
-            "filled_at":    str(self.filled_at) if self.filled_at is not None else None,
-            "filled_price": self.filled_price,
-            "metadata":     dict(self.metadata),
+            "order_id":         self.order_id,
+            "symbol":           self.symbol,
+            "side":             self.side,
+            "quantity":         self.quantity,
+            "status":           self.status,
+            "submitted_at":     str(self.submitted_at),
+            "reason":           self.reason,
+            "filled_at":        str(self.filled_at) if self.filled_at is not None else None,
+            "filled_price":     self.filled_price,
+            "metadata":         dict(self.metadata),
+            "client_order_id":  self.client_order_id,
         }
 
 

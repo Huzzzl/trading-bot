@@ -105,16 +105,17 @@ class FakeBrokerAdapter(BrokerAdapter):
                 result_fill_price = fill_price
 
         result = OrderResult(
-            order_id     = order_id,
-            symbol       = intent.symbol,
-            side         = intent.side,
-            quantity     = intent.quantity,
-            status       = status,
-            submitted_at = now,
-            reason       = intent.reason,
-            filled_at    = filled_at,
-            filled_price = result_fill_price,
-            metadata     = dict(intent.metadata),
+            order_id        = order_id,
+            symbol          = intent.symbol,
+            side            = intent.side,
+            quantity        = intent.quantity,
+            status          = status,
+            submitted_at    = now,
+            reason          = intent.reason,
+            filled_at       = filled_at,
+            filled_price    = result_fill_price,
+            metadata        = dict(intent.metadata),
+            client_order_id = intent.client_order_id,
         )
 
         self._orders[order_id] = (intent, result)
@@ -182,16 +183,17 @@ class FakeBrokerAdapter(BrokerAdapter):
             return False
 
         cancelled = OrderResult(
-            order_id     = result.order_id,
-            symbol       = result.symbol,
-            side         = result.side,
-            quantity     = result.quantity,
-            status       = "cancelled",
-            submitted_at = result.submitted_at,
-            reason       = result.reason,
-            filled_at    = None,
-            filled_price = None,
-            metadata     = dict(result.metadata),
+            order_id        = result.order_id,
+            symbol          = result.symbol,
+            side            = result.side,
+            quantity        = result.quantity,
+            status          = "cancelled",
+            submitted_at    = result.submitted_at,
+            reason          = result.reason,
+            filled_at       = None,
+            filled_price    = None,
+            metadata        = dict(result.metadata),
+            client_order_id = result.client_order_id,
         )
         self._orders[order_id] = (intent, cancelled)
         logger.debug("FakeBroker cancel: order_id=%s cancelled", order_id)
