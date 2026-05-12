@@ -139,8 +139,8 @@ class ReportGenerator:
         self._config                = config
         self._output_dir            = Path(output_dir)
         self._open_positions_count  = open_positions_count
-        self._order_intents: list[OrderIntent] = order_intents or []
-        self._order_results: list[OrderResult] = order_results or []
+        self._order_intents: list[OrderIntent]        = order_intents or []
+        self._order_results: list[OrderResult] | None = order_results
         self._output_dir.mkdir(parents=True, exist_ok=True)
 
         self._force_exit_time: str = config.strategy.params.get("force_exit_time", "15:55")
@@ -155,7 +155,7 @@ class ReportGenerator:
         self._write_trade_log_csv()
         self._write_daily_summary_csv()
         self._write_order_intents_csv()
-        if self._order_results:
+        if self._order_results is not None:
             self._write_order_results_csv()
         validation_results = self._run_validation_checks()
         self._write_markdown_report(validation_results)

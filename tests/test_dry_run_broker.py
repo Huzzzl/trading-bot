@@ -341,6 +341,100 @@ class TestOrderResultsCSV:
         df = pd.read_csv(out_dir / "order_results.csv")
         assert df["order_id"].nunique() == len(df)
 
+    def test_dry_run_true_zero_intents_writes_header_only_csv(self):
+        """order_results=[] (enabled, zero intents) must still produce a header-only CSV."""
+        out_dir = pathlib.Path(tempfile.mkdtemp())
+        reporter = ReportGenerator(
+            metrics={}, trades=[], equity_curve=pd.DataFrame(),
+            config=_make_config(dry_run=True),
+            output_dir=out_dir,
+            order_results=[],   # dry-run enabled, but no intents
+        )
+        reporter.generate_all()
+        path = out_dir / "order_results.csv"
+        assert path.exists()
+        df = pd.read_csv(path)
+        assert len(df) == 0
+        expected = {
+            "order_id", "symbol", "side", "quantity", "status",
+            "submitted_at", "filled_at", "filled_price", "reason", "metadata_json",
+        }
+        assert expected.issubset(set(df.columns))
+
+    def test_dry_run_false_none_does_not_write_csv(self):
+        """order_results=None (disabled) must NOT write order_results.csv."""
+        out_dir = pathlib.Path(tempfile.mkdtemp())
+        reporter = ReportGenerator(
+            metrics={}, trades=[], equity_curve=pd.DataFrame(),
+            config=_make_config(dry_run=False),
+            output_dir=out_dir,
+            order_results=None,
+        )
+        reporter.generate_all()
+        assert not (out_dir / "order_results.csv").exists()
+
+
+# ===========================================================================
+# FakeBrokerAdapter fills exit intents via metadata["exit_price"]
+# ===========================================================================
+
+class TestFakeBrokerExitFill:
+    def _buy_intent(self, qty: float = 100.0, price: float = 450.0) -> OrderIntent:
+        return OrderIntent(
+            symbol="SPY", side="buy", quantity=qty, order_type="market",
+            reason="entry", timestamp=_ts("2024-01-02", "10:05"),
+            metadata={"entry_price": price},
+        )
+
+    def _sell_intent(self, qty: float = 100.0, price: float = 455.0) -> OrderIntent:
+        return OrderIntent(
+            symbol="SPY", side="sell", quantity=qty, order_type="market",
+            reason="force_exit", timestamp=_ts("2024-01-02", "15:55"),
+            metadata={"exit_price": price, "exit_reason": "force_exit", "stop_execution": "bar_close"},
+        )
+
+    def test_sell_market_with_exit_price_is_filled(self):
+        broker = FakeBrokerAdapter(fill_immediately=True)
+        broker.submit_order(self._buy_intent())
+        result = broker.submit_order(self._sell_intent())
+        assert result.status == "filled"
+
+    def test_sell_filled_price_equals_exit_price(self):
+        broker = FakeBrokerAdapter(fill_immediately=True)
+        broker.submit_order(self._buy_intent())
+        result = broker.submit_order(self._sell_intent(price=455.0))
+        assert result.filled_price == 455.0
+
+    def test_buy_then_matching_sell_leaves_no_position(self):
+        broker = FakeBrokerAdapter(fill_immediately=True)
+        broker.submit_order(self._buy_intent(qty=100.0, price=450.0))
+        broker.submit_order(self._sell_intent(qty=100.0, price=455.0))
+        assert broker.get_positions() == {}
+
+    def test_dry_run_intents_produce_no_open_positions(self):
+        """Full dry-run over one breakout day: all buy+sell pairs close out."""
+        bars   = {"SPY": _make_breakout_day()}
+        result = _build_engine(bars).run()
+        intents = result.get("order_intents", [])
+
+        broker = FakeBrokerAdapter(fill_immediately=True)
+        for oi in intents:
+            broker.submit_order(oi)
+
+        assert broker.get_positions() == {}
+
+    def test_sell_without_exit_price_but_with_entry_price_still_rejected_on_no_position(self):
+        """A sell with no prior position is rejected regardless of metadata."""
+        broker = FakeBrokerAdapter(fill_immediately=True)
+        result = broker.submit_order(
+            OrderIntent(
+                symbol="SPY", side="sell", quantity=10.0, order_type="market",
+                reason="stop_loss", timestamp=_ts("2024-01-02", "10:10"),
+                metadata={"exit_price": 440.0},
+            )
+        )
+        assert result.status == "rejected"
+
 
 # ===========================================================================
 # Paper mode still raises NotImplementedError

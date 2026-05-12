@@ -82,6 +82,7 @@ class FakeBrokerAdapter(BrokerAdapter):
             fill_price = (
                 intent.limit_price
                 or intent.metadata.get("entry_price")
+                or intent.metadata.get("exit_price")
                 or intent.metadata.get("price")
             )
 
