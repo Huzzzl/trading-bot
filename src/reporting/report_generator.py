@@ -41,6 +41,27 @@ TRADE_LOG_COLUMNS: list[str] = [
     "or_low",
     "breakout_trigger",
     "trigger_val",
+    "stop_execution",
+]
+
+# Columns shown in the Markdown Trade Detail table (subset of TRADE_LOG_COLUMNS,
+# ordered for ORB audit readability).
+_TRADE_DETAIL_COLS: list[str] = [
+    "symbol",
+    "direction",
+    "entry_time",
+    "exit_time",
+    "entry_price",
+    "exit_price",
+    "shares",
+    "pnl",
+    "pnl_pct",
+    "exit_reason",
+    "or_high",
+    "or_low",
+    "breakout_trigger",
+    "trigger_val",
+    "stop_execution",
 ]
 
 # ---------------------------------------------------------------------------
@@ -177,6 +198,7 @@ class ReportGenerator:
                 "or_low":           t.meta.get("or_low", ""),
                 "breakout_trigger": t.meta.get("breakout_trigger", ""),
                 "trigger_val":      t.meta.get("trigger_val", ""),
+                "stop_execution":   t.meta.get("stop_execution", ""),
             })
 
         df = pd.DataFrame(rows)
@@ -428,9 +450,7 @@ class ReportGenerator:
                 "### Trade Detail",
                 "",
             ]
-            detail_cols = ["symbol", "direction", "exit_time", "entry_price",
-                           "exit_price", "shares", "pnl", "pnl_pct", "exit_reason"]
-            lines.append(_df_to_md(trade_df.reset_index()[detail_cols]))
+            lines.append(_df_to_md(trade_df.reset_index()[_TRADE_DETAIL_COLS]))
         lines.append("")
 
         # --- Daily Summary ---
