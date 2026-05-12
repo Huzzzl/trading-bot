@@ -10,6 +10,10 @@ Rules (all times in US Eastern):
   4. Stop-loss = opening_range_low.
   5. At most one trade per symbol per day (tracked by the engine, not here).
   6. Force-exit at 15:55 is handled by the engine / risk manager.
+  7. Optional entry_cutoff_time: no new entry signals are generated after this
+     time.  Signals AT the cutoff are still allowed; signals on bars whose
+     HH:MM is strictly greater than the cutoff are suppressed.  Existing open
+     positions continue to be managed by the engine / risk manager.
 
 Design note
 -----------
@@ -38,24 +42,32 @@ class OpeningRangeBreakout(BaseStrategy):
 
     Parameters (via ``params`` dict from settings.yaml)
     ---------------------------------------------------
-    opening_range_start : str   — ``"HH:MM"`` Eastern, default ``"09:30"``
-    opening_range_end   : str   — ``"HH:MM"`` Eastern, default ``"10:00"``
-    force_exit_time     : str   — ``"HH:MM"`` Eastern, default ``"15:55"``
-    position_size_pct   : float — fraction of cash to deploy, default ``0.95``
-    long_only           : bool  — ``True`` for MVP
-    breakout_trigger    : str   — ``"close"`` (default) or ``"high"``.
-                                  ``"close"`` fires when bar close > or_high;
-                                  ``"high"`` fires when bar high > or_high.
+    opening_range_start : str        — ``"HH:MM"`` Eastern, default ``"09:30"``
+    opening_range_end   : str        — ``"HH:MM"`` Eastern, default ``"10:00"``
+    force_exit_time     : str        — ``"HH:MM"`` Eastern, default ``"15:55"``
+    position_size_pct   : float      — fraction of cash to deploy, default ``0.95``
+    long_only           : bool       — ``True`` for MVP
+    breakout_trigger    : str        — ``"close"`` (default) or ``"high"``.
+                                       ``"close"`` fires when bar close > or_high;
+                                       ``"high"`` fires when bar high > or_high.
+    entry_cutoff_time   : str | None — ``"HH:MM"`` Eastern.  No new entry signals
+                                       are generated on bars whose time is strictly
+                                       after this value.  Signals AT the cutoff bar
+                                       are still allowed.  ``None`` (default) means
+                                       no cutoff — current behavior is preserved.
     """
 
     def __init__(self, params: dict[str, Any]) -> None:
         super().__init__(params)
 
-        self._range_start_str:    str = params.get("opening_range_start", "09:30")
-        self._range_end_str:      str = params.get("opening_range_end",   "10:00")
-        self._force_exit_str:     str = params.get("force_exit_time",     "15:55")
-        self._long_only:         bool = bool(params.get("long_only", True))
-        self._breakout_trigger:   str = params.get("breakout_trigger",    "close")
+        self._range_start_str:    str       = params.get("opening_range_start", "09:30")
+        self._range_end_str:      str       = params.get("opening_range_end",   "10:00")
+        self._force_exit_str:     str       = params.get("force_exit_time",     "15:55")
+        self._long_only:          bool      = bool(params.get("long_only", True))
+        self._breakout_trigger:   str       = params.get("breakout_trigger",    "close")
+
+        raw_cutoff = params.get("entry_cutoff_time") or None
+        self._entry_cutoff: str | None = str(raw_cutoff) if raw_cutoff is not None else None
 
         if self._breakout_trigger not in ("close", "high"):
             raise ValueError(
@@ -121,6 +133,13 @@ class OpeningRangeBreakout(BaseStrategy):
 
         # ---- Step 4: force-exit handled by the engine — no signal here
         if bar_hhmm >= force_exit:
+            return None
+
+        # ---- Step 4.5: entry cutoff — no new signals after this time ---
+        # Signals AT the cutoff bar are still allowed; only strictly later
+        # bars are suppressed.  Open positions continue to be managed by the
+        # engine and risk manager regardless of this setting.
+        if self._entry_cutoff is not None and bar_hhmm > self._entry_cutoff:
             return None
 
         # ---- Step 5: breakout detection --------------------------------

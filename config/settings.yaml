@@ -31,6 +31,7 @@ strategy:
     long_only: true                # only long signals for MVP
     breakout_trigger: "close"      # "close" or "high" — field that must exceed or_high
     stop_execution: "bar_close"    # "bar_close" or "stop_price" — how stop-loss exits are priced
+    entry_cutoff_time: "11:30"     # HH:MM Eastern — no new entry signals after this time (null = no cutoff)
 
 risk:
   # Limit concurrent open positions for deterministic multi-symbol behavior.
