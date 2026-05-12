@@ -159,6 +159,18 @@ def main() -> None:
 
     logger.info("Loaded config: strategy=%s  symbols=%s  mode=%s",
                 cfg.strategy.name, cfg.symbols, args.mode)
+    logger.info(
+        "Startup | execution.mode=%s  dry_run_broker=%s  symbols=%s  strategy=%s  output_dir=%s",
+        cfg.execution.mode,
+        cfg.execution.dry_run_broker,
+        cfg.symbols,
+        cfg.strategy.name,
+        output_dir,
+    )
+    if cfg.execution.dry_run_broker:
+        logger.warning(
+            "Dry-run broker enabled: orders are submitted only to FakeBrokerAdapter."
+        )
 
     if cfg.execution.mode == "paper":
         raise NotImplementedError(
