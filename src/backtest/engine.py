@@ -101,6 +101,8 @@ class BacktestEngine:
 
         # Audit log of all intended orders generated during the backtest.
         self._order_intents: list[OrderIntent] = []
+        # Monotonic counter for deterministic client_order_id (BT-NNNNNN).
+        self._intent_seq: int = 0
 
         # Per-symbol state used to detect session boundaries.
         # We need the *previous* bar's date, timestamp, and close so that a
@@ -131,6 +133,7 @@ class BacktestEngine:
         # 1. Reset strategy state so re-running the same instance is safe.
         self._strategy.reset()
         self._order_intents  = []
+        self._intent_seq     = 0
         self._last_bar_date  = {}
         self._last_bar_ts    = {}
         self._last_bar_close = {}
@@ -307,6 +310,7 @@ class BacktestEngine:
                             "breakout_trigger": smeta.get("breakout_trigger"),
                             "trigger_val":      smeta.get("trigger_val"),
                         },
+                        client_order_id=self._next_client_order_id(),
                     ))
 
         # ---- Update per-symbol last-seen bar info ---------------------
@@ -318,6 +322,10 @@ class BacktestEngine:
         # ---- Portfolio: record equity snapshot -------------------------
         current_prices = {sym: d["close"] for sym, d in bar_data.items()}
         self._portfolio.record_equity(ts, current_prices)
+
+    def _next_client_order_id(self) -> str:
+        self._intent_seq += 1
+        return f"BT-{self._intent_seq:06d}"
 
     def _record_exit_intent(
         self,
@@ -340,6 +348,7 @@ class BacktestEngine:
                 "exit_reason":     reason,
                 "stop_execution":  self._stop_execution,
             },
+            client_order_id=self._next_client_order_id(),
         ))
 
     def _close_all_open_positions(self, ts: pd.Timestamp) -> None:

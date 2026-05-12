@@ -205,7 +205,7 @@ class TestReconciliationJSON:
         required = {
             "intent_count", "result_count", "unmatched_count",
             "rejected_count", "accepted_count", "filled_count",
-            "mismatch_count", "overall_status",
+            "mismatch_count", "missing_ids_warn", "overall_status",
         }
         assert required == set(data.keys())
 

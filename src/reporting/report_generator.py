@@ -234,6 +234,7 @@ class ReportGenerator:
         rows: list[dict[str, Any]] = []
         for oi in self._order_intents:
             rows.append({
+                "client_order_id": oi.client_order_id,
                 "timestamp":   str(oi.timestamp),
                 "symbol":      oi.symbol,
                 "side":        oi.side,
@@ -249,7 +250,7 @@ class ReportGenerator:
             })
 
         columns = [
-            "timestamp", "symbol", "side", "quantity", "order_type",
+            "client_order_id", "timestamp", "symbol", "side", "quantity", "order_type",
             "reason", "limit_price", "stop_price", "metadata_json",
         ]
         df   = pd.DataFrame(rows, columns=columns) if rows else pd.DataFrame(columns=columns)
@@ -264,43 +265,75 @@ class ReportGenerator:
     def _build_reconciliation(self) -> dict:
         """Compare order_intents with order_results and return a summary dict.
 
+        When all intents and results carry a ``client_order_id``, matching is
+        done by ID (order-independent).  Otherwise falls back to positional
+        comparison.  Sets ``missing_ids_warn=True`` when intents have IDs but
+        results don't, which promotes overall_status to WARN.
+
         Fields
         ------
         intent_count, result_count, unmatched_count, rejected_count,
-        accepted_count, filled_count, mismatch_count, overall_status ("PASS"|"WARN")
+        accepted_count, filled_count, mismatch_count, missing_ids_warn,
+        overall_status ("PASS"|"WARN")
         """
         intents = self._order_intents
         results = self._order_results or []
 
-        intent_count  = len(intents)
-        result_count  = len(results)
+        intent_count   = len(intents)
+        result_count   = len(results)
         rejected_count = sum(1 for r in results if r.status == "rejected")
         accepted_count = sum(1 for r in results if r.status == "accepted")
         filled_count   = sum(1 for r in results if r.status == "filled")
 
-        unmatched_count = abs(intent_count - result_count)
+        intent_ids = [oi.client_order_id for oi in intents]
+        result_ids = [r.client_order_id  for r  in results]
 
-        mismatch_count = 0
-        for oi, r in zip(intents, results):
-            if (oi.symbol   != r.symbol   or
-                oi.side     != r.side     or
-                oi.quantity != r.quantity or
-                oi.reason   != r.reason):
-                mismatch_count += 1
+        all_intents_have_ids = intents and all(cid is not None for cid in intent_ids)
+        all_results_have_ids = results and all(cid is not None for cid in result_ids)
+        missing_ids_warn = bool(all_intents_have_ids and not all_results_have_ids)
+
+        mismatch_count  = 0
+        unmatched_count = 0
+
+        if all_intents_have_ids and all_results_have_ids:
+            # ID-based matching — order-independent
+            intent_map: dict[str, OrderIntent] = {oi.client_order_id: oi for oi in intents}  # type: ignore[index]
+            result_map: dict[str, OrderResult] = {r.client_order_id:  r  for r  in results}  # type: ignore[index]
+            all_ids = set(intent_map) | set(result_map)
+            unmatched_count = len(all_ids) - len(set(intent_map) & set(result_map))
+            for cid in set(intent_map) & set(result_map):
+                oi = intent_map[cid]
+                r  = result_map[cid]
+                if (oi.symbol   != r.symbol   or
+                    oi.side     != r.side     or
+                    oi.quantity != r.quantity or
+                    oi.reason   != r.reason):
+                    mismatch_count += 1
+        else:
+            # Positional fallback
+            unmatched_count = abs(intent_count - result_count)
+            for oi, r in zip(intents, results):
+                if (oi.symbol   != r.symbol   or
+                    oi.side     != r.side     or
+                    oi.quantity != r.quantity or
+                    oi.reason   != r.reason):
+                    mismatch_count += 1
 
         warn = (
-            result_count != intent_count
+            missing_ids_warn
+            or result_count != intent_count
             or mismatch_count > 0
         )
         return {
-            "intent_count":   intent_count,
-            "result_count":   result_count,
+            "intent_count":    intent_count,
+            "result_count":    result_count,
             "unmatched_count": unmatched_count,
-            "rejected_count": rejected_count,
-            "accepted_count": accepted_count,
-            "filled_count":   filled_count,
-            "mismatch_count": mismatch_count,
-            "overall_status": "WARN" if warn else "PASS",
+            "rejected_count":  rejected_count,
+            "accepted_count":  accepted_count,
+            "filled_count":    filled_count,
+            "mismatch_count":  mismatch_count,
+            "missing_ids_warn": missing_ids_warn,
+            "overall_status":  "WARN" if warn else "PASS",
         }
 
     def _write_reconciliation_json(self, reconciliation: dict) -> None:
@@ -315,12 +348,13 @@ class ReportGenerator:
 
     def _write_order_results_csv(self) -> None:
         columns = [
-            "order_id", "symbol", "side", "quantity", "status",
+            "client_order_id", "order_id", "symbol", "side", "quantity", "status",
             "submitted_at", "filled_at", "filled_price", "reason", "metadata_json",
         ]
         rows: list[dict[str, Any]] = []
         for r in self._order_results:
             rows.append({
+                "client_order_id": r.client_order_id,
                 "order_id":      r.order_id,
                 "symbol":        r.symbol,
                 "side":          r.side,
@@ -622,6 +656,7 @@ class ReportGenerator:
                 f"| Accepted | {rc['accepted_count']} |",
                 f"| Rejected | {rc['rejected_count']} |",
                 f"| Mismatch count | {rc['mismatch_count']} |",
+                f"| Missing IDs warn | {rc.get('missing_ids_warn', False)} |",
                 "",
             ]
 

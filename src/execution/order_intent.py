@@ -53,15 +53,16 @@ class OrderIntent:
         attribute reassignment, not dict mutation).
     """
 
-    symbol:      str
-    side:        str
-    quantity:    float
-    order_type:  str
-    reason:      str
-    timestamp:   pd.Timestamp
-    limit_price: float | None         = None
-    stop_price:  float | None         = None
-    metadata:    dict[str, Any]       = field(default_factory=dict, compare=False)
+    symbol:           str
+    side:             str
+    quantity:         float
+    order_type:       str
+    reason:           str
+    timestamp:        pd.Timestamp
+    limit_price:      float | None         = None
+    stop_price:       float | None         = None
+    metadata:         dict[str, Any]       = field(default_factory=dict, compare=False)
+    client_order_id:  str | None           = None
 
     # ------------------------------------------------------------------
     # Validation
@@ -84,13 +85,14 @@ class OrderIntent:
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-serialisable representation of this intent."""
         return {
-            "symbol":      self.symbol,
-            "side":        self.side,
-            "quantity":    self.quantity,
-            "order_type":  self.order_type,
-            "reason":      self.reason,
-            "timestamp":   str(self.timestamp),
-            "limit_price": self.limit_price,
-            "stop_price":  self.stop_price,
-            "metadata":    dict(self.metadata),
+            "symbol":          self.symbol,
+            "side":            self.side,
+            "quantity":        self.quantity,
+            "order_type":      self.order_type,
+            "reason":          self.reason,
+            "timestamp":       str(self.timestamp),
+            "limit_price":     self.limit_price,
+            "stop_price":      self.stop_price,
+            "metadata":        dict(self.metadata),
+            "client_order_id": self.client_order_id,
         }

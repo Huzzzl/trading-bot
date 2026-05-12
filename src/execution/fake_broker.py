@@ -105,16 +105,17 @@ class FakeBrokerAdapter(BrokerAdapter):
                 result_fill_price = fill_price
 
         result = OrderResult(
-            order_id     = order_id,
-            symbol       = intent.symbol,
-            side         = intent.side,
-            quantity     = intent.quantity,
-            status       = status,
-            submitted_at = now,
-            reason       = intent.reason,
-            filled_at    = filled_at,
-            filled_price = result_fill_price,
-            metadata     = dict(intent.metadata),
+            order_id        = order_id,
+            symbol          = intent.symbol,
+            side            = intent.side,
+            quantity        = intent.quantity,
+            status          = status,
+            submitted_at    = now,
+            reason          = intent.reason,
+            filled_at       = filled_at,
+            filled_price    = result_fill_price,
+            metadata        = dict(intent.metadata),
+            client_order_id = intent.client_order_id,
         )
 
         self._orders[order_id] = (intent, result)
