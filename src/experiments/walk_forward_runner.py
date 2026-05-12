@@ -39,22 +39,32 @@ logger = get_logger(__name__)
 
 CANDIDATES: dict[str, dict[str, Any]] = {
     "A": {
-        "symbols":           ["QQQ"],
-        "opening_range_end": "09:45",
-        "breakout_trigger":  "close",
-        "position_size_pct": 0.95,
+        "symbols":            ["QQQ"],
+        "opening_range_end":  "09:45",
+        "breakout_trigger":   "close",
+        "position_size_pct":  0.95,
+        "entry_cutoff_time":  None,
     },
-    "B": {
-        "symbols":           ["QQQ"],
-        "opening_range_end": "09:45",
-        "breakout_trigger":  "close",
-        "position_size_pct": 0.50,
+    "B0": {
+        "symbols":            ["QQQ"],
+        "opening_range_end":  "09:45",
+        "breakout_trigger":   "close",
+        "position_size_pct":  0.50,
+        "entry_cutoff_time":  None,
+    },
+    "B1130": {
+        "symbols":            ["QQQ"],
+        "opening_range_end":  "09:45",
+        "breakout_trigger":   "close",
+        "position_size_pct":  0.50,
+        "entry_cutoff_time":  "11:30",
     },
     "C": {
-        "symbols":           ["QQQ"],
-        "opening_range_end": "10:00",
-        "breakout_trigger":  "high",
-        "position_size_pct": 0.50,
+        "symbols":            ["QQQ"],
+        "opening_range_end":  "10:00",
+        "breakout_trigger":   "high",
+        "position_size_pct":  0.50,
+        "entry_cutoff_time":  None,
     },
 }
 
@@ -78,6 +88,7 @@ OUTPUT_COLS: list[str] = [
     "opening_range_end",
     "breakout_trigger",
     "position_size_pct",
+    "entry_cutoff_time",
     "start_date",
     "end_date",
     *_METRIC_COLS,
@@ -181,11 +192,12 @@ class WalkForwardRunner:
                     )
 
                 row: dict[str, Any] = {
-                    "candidate_id":     candidate_id,
-                    "symbols":          json.dumps(list(params["symbols"])),
+                    "candidate_id":      candidate_id,
+                    "symbols":           json.dumps(list(params["symbols"])),
                     "opening_range_end": params["opening_range_end"],
                     "breakout_trigger":  params["breakout_trigger"],
                     "position_size_pct": params["position_size_pct"],
+                    "entry_cutoff_time": params.get("entry_cutoff_time"),
                     "start_date":        start_date,
                     "end_date":          end_date,
                 }
@@ -251,6 +263,7 @@ class WalkForwardRunner:
         cfg.strategy.params["opening_range_end"]   = params["opening_range_end"]
         cfg.strategy.params["breakout_trigger"]    = params["breakout_trigger"]
         cfg.strategy.params["position_size_pct"]   = params["position_size_pct"]
+        cfg.strategy.params["entry_cutoff_time"]   = params.get("entry_cutoff_time")
 
         return cfg
 

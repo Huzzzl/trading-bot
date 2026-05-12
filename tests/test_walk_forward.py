@@ -123,8 +123,8 @@ def _make_runner(
 # ===========================================================================
 
 class TestConstants:
-    def test_three_candidates(self):
-        assert set(CANDIDATES.keys()) == {"A", "B", "C"}
+    def test_four_candidates(self):
+        assert set(CANDIDATES.keys()) == {"A", "B0", "B1130", "C"}
 
     def test_all_candidates_use_qqq(self):
         for cid, params in CANDIDATES.items():
@@ -136,17 +136,25 @@ class TestConstants:
         assert p["breakout_trigger"]  == "close"
         assert p["position_size_pct"] == 0.95
 
-    def test_candidate_b_params(self):
-        p = CANDIDATES["B"]
-        assert p["opening_range_end"] == "09:45"
-        assert p["breakout_trigger"]  == "close"
-        assert p["position_size_pct"] == 0.50
-
     def test_candidate_c_params(self):
         p = CANDIDATES["C"]
         assert p["opening_range_end"] == "10:00"
         assert p["breakout_trigger"]  == "high"
         assert p["position_size_pct"] == 0.50
+
+    def test_candidate_b0_params(self):
+        p = CANDIDATES["B0"]
+        assert p["opening_range_end"]  == "09:45"
+        assert p["breakout_trigger"]   == "close"
+        assert p["position_size_pct"]  == 0.50
+        assert p["entry_cutoff_time"]  is None
+
+    def test_candidate_b1130_params(self):
+        p = CANDIDATES["B1130"]
+        assert p["opening_range_end"]  == "09:45"
+        assert p["breakout_trigger"]   == "close"
+        assert p["position_size_pct"]  == 0.50
+        assert p["entry_cutoff_time"]  == "11:30"
 
     def test_five_default_windows(self):
         assert WINDOWS_TRADING_DAYS == [10, 20, 30, 45, 60]
@@ -154,7 +162,7 @@ class TestConstants:
     def test_output_cols_complete(self):
         required = {
             "candidate_id", "symbols", "opening_range_end", "breakout_trigger",
-            "position_size_pct", "start_date", "end_date",
+            "position_size_pct", "entry_cutoff_time", "start_date", "end_date",
             "num_trades", "total_return_pct", "annualized_return_pct",
             "max_drawdown_pct", "sharpe_ratio", "win_rate_pct", "final_equity",
             "status", "error",
@@ -242,25 +250,24 @@ class TestOutputStructure:
     def test_row_count_candidates_times_windows(self):
         runner, _ = _make_runner(windows=[10, 20])
         df = runner.run()
-        assert len(df) == 3 * 2  # 3 candidates × 2 windows
+        assert len(df) == 4 * 2  # 4 candidates × 2 windows
 
-    def test_single_window_gives_three_rows(self):
+    def test_single_window_gives_four_rows(self):
         runner, _ = _make_runner(windows=[10])
         df = runner.run()
-        assert len(df) == 3
+        assert len(df) == 4
 
-    def test_candidate_ids_are_a_b_c(self):
+    def test_candidate_ids_are_a_b0_b1130_c(self):
         runner, _ = _make_runner(windows=[10])
         df = runner.run()
-        assert set(df["candidate_id"]) == {"A", "B", "C"}
+        assert set(df["candidate_id"]) == {"A", "B0", "B1130", "C"}
 
     def test_window_ordering_in_csv(self):
         runner, _ = _make_runner(windows=[10, 20, 30])
         df = runner.run()
-        # Rows come out window-major: first all candidates for window 10, then 20, then 30
-        assert df["start_date"].iloc[0] == df["start_date"].iloc[1]  # same window, A and B
-        assert df["start_date"].iloc[0] == df["start_date"].iloc[2]  # same window, A and C
-        assert df["start_date"].iloc[0] != df["start_date"].iloc[3]  # next window
+        # Rows come out window-major: first all 4 candidates for window 10, then 20, then 30
+        assert df["start_date"].iloc[0] == df["start_date"].iloc[3]  # all 4 share window 10
+        assert df["start_date"].iloc[0] != df["start_date"].iloc[4]  # next window starts at 4
 
     def test_csv_has_no_extra_index_column(self):
         runner, out = _make_runner()
@@ -317,10 +324,10 @@ class TestColumnValues:
     def test_position_size_matches_candidate(self):
         runner, _ = _make_runner(windows=[10])
         df = runner.run()
-        row_a = df[df["candidate_id"] == "A"].iloc[0]
-        row_b = df[df["candidate_id"] == "B"].iloc[0]
+        row_a  = df[df["candidate_id"] == "A"].iloc[0]
+        row_b0 = df[df["candidate_id"] == "B0"].iloc[0]
         assert abs(row_a["position_size_pct"] - 0.95) < 1e-9
-        assert abs(row_b["position_size_pct"] - 0.50) < 1e-9
+        assert abs(row_b0["position_size_pct"] - 0.50) < 1e-9
 
     def test_metrics_are_numeric_on_success(self):
         runner, _ = _make_runner(windows=[10])
@@ -457,3 +464,55 @@ class TestConfigIsolation:
         assert cfg.strategy.params["opening_range_end"]  == orig_or_end
         assert cfg.strategy.params["breakout_trigger"]   == orig_trigger
         assert cfg.strategy.params["position_size_pct"]  == orig_size
+
+
+# ===========================================================================
+# entry_cutoff_time in walk-forward output
+# ===========================================================================
+
+class TestEntryCutoffWalkForward:
+    def test_entry_cutoff_time_column_in_dataframe(self):
+        runner, _ = _make_runner(windows=[10])
+        df = runner.run()
+        assert "entry_cutoff_time" in df.columns
+
+    def test_entry_cutoff_time_column_in_csv(self):
+        runner, out = _make_runner(windows=[10])
+        runner.run()
+        df = pd.read_csv(out / "walk_forward.csv")
+        assert "entry_cutoff_time" in df.columns
+
+    def test_b1130_has_cutoff_11_30(self):
+        runner, _ = _make_runner(windows=[10])
+        df = runner.run()
+        row = df[df["candidate_id"] == "B1130"].iloc[0]
+        assert row["entry_cutoff_time"] == "11:30"
+
+    def test_b0_has_null_cutoff(self):
+        runner, _ = _make_runner(windows=[10])
+        df = runner.run()
+        row = df[df["candidate_id"] == "B0"].iloc[0]
+        assert pd.isna(row["entry_cutoff_time"]) or row["entry_cutoff_time"] is None
+
+    def test_a_b0_c_have_null_cutoff(self):
+        runner, _ = _make_runner(windows=[10])
+        df = runner.run()
+        for cid in ("A", "B0", "C"):
+            row = df[df["candidate_id"] == cid].iloc[0]
+            assert pd.isna(row["entry_cutoff_time"]) or row["entry_cutoff_time"] is None
+
+    def test_patch_config_sets_entry_cutoff_time(self):
+        runner, _ = _make_runner(windows=[10])
+        params = {"symbols": ["QQQ"], "opening_range_end": "09:45",
+                  "breakout_trigger": "close", "position_size_pct": 0.50,
+                  "entry_cutoff_time": "11:30"}
+        patched = runner._patch_config(params, "2024-01-02", "2024-01-05")
+        assert patched.strategy.params["entry_cutoff_time"] == "11:30"
+
+    def test_patch_config_sets_none_cutoff(self):
+        runner, _ = _make_runner(windows=[10])
+        params = {"symbols": ["QQQ"], "opening_range_end": "09:45",
+                  "breakout_trigger": "close", "position_size_pct": 0.50,
+                  "entry_cutoff_time": None}
+        patched = runner._patch_config(params, "2024-01-02", "2024-01-05")
+        assert patched.strategy.params["entry_cutoff_time"] is None
