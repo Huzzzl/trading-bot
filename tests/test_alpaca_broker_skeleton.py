@@ -435,3 +435,139 @@ class TestValidateOrderIntent:
     def test_submit_order_still_raises_not_implemented(self):
         with pytest.raises(NotImplementedError, match="AlpacaBrokerAdapter is not implemented yet"):
             self._adapter().submit_order(self._intent())
+
+
+# ---------------------------------------------------------------------------
+# _normalize_status
+# ---------------------------------------------------------------------------
+
+class TestNormalizeStatus:
+    def _norm(self, s: str) -> str:
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        return AlpacaBrokerAdapter._normalize_status(s)
+
+    # --- accepted group ---
+
+    def test_new_maps_to_accepted(self):
+        assert self._norm("new") == "accepted"
+
+    def test_pending_new_maps_to_accepted(self):
+        assert self._norm("pending_new") == "accepted"
+
+    def test_accepted_maps_to_accepted(self):
+        assert self._norm("accepted") == "accepted"
+
+    def test_accepted_for_bidding_maps_to_accepted(self):
+        assert self._norm("accepted_for_bidding") == "accepted"
+
+    # --- filled group ---
+
+    def test_filled_maps_to_filled(self):
+        assert self._norm("filled") == "filled"
+
+    def test_partially_filled_maps_to_filled(self):
+        assert self._norm("partially_filled") == "filled"
+
+    # --- cancelled group ---
+
+    def test_canceled_maps_to_cancelled(self):
+        assert self._norm("canceled") == "cancelled"
+
+    def test_cancelled_maps_to_cancelled(self):
+        assert self._norm("cancelled") == "cancelled"
+
+    def test_expired_maps_to_cancelled(self):
+        assert self._norm("expired") == "cancelled"
+
+    def test_replaced_maps_to_cancelled(self):
+        assert self._norm("replaced") == "cancelled"
+
+    # --- rejected group ---
+
+    def test_rejected_maps_to_rejected(self):
+        assert self._norm("rejected") == "rejected"
+
+    def test_stopped_maps_to_rejected(self):
+        assert self._norm("stopped") == "rejected"
+
+    def test_suspended_maps_to_rejected(self):
+        assert self._norm("suspended") == "rejected"
+
+    def test_calculated_maps_to_rejected(self):
+        assert self._norm("calculated") == "rejected"
+
+    # --- case-insensitive ---
+
+    def test_uppercase_filled(self):
+        assert self._norm("FILLED") == "filled"
+
+    def test_mixed_case_pending_new(self):
+        assert self._norm("Pending_New") == "accepted"
+
+    def test_uppercase_rejected(self):
+        assert self._norm("REJECTED") == "rejected"
+
+    def test_mixed_case_cancelled(self):
+        assert self._norm("Cancelled") == "cancelled"
+
+    # --- whitespace stripping ---
+
+    def test_strips_leading_whitespace(self):
+        assert self._norm("  filled") == "filled"
+
+    def test_strips_trailing_whitespace(self):
+        assert self._norm("filled  ") == "filled"
+
+    def test_strips_both_sides(self):
+        assert self._norm("  new  ") == "accepted"
+
+    # --- unknown status ---
+
+    def test_unknown_status_raises_value_error(self):
+        with pytest.raises(ValueError, match="Unknown Alpaca order status"):
+            self._norm("open")
+
+    def test_empty_string_raises_value_error(self):
+        with pytest.raises(ValueError, match="Unknown Alpaca order status"):
+            self._norm("")
+
+    def test_arbitrary_string_raises_value_error(self):
+        with pytest.raises(ValueError, match="Unknown Alpaca order status"):
+            self._norm("banana")
+
+
+# ---------------------------------------------------------------------------
+# _is_partial_fill
+# ---------------------------------------------------------------------------
+
+class TestIsPartialFill:
+    def _ipf(self, s: str) -> bool:
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        return AlpacaBrokerAdapter._is_partial_fill(s)
+
+    def test_partially_filled_returns_true(self):
+        assert self._ipf("partially_filled") is True
+
+    def test_uppercase_partially_filled_returns_true(self):
+        assert self._ipf("PARTIALLY_FILLED") is True
+
+    def test_mixed_case_returns_true(self):
+        assert self._ipf("Partially_Filled") is True
+
+    def test_strips_whitespace_and_returns_true(self):
+        assert self._ipf("  partially_filled  ") is True
+
+    def test_filled_returns_false(self):
+        assert self._ipf("filled") is False
+
+    def test_new_returns_false(self):
+        assert self._ipf("new") is False
+
+    def test_rejected_returns_false(self):
+        assert self._ipf("rejected") is False
+
+    def test_cancelled_returns_false(self):
+        assert self._ipf("cancelled") is False
+
+    def test_empty_returns_false(self):
+        assert self._ipf("") is False
