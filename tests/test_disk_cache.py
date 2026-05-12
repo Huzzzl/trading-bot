@@ -16,6 +16,8 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import pytest
 
+import src.data.cached_provider as _cached_provider_module
+
 from src.config.loader import (
     AppConfig,
     BacktestConfig,
@@ -161,6 +163,27 @@ class TestCopySafety:
         df2 = provider.fetch_bars("SPY", "2024-01-01", "2024-01-05", "5m")
         assert (df2["close"] != -999.0).all()
 
+    def test_provider_mutation_does_not_corrupt_saved_cache(self, tmp_path):
+        """Mutating the DataFrame returned by the inner provider must not affect
+        what gets persisted — only possible if we .copy() before _save()."""
+        mutating_df = _make_bars()
+
+        class MutatingProvider(BaseDataProvider):
+            def fetch_bars(self, symbol, start, end, interval):
+                return mutating_df  # returns the same object every time
+
+        provider = CachedMarketDataProvider(
+            MutatingProvider(), cache_dir=tmp_path, use_parquet=False
+        )
+        provider.fetch_bars("SPY", "2024-01-01", "2024-01-05", "5m")
+
+        # Mutate the original DataFrame after the first fetch.
+        mutating_df["close"] = -999.0
+
+        # The cached file must still contain the original values.
+        cached = provider.fetch_bars("SPY", "2024-01-01", "2024-01-05", "5m")
+        assert (cached["close"] != -999.0).all()
+
 
 # ===========================================================================
 # Timezone preservation
@@ -238,6 +261,34 @@ class TestCsvFallback:
         provider.fetch_bars("QQQ", "2024-01-01", "2024-01-05", "5m")
         provider.fetch_bars("QQQ", "2024-01-01", "2024-01-05", "5m")
         assert inner.call_count == 1
+
+
+# ===========================================================================
+# use_parquet=True without pyarrow raises ImportError
+# ===========================================================================
+
+class TestParquetUnavailableError:
+    def test_raises_import_error_when_parquet_forced_but_unavailable(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(_cached_provider_module, "_PARQUET_AVAILABLE", False)
+        with pytest.raises(ImportError, match="pyarrow"):
+            CachedMarketDataProvider(
+                CountingProvider(), cache_dir=tmp_path, use_parquet=True
+            )
+
+    def test_no_error_when_parquet_false_and_unavailable(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(_cached_provider_module, "_PARQUET_AVAILABLE", False)
+        provider = CachedMarketDataProvider(
+            CountingProvider(), cache_dir=tmp_path, use_parquet=False
+        )
+        assert provider is not None
+
+    def test_no_error_when_parquet_none_and_unavailable(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(_cached_provider_module, "_PARQUET_AVAILABLE", False)
+        provider = CachedMarketDataProvider(
+            CountingProvider(), cache_dir=tmp_path, use_parquet=None
+        )
+        # Auto-detects unavailability and falls back to CSV without raising.
+        assert provider is not None
 
 
 # ===========================================================================

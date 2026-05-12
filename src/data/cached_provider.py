@@ -73,6 +73,11 @@ class CachedMarketDataProvider(BaseDataProvider):
         self._cache_dir  = Path(cache_dir)
         self._cache_dir.mkdir(parents=True, exist_ok=True)
 
+        if use_parquet is True and not _PARQUET_AVAILABLE:
+            raise ImportError(
+                "use_parquet=True but pyarrow is not installed. "
+                "Install it with: pip install pyarrow"
+            )
         if use_parquet is None:
             self._use_parquet = _PARQUET_AVAILABLE
         else:
@@ -105,7 +110,7 @@ class CachedMarketDataProvider(BaseDataProvider):
             "CachedMarketDataProvider: cache miss — fetching %s [%s, %s] %s",
             symbol, start, end, interval,
         )
-        df = self._provider.fetch_bars(symbol, start, end, interval)
+        df = self._provider.fetch_bars(symbol, start, end, interval).copy()
         self._save(df, path)
         return df.copy()
 
