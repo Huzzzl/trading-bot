@@ -181,8 +181,24 @@ def main() -> None:
                 "Set execution.paper_trading_enabled to true in config to enable preflight checks. "
                 "Paper order execution is not yet wired."
             )
-        # paper_trading_enabled=True: run preflight only, do not execute orders.
+
+        # ------------------------------------------------------------------
+        # Minimal paper execution path — TEMPORARY, constrained, mock-tested.
+        #
+        # Signal generation uses BacktestEngine over the configured historical
+        # data provider (Yahoo Finance + disk cache).  This is a dry pipeline,
+        # NOT a live market data feed.  A real-time Alpaca data provider will
+        # replace this in a future PR.
+        #
+        # Hard safety limiter (enforced before any broker call):
+        #   - symbol must be "SPY"
+        #   - order_type must be "market"
+        #   - quantity must be <= 1
+        #   - client_order_id must be non-empty
+        #   - at most ONE intent is submitted per run
+        # ------------------------------------------------------------------
         from src.execution.alpaca_broker import AlpacaBrokerAdapter
+
         broker = AlpacaBrokerAdapter()
         preflight = broker.preflight_check(cfg.symbols)
         logger.info(
@@ -190,10 +206,77 @@ def main() -> None:
             preflight["account"].get("status"),
             preflight["symbols"],
         )
-        raise NotImplementedError(
-            "Paper trading preflight passed but order execution is not yet wired. "
-            "No orders were submitted or cancelled."
+
+        # Generate candidate intents via the existing strategy/risk pipeline.
+        engine  = build_engine(cfg)
+        results = engine.run()
+        open_positions_count = len(engine._portfolio.positions)
+        candidate_intents = results.get("order_intents", [])
+
+        # Apply safety limiter — strict fail-closed filter.
+        def _is_safe_paper_intent(intent) -> bool:
+            if intent.symbol != "SPY":
+                return False
+            if intent.order_type != "market":
+                return False
+            if intent.quantity > 1:
+                return False
+            if not intent.client_order_id or not str(intent.client_order_id).strip():
+                return False
+            return True
+
+        safe_intents = [i for i in candidate_intents if _is_safe_paper_intent(i)]
+        submitted_intent = safe_intents[0] if safe_intents else None
+
+        if submitted_intent is None:
+            logger.warning(
+                "Paper execution: no valid SPY market intent with qty<=1 generated. "
+                "Writing empty audit artifacts and exiting."
+            )
+            order_results: list = []
+        else:
+            logger.info(
+                "Paper execution: submitting intent client_order_id=%s symbol=%s side=%s qty=%s",
+                submitted_intent.client_order_id,
+                submitted_intent.symbol,
+                submitted_intent.side,
+                submitted_intent.quantity,
+            )
+            result = broker.submit_order(submitted_intent)
+            order_results = [result]
+            logger.info(
+                "Paper execution: order_id=%s status=%s client_order_id=%s",
+                result.order_id,
+                result.status,
+                result.client_order_id,
+            )
+
+        # Write audit artifacts and run reconciliation via ReportGenerator.
+        submitted_intents = [submitted_intent] if submitted_intent is not None else []
+        reporter = ReportGenerator(
+            metrics=results["metrics"],
+            trades=results["trades"],
+            equity_curve=results["equity_curve"],
+            config=cfg,
+            output_dir=output_dir,
+            open_positions_count=open_positions_count,
+            order_intents=submitted_intents,
+            order_results=order_results if order_results else None,
         )
+        reporter.generate_all()
+
+        # Fail closed on any reconciliation mismatch.
+        recon_path = output_dir / "order_reconciliation.json"
+        if recon_path.exists():
+            import json as _json
+            recon = _json.loads(recon_path.read_text())
+            if recon.get("overall_status") not in ("PASS", "N/A"):
+                raise RuntimeError(
+                    f"Paper execution reconciliation failed: {recon.get('overall_status')}. "
+                    "Check order_reconciliation.json for details."
+                )
+        logger.info("Paper execution complete. Artifacts written to %s", output_dir)
+        return
 
     if args.mode == "candidate-b":
         cfg = apply_candidate_b(cfg)
