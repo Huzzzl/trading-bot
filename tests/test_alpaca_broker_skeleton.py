@@ -1179,3 +1179,84 @@ class TestSubmitOrderMockClient:
             from src.main import main as _main
             with pytest.raises(NotImplementedError):
                 _main()
+
+
+# ---------------------------------------------------------------------------
+# submit_order: explicit client method validation
+# ---------------------------------------------------------------------------
+
+class TestSubmitOrderClientMethodValidation:
+    """Client with neither submit_order nor create_order fails explicitly."""
+
+    def _adapter(self, client=None):
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        return AlpacaBrokerAdapter(client=client)
+
+    def _intent(self, **overrides):
+        from src.execution.order_intent import OrderIntent
+        defaults = dict(
+            symbol="SPY", side="buy", quantity=10.0,
+            order_type="market", reason="entry",
+            timestamp=pd.Timestamp("2024-01-15 10:00:00", tz="America/New_York"),
+            client_order_id="BT-000001",
+        )
+        defaults.update(overrides)
+        return OrderIntent(**defaults)
+
+    def _rth(self):
+        return mock.patch(
+            "src.execution.alpaca_broker.AlpacaBrokerAdapter._ensure_market_hours"
+        )
+
+    def test_client_with_no_method_raises_not_implemented(self):
+        # An object() has neither submit_order nor create_order
+        adapter = self._adapter(client=object())
+        with self._rth():
+            with pytest.raises(NotImplementedError,
+                               match="Injected Alpaca client must provide submit_order or create_order"):
+                adapter.submit_order(self._intent())
+
+    def test_explicit_error_message(self):
+        adapter = self._adapter(client=object())
+        with self._rth():
+            try:
+                adapter.submit_order(self._intent())
+            except NotImplementedError as exc:
+                assert "submit_order or create_order" in str(exc)
+            else:
+                pytest.fail("Expected NotImplementedError")
+
+    def test_explicit_error_after_validation_and_market_hours(self):
+        # Verify that validation + market-hours run BEFORE the client method
+        # check by ensuring a validation failure takes priority.
+        call_log = []
+        client = object()  # no submit_order / create_order
+
+        adapter = self._adapter(client=client)
+
+        def _tracking_emh(now=None):
+            call_log.append("market_hours")
+
+        with mock.patch.object(adapter, "_ensure_market_hours", side_effect=_tracking_emh), \
+             mock.patch.object(adapter, "_validate_order_intent",
+                               side_effect=lambda i: call_log.append("validate")):
+            with pytest.raises(NotImplementedError,
+                               match="submit_order or create_order"):
+                adapter.submit_order(self._intent())
+
+        assert "validate" in call_log
+        assert "market_hours" in call_log
+
+    def test_invalid_intent_fails_before_client_method_check(self):
+        adapter = self._adapter(client=object())
+        intent = self._intent(client_order_id=None)
+        with self._rth():
+            with pytest.raises(ValueError, match="client_order_id is required"):
+                adapter.submit_order(intent)
+
+    def test_outside_market_hours_fails_before_client_method_check(self):
+        adapter = self._adapter(client=object())
+        with mock.patch.object(adapter, "_ensure_market_hours",
+                               side_effect=RuntimeError("Outside regular market hours")):
+            with pytest.raises(RuntimeError, match="Outside regular market hours"):
+                adapter.submit_order(self._intent())

@@ -313,8 +313,12 @@ class AlpacaBrokerAdapter(BrokerAdapter):
         client = self._get_client()
         if hasattr(client, "submit_order"):
             response = client.submit_order(payload)
-        else:
+        elif hasattr(client, "create_order"):
             response = client.create_order(payload)
+        else:
+            raise NotImplementedError(
+                "Injected Alpaca client must provide submit_order or create_order"
+            )
 
         return self._order_response_to_result(response, intent)
 
