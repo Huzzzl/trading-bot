@@ -173,9 +173,24 @@ def main() -> None:
         )
 
     if cfg.execution.mode == "paper":
+        if not cfg.execution.paper_trading_enabled:
+            raise NotImplementedError(
+                "Paper trading is disabled. "
+                "Set execution.paper_trading_enabled to true in config to enable preflight checks. "
+                "Paper order execution is not yet wired."
+            )
+        # paper_trading_enabled=True: run preflight only, do not execute orders.
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        broker = AlpacaBrokerAdapter()
+        preflight = broker.preflight_check(cfg.symbols)
+        logger.info(
+            "Paper trading preflight passed: account_status=%s symbols=%s",
+            preflight["account"].get("status"),
+            preflight["symbols"],
+        )
         raise NotImplementedError(
-            "Paper trading is not implemented yet. "
-            "Set execution.mode to 'backtest' in config/settings.yaml."
+            "Paper trading preflight passed but order execution is not yet wired. "
+            "No orders were submitted or cancelled."
         )
 
     if args.mode == "candidate-b":

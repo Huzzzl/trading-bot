@@ -99,7 +99,7 @@ class TestPaperTradingGuard:
         # Patch load_config to return a paper-mode config, capture the guard
         with mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog", "--mode", "backtest"]):
-            with pytest.raises(NotImplementedError, match="Paper trading is not implemented"):
+            with pytest.raises(NotImplementedError, match="Paper trading is disabled"):
                 _main()
 
     def test_paper_mode_error_message_is_clear(self):
@@ -112,7 +112,7 @@ class TestPaperTradingGuard:
              mock.patch("sys.argv", ["prog"]):
             with pytest.raises(NotImplementedError) as exc_info:
                 _main()
-        assert "backtest" in str(exc_info.value).lower()
+        assert "paper" in str(exc_info.value).lower()
 
     def test_backtest_mode_does_not_raise(self):
         """Loading a backtest-mode config must not trigger the paper guard."""

@@ -460,5 +460,5 @@ class TestPaperModeUnchanged:
         )
         with mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog"]):
-            with pytest.raises(NotImplementedError, match="Paper trading is not implemented"):
+            with pytest.raises(NotImplementedError, match="Paper trading is disabled"):
                 _main()
