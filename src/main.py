@@ -183,11 +183,18 @@ def main() -> None:
             )
 
         # ------------------------------------------------------------------
-        # Minimal paper execution path — TEMPORARY, constrained, mock-tested.
+        # Two-phase paper execution path
         #
-        # Signal generation uses BacktestEngine over the configured historical
-        # data provider (Yahoo Finance + disk cache).  This is a dry pipeline,
-        # NOT a live market data feed.
+        # Phase 1 — preview (paper_preview_only=True, the default):
+        #   Run preflight + engine, write paper_candidate_intents.csv with all
+        #   generated intents so the owner can review and choose one by
+        #   client_order_id.  No order is submitted.
+        #
+        # Phase 2 — submit (paper_preview_only=False):
+        #   Require paper_selected_client_order_id.  Select exactly that one
+        #   intent, apply paper_order_quantity_override if set, validate all
+        #   safety constraints, submit exactly that one order, write full audit
+        #   artifacts, reconcile.
         #
         # Hard safety constraints (fail closed — any violation raises before
         # submit_order is called):
@@ -195,12 +202,16 @@ def main() -> None:
         #   - order_type must be "market"
         #   - quantity must be <= 1 (or use paper_order_quantity_override=1)
         #   - client_order_id must be non-empty
-        #   - at most ONE intent generated per run (more than one → RuntimeError)
+        #   - selected intent must exist uniquely in candidate list
         # ------------------------------------------------------------------
         import json as _json
         import pandas as _pd
         from dataclasses import replace as _dc_replace
         from src.execution.alpaca_broker import AlpacaBrokerAdapter
+
+        _PAPER_SYMBOL     = "SPY"
+        _PAPER_ORDER_TYPE = "market"
+        _PAPER_MAX_QTY    = 1
 
         broker = AlpacaBrokerAdapter()
         preflight = broker.preflight_check(cfg.symbols)
@@ -210,26 +221,84 @@ def main() -> None:
             preflight["symbols"],
         )
 
-        # Generate candidate intents via the existing strategy/risk pipeline.
+        # Generate all candidate intents via the strategy/risk pipeline.
         engine  = build_engine(cfg)
         results = engine.run()
         open_positions_count = len(engine._portfolio.positions)
         candidate_intents = results.get("order_intents", [])
 
-        # Fail closed if more than one intent generated — at most 1 per run.
-        if len(candidate_intents) > 1:
+        # Always write paper_candidate_intents.csv before any submission decision.
+        _cand_cols = [
+            "client_order_id", "timestamp", "symbol", "side",
+            "quantity", "order_type", "reason",
+        ]
+        _cand_rows = [
+            {
+                "client_order_id": i.client_order_id,
+                "timestamp":       str(i.timestamp),
+                "symbol":          i.symbol,
+                "side":            i.side,
+                "quantity":        i.quantity,
+                "order_type":      i.order_type,
+                "reason":          i.reason,
+            }
+            for i in candidate_intents
+        ]
+        _cand_path = output_dir / "paper_candidate_intents.csv"
+        _pd.DataFrame(_cand_rows, columns=_cand_cols).to_csv(_cand_path, index=False)
+        logger.info(
+            "Paper candidate intents written: %d intent(s) → %s",
+            len(candidate_intents), _cand_path,
+        )
+
+        # ---- Phase 1: preview-only ----------------------------------------
+        if cfg.execution.paper_preview_only:
+            logger.info(
+                "Paper preview-only mode: %d candidate intent(s) written to %s. "
+                "No order submitted. Set paper_preview_only=false and "
+                "paper_selected_client_order_id=<id> to submit.",
+                len(candidate_intents), _cand_path,
+            )
+            reporter = ReportGenerator(
+                metrics=results["metrics"],
+                trades=results["trades"],
+                equity_curve=results["equity_curve"],
+                config=cfg,
+                output_dir=output_dir,
+                open_positions_count=open_positions_count,
+                order_intents=candidate_intents,
+                order_results=[],
+            )
+            reporter.generate_all()
+            return
+
+        # ---- Phase 2: submit selected intent --------------------------------
+
+        _selected_coid = cfg.execution.paper_selected_client_order_id
+        if not _selected_coid or not str(_selected_coid).strip():
             raise RuntimeError(
-                f"Paper execution: {len(candidate_intents)} intents generated; "
-                "at most 1 is allowed per run. Aborting without submitting any order."
+                "Paper execution (non-preview mode): "
+                "execution.paper_selected_client_order_id must be set to a non-empty "
+                "client_order_id. Run in preview mode first to see candidates."
             )
 
-        # Track original intent before any quantity override is applied.
-        _original_intent = candidate_intents[0] if candidate_intents else None
+        _matches = [i for i in candidate_intents if i.client_order_id == _selected_coid]
+        if len(_matches) == 0:
+            raise RuntimeError(
+                f"Paper execution: no intent found with "
+                f"client_order_id={_selected_coid!r}. "
+                f"Available: {[i.client_order_id for i in candidate_intents]}"
+            )
+        if len(_matches) > 1:
+            raise RuntimeError(
+                f"Paper execution: {len(_matches)} intents found with "
+                f"client_order_id={_selected_coid!r}. Expected exactly 1."
+            )
 
-        # --- Quantity override (execution.paper_order_quantity_override). ---
-        # Allows the first manual paper run to submit exactly 1 share when the
-        # strategy generates a larger position size.  Default None = fail closed
-        # (quantity > 1 still raises).  Only 1.0 is supported.
+        _selected_original = _matches[0]
+        selected_intent    = _selected_original
+
+        # Apply quantity override to the selected intent only.
         _qty_override = cfg.execution.paper_order_quantity_override
         if _qty_override is not None:
             if _qty_override <= 0:
@@ -247,109 +316,82 @@ def main() -> None:
                     f"execution.paper_order_quantity_override must be exactly 1.0, "
                     f"got {_qty_override}. Only 1.0 is supported in this implementation."
                 )
-            if _original_intent is not None:
-                _new_meta = dict(_original_intent.metadata)
-                _new_meta["paper_quantity_override"] = True
-                _new_meta["original_quantity"] = _original_intent.quantity
-                candidate_intents = [
-                    _dc_replace(_original_intent, quantity=_qty_override, metadata=_new_meta)
-                ]
-                logger.info(
-                    "Paper quantity override: client_order_id=%s "
-                    "original_qty=%s -> submitted_qty=%s",
-                    candidate_intents[0].client_order_id,
-                    _original_intent.quantity,
-                    _qty_override,
-                )
-
-        # --- Safety validation: fail closed on ANY constraint violation. ---
-        # Do NOT silently filter unsafe intents — any violation aborts before
-        # submit_order is called.
-        _PAPER_SYMBOL     = "SPY"
-        _PAPER_ORDER_TYPE = "market"
-        _PAPER_MAX_QTY    = 1
-
-        for _intent in candidate_intents:
-            _violations: list[str] = []
-            if _intent.symbol != _PAPER_SYMBOL:
-                _violations.append(
-                    f"symbol={_intent.symbol!r} (must be {_PAPER_SYMBOL!r})"
-                )
-            if _intent.order_type != _PAPER_ORDER_TYPE:
-                _violations.append(
-                    f"order_type={_intent.order_type!r} (must be {_PAPER_ORDER_TYPE!r})"
-                )
-            if _intent.quantity > _PAPER_MAX_QTY:
-                _violations.append(
-                    f"quantity={_intent.quantity} (must be <= {_PAPER_MAX_QTY})"
-                )
-            if not _intent.client_order_id or not str(_intent.client_order_id).strip():
-                _violations.append("client_order_id is missing or blank")
-            if _violations:
-                raise RuntimeError(
-                    f"Paper safety constraint violated for intent "
-                    f"{_intent.client_order_id!r}: " + "; ".join(_violations)
-                )
-
-        submitted_intent = candidate_intents[0] if candidate_intents else None
-
-        if submitted_intent is None:
-            logger.warning(
-                "Paper execution: no intent generated. Writing empty audit artifacts."
+            _new_meta = dict(_selected_original.metadata)
+            _new_meta["paper_quantity_override"] = True
+            _new_meta["original_quantity"]       = _selected_original.quantity
+            selected_intent = _dc_replace(
+                _selected_original, quantity=_qty_override, metadata=_new_meta
             )
-            order_results: list = []
-        else:
             logger.info(
-                "Paper execution: submitting intent client_order_id=%s symbol=%s side=%s qty=%s",
-                submitted_intent.client_order_id,
-                submitted_intent.symbol,
-                submitted_intent.side,
-                submitted_intent.quantity,
-            )
-            result = broker.submit_order(submitted_intent)
-            # Fail closed: result must carry a matching client_order_id.
-            if not result.client_order_id:
-                raise RuntimeError(
-                    f"Paper execution: OrderResult for intent "
-                    f"{submitted_intent.client_order_id!r} has no client_order_id. Aborting."
-                )
-            order_results = [result]
-            logger.info(
-                "Paper execution: order_id=%s status=%s client_order_id=%s",
-                result.order_id,
-                result.status,
-                result.client_order_id,
+                "Paper quantity override: client_order_id=%s "
+                "original_qty=%s -> submitted_qty=%s",
+                selected_intent.client_order_id,
+                _selected_original.quantity,
+                _qty_override,
             )
 
-        # Write paper_intent_audit.csv — records original vs submitted quantities.
-        # Always written (empty header row when no intents generated).
+        # Safety validation on the selected intent (fail closed).
+        _violations: list[str] = []
+        if selected_intent.symbol != _PAPER_SYMBOL:
+            _violations.append(
+                f"symbol={selected_intent.symbol!r} (must be {_PAPER_SYMBOL!r})"
+            )
+        if selected_intent.order_type != _PAPER_ORDER_TYPE:
+            _violations.append(
+                f"order_type={selected_intent.order_type!r} (must be {_PAPER_ORDER_TYPE!r})"
+            )
+        if selected_intent.quantity > _PAPER_MAX_QTY:
+            _violations.append(
+                f"quantity={selected_intent.quantity} (must be <= {_PAPER_MAX_QTY})"
+            )
+        if not selected_intent.client_order_id or not str(selected_intent.client_order_id).strip():
+            _violations.append("client_order_id is missing or blank")
+        if _violations:
+            raise RuntimeError(
+                f"Paper safety constraint violated for selected intent "
+                f"{selected_intent.client_order_id!r}: " + "; ".join(_violations)
+            )
+
+        logger.info(
+            "Paper execution: submitting intent client_order_id=%s symbol=%s side=%s qty=%s",
+            selected_intent.client_order_id,
+            selected_intent.symbol,
+            selected_intent.side,
+            selected_intent.quantity,
+        )
+        result = broker.submit_order(selected_intent)
+        if not result.client_order_id:
+            raise RuntimeError(
+                f"Paper execution: OrderResult for intent "
+                f"{selected_intent.client_order_id!r} has no client_order_id. Aborting."
+            )
+        order_results: list = [result]
+        logger.info(
+            "Paper execution: order_id=%s status=%s client_order_id=%s",
+            result.order_id,
+            result.status,
+            result.client_order_id,
+        )
+
+        # Write paper_intent_audit.csv for the selected/submitted intent.
         _audit_cols = [
             "client_order_id", "symbol", "side",
             "original_quantity", "submitted_quantity", "override_applied",
         ]
-        if _original_intent is not None:
-            _audit_df = _pd.DataFrame([{
-                "client_order_id":    (submitted_intent.client_order_id
-                                       if submitted_intent else _original_intent.client_order_id),
-                "symbol":             (submitted_intent.symbol
-                                       if submitted_intent else _original_intent.symbol),
-                "side":               (submitted_intent.side
-                                       if submitted_intent else _original_intent.side),
-                "original_quantity":  _original_intent.quantity,
-                "submitted_quantity": submitted_intent.quantity if submitted_intent else None,
-                "override_applied":   _qty_override is not None,
-            }], columns=_audit_cols)
-        else:
-            _audit_df = _pd.DataFrame(columns=_audit_cols)
+        _audit_df = _pd.DataFrame([{
+            "client_order_id":    selected_intent.client_order_id,
+            "symbol":             selected_intent.symbol,
+            "side":               selected_intent.side,
+            "original_quantity":  _selected_original.quantity,
+            "submitted_quantity": selected_intent.quantity,
+            "override_applied":   _qty_override is not None,
+        }], columns=_audit_cols)
         _audit_path = output_dir / "paper_intent_audit.csv"
         _audit_df.to_csv(_audit_path, index=False)
         logger.info("Paper intent audit written to %s", _audit_path)
 
-        # Write audit artifacts.
-        # order_intents=candidate_intents reflects the submitted intent (after
-        # any quantity override) so reconciliation uses the correct quantity.
-        # order_results=[] (not None) ensures order_results.csv and
-        # order_reconciliation.json are always written.
+        # Reporter receives only the selected (submitted) intent so that
+        # reconciliation compares exactly 1 intent vs 1 result.
         reporter = ReportGenerator(
             metrics=results["metrics"],
             trades=results["trades"],
@@ -357,12 +399,11 @@ def main() -> None:
             config=cfg,
             output_dir=output_dir,
             open_positions_count=open_positions_count,
-            order_intents=candidate_intents,
+            order_intents=[selected_intent],
             order_results=order_results,
         )
         reporter.generate_all()
 
-        # Fail closed: reconciliation JSON must always be written after generate_all.
         recon_path = output_dir / "order_reconciliation.json"
         if not recon_path.exists():
             raise RuntimeError(
@@ -371,12 +412,9 @@ def main() -> None:
             )
         recon = _json.loads(recon_path.read_text())
 
-        # Fail closed: submitted intent/result counts must match.
-        _n_intents = len(candidate_intents)
-        _n_results = len(order_results)
-        if _n_intents != _n_results:
+        if len(order_results) != 1:
             raise RuntimeError(
-                f"Paper execution: {_n_intents} intent(s) but {_n_results} result(s). "
+                f"Paper execution: expected 1 result, got {len(order_results)}. "
                 "Check order_reconciliation.json for details."
             )
 

@@ -22,46 +22,67 @@ See also:
 | `AlpacaBrokerAdapter.preflight_check()` | Implemented; exercised through mocked tests only |
 | `execution.paper_trading_enabled` flag | Present; defaults to `False` (fail-closed) |
 | `execution.paper_order_quantity_override` flag | Present; defaults to `None` (fail-closed); only `1.0` accepted |
+| `execution.paper_preview_only` flag | Present; defaults to `True` (preview-only, no submit) |
+| `execution.paper_selected_client_order_id` field | Present; defaults to `None`; required in submit mode |
 | `paper_trading_enabled=False` | Raises `NotImplementedError` before adapter creation |
-| `paper_trading_enabled=True` | Minimal single-order paper path — mock-tested only (see § 1.1) |
+| `paper_trading_enabled=True` | Two-phase preview/selection paper path — mock-tested only (see § 1.1) |
 | Live trading (`paper=False`) | Permanently blocked — raises `ValueError` in constructor |
 | Real Alpaca network calls in CI | None — all tests mocked |
 
-### 1.1 Minimal Paper Execution Path (current)
+### 1.1 Two-Phase Paper Execution Path (current)
 
-`paper_trading_enabled=True` now wires a constrained execution path in `main.py`.
+`paper_trading_enabled=True` wires a two-phase preview/selection execution path in `main.py`.
 The path is mock-tested only.  **No manual run against a real Alpaca paper account
 has been completed yet.**
 
-**Hard constraints — fail closed on any violation (raises `RuntimeError`):**
+**Phase 1 — Preview (`paper_preview_only=True`, the default):**
+- `paper_candidate_intents.csv` is always written (even with 0 intents).
+- No order is submitted.
+- Multiple generated intents are allowed.
+- `generate_all` is called to produce standard report artifacts.
+
+**Phase 2 — Submit selected intent (`paper_preview_only=False`):**
+- `paper_candidate_intents.csv` is written first (before any submission decision).
+- `paper_selected_client_order_id` must be set to a non-empty value.
+- Exactly one intent matching that ID must exist; 0 or >1 matches raises `RuntimeError`.
+- `paper_order_quantity_override` (if set) is applied to the selected intent only.
+- Safety validation runs on the selected intent only.
+- Exactly one order is submitted.
+- `paper_intent_audit.csv`, `order_intents.csv`, `order_results.csv`, and
+  `order_reconciliation.json` are written after submission.
+- Reconciliation compares the selected (submitted) intent vs its result.
+
+**Hard constraints on the selected intent (fail closed — raises before `submit_order`):**
 
 | Constraint | Behaviour on violation |
 |------------|------------------------|
-| Symbol must be `SPY` | `RuntimeError` before `submit_order` |
-| `order_type` must be `market` | `RuntimeError` before `submit_order` |
-| `quantity` must be `<= 1` | `RuntimeError` before `submit_order` |
-| `client_order_id` must be non-empty | `RuntimeError` before `submit_order` |
-| At most **1** intent generated per run | `RuntimeError` before `submit_order` |
+| `paper_preview_only=false` requires non-empty `paper_selected_client_order_id` | `RuntimeError` |
+| Selected ID must match exactly one candidate | `RuntimeError` (0 or >1 matches) |
+| Symbol must be `SPY` | `RuntimeError` |
+| `order_type` must be `market` | `RuntimeError` |
+| `quantity` must be `<= 1` (after override) | `RuntimeError` |
+| `client_order_id` must be non-empty | `RuntimeError` |
 | `OrderResult` must carry `client_order_id` | `RuntimeError` after `submit_order` |
 | `order_reconciliation.json` must be written | `RuntimeError` if file absent after `generate_all` |
 | Reconciliation `overall_status` must be `PASS` or `N/A` | `RuntimeError` on `WARN` or other |
 
+Non-selected candidate intents are visible in `paper_candidate_intents.csv` but their
+content does not block submission of the selected intent.
+
 **Optional quantity override (`paper_order_quantity_override`):**
 
 When the strategy generates a quantity larger than 1 (e.g. 139 shares from a full position-
-sizing calculation), the paper path would fail closed with a `RuntimeError` because the
-`quantity > 1` constraint would fire.  Setting
+sizing calculation), the selected intent would fail the `quantity > 1` constraint.  Setting
 `execution.paper_order_quantity_override: 1` in `settings.yaml` causes `main.py` to replace
-the intent's quantity with `1.0` *before* the safety validation runs.  The override is logged
-and recorded in `paper_intent_audit.csv` with the original quantity preserved.
+the selected intent's quantity with `1.0` *before* the safety validation runs.  The override
+is logged and recorded in `paper_intent_audit.csv` with the original quantity preserved.
 
 Rules for the override field:
-- Default `None` — no override applied; `quantity > 1` raises `RuntimeError` as normal.
+- Default `None` — no override applied; selected intent with `quantity > 1` raises as normal.
 - Only `1.0` is accepted; any value `<= 0` or `> 1` raises `RuntimeError` before `submit_order`.
 - The override does **not** bypass symbol, order-type, or `client_order_id` checks.
-- The override does **not** apply in backtest mode (field is ignored when `mode != "paper"`).
-- `paper_intent_audit.csv` is always written (header-only when 0 intents); it records
-  `original_quantity`, `submitted_quantity`, and `override_applied`.
+- The override does **not** apply in preview mode or in backtest mode.
+- `paper_intent_audit.csv` records `original_quantity`, `submitted_quantity`, and `override_applied`.
 
 **Audit artifacts always written** (even when 0 intents generated):
 - `order_intents.csv` — all candidate intents generated by the strategy pipeline
@@ -182,11 +203,21 @@ design review and readiness checklist:
 | 11 | Tests prove `order_reconciliation.json` always written (empty or not) | ✅ Done |
 | 12 | Tests prove missing `order_reconciliation.json` raises `RuntimeError` | ✅ Done |
 | 13 | Tests prove `OrderResult` without `client_order_id` raises `RuntimeError` | ✅ Done |
-| 14 | Tests prove reporter receives all candidate intents (not only submitted) | ✅ Done |
+| 14 | Tests prove reporter receives only the selected (submitted) intent in submit mode | ✅ Done |
 | 15b | Tests prove `paper_order_quantity_override=1.0` converts large qty and passes safety checks | ✅ Done |
 | 15c | Tests prove override `> 1` or `<= 0` raises `RuntimeError` before `submit_order` | ✅ Done |
 | 15d | Tests prove override does not bypass symbol/order-type/`client_order_id` constraints | ✅ Done |
 | 15e | Tests prove `paper_intent_audit.csv` written correctly with and without override | ✅ Done |
+| 15f | Tests prove preview mode writes `paper_candidate_intents.csv`, does not call `submit_order` | ✅ Done |
+| 15g | Tests prove preview mode allows multiple generated intents | ✅ Done |
+| 15h | Tests prove preview mode writes CSV even with 0 intents | ✅ Done |
+| 15i | Tests prove non-preview without selected ID raises before `submit_order` | ✅ Done |
+| 15j | Tests prove selected ID not found raises before `submit_order` | ✅ Done |
+| 15k | Tests prove duplicate selected ID raises before `submit_order` | ✅ Done |
+| 15l | Tests prove only selected intent is submitted from multiple candidates | ✅ Done |
+| 15m | Tests prove non-selected unsafe intents do not block submission of selected intent | ✅ Done |
+| 15n | Tests prove selected unsafe intent raises before `submit_order` | ✅ Done |
+| 15o | Tests prove override applies only to selected intent | ✅ Done |
 | 15 | Paper integration test against live Alpaca paper account (`pytest -m integration`) | ☐ Not yet run |
 | 16 | Market-hours guard tested manually outside RTH | ☐ Not yet done |
 | 17 | Startup account check tested with blocked account | ☐ Not yet done |
