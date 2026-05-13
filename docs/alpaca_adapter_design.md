@@ -39,7 +39,7 @@ endpoint exclusively.
   an explicit, separate design review and a dedicated live-trading readiness
   checklist.
 - The adapter is not activated by the backtest engine.  It is only reachable
-  when `execution.mode == "paper"` (currently blocked).
+  when `execution.mode == "paper"` and `execution.paper_trading_enabled == true`.
 
 ---
 
@@ -69,7 +69,7 @@ Rules:
 
 1. **Never read API keys unless `execution.mode == "paper"`.**
    The adapter constructor does not read env vars.  Credentials are resolved
-   lazily inside `_get_client()`, which is called only by the four interface
+   lazily inside `_get_client()`, which is called only by the public interface
    methods.
 
 2. **Never place live orders.**  `paper=True` is passed to the Alpaca client
@@ -101,7 +101,7 @@ For the first implementation only **market orders** are supported.
 | `side` | `side` | `"buy"` / `"sell"` — matches Alpaca enum |
 | `quantity` | `qty` | Integer shares (fractional shares deferred) |
 | `order_type` | `type` | Only `"market"` is sent; other types raise `NotImplementedError` |
-| `client_order_id` | `client_order_id` | Propagated as-is; `None` → Alpaca auto-generates an ID |
+| `client_order_id` | `client_order_id` | **Required — non-empty.** `_validate_order_intent` raises `ValueError` if absent or blank. |
 | `time_in_force` | `time_in_force` | Hard-coded to `"day"` |
 | `limit_price` | — | Ignored for market orders; raises `NotImplementedError` for limit orders |
 | `stop_price` | — | Ignored for market orders; raises `NotImplementedError` for stop orders |
@@ -116,7 +116,7 @@ For the first implementation only **market orders** are supported.
 | `symbol` | `symbol` | |
 | `side` | `side` | |
 | `qty` | `quantity` | |
-| `client_order_id` | `client_order_id` | Echoed back from the request |
+| `client_order_id` | `client_order_id` | Echoed back from the request; falls back to `intent.client_order_id` if absent in response |
 | `submitted_at` | `submitted_at` | Parsed to `pd.Timestamp` (UTC-aware) |
 | `filled_at` | `filled_at` | `None` if not yet filled |
 | `filled_avg_price` | `filled_price` | `None` if not yet filled |
@@ -160,59 +160,77 @@ Rules:
 
 ---
 
-## 8. Position and Account Checks on Startup
+## 8. Startup Preflight Checks
 
-Before the first order is submitted, the adapter performs two startup checks:
+Before the first order is submitted, the adapter must be validated via
+`preflight_check(symbols)`.  **This is not automatic — it must be called
+explicitly by `main.py`.**  There is no cached preflight state; the caller
+is responsible for ensuring `preflight_check` ran successfully before any
+`submit_order` call.
 
-### 8.1 Account check
-- Call `GET /v2/account`.
-- Verify `account.status == "ACTIVE"`.
-- Verify `account.trading_blocked == False`.
-- Verify `account.account_blocked == False`.
-- Fail with `RuntimeError` if any check fails.
+### 8.1 Account check (inside `preflight_check`)
+- Calls `get_account()` → `_account_response_to_dict()`.
+- Verifies `account["status"] == "ACTIVE"`.
+- Verifies `account["trading_blocked"] is False`.
+- Verifies `account["account_blocked"] is False`.
+- Raises `RuntimeError` if any check fails.
 
-### 8.2 Position check
-- Call `GET /v2/positions`.
-- If any open position exists for a symbol that the strategy intends to trade,
-  raise `RuntimeError` with an explicit message listing the conflicting
-  symbols.
-- Stale positions in unrelated symbols are logged as `WARNING` but do not
-  block startup.
+### 8.2 Position check (inside `preflight_check`)
+- Calls `get_positions()` → list of `_position_response_to_dict()` results.
+- If any open position symbol overlaps the normalised target symbol list,
+  raises `RuntimeError("Unexpected open positions for target symbols")`.
+- Positions in unrelated symbols are silently ignored (not logged as WARNING
+  in the current implementation).
 
-These checks run once at adapter initialisation (lazy, on first method call)
-and the result is cached for the lifetime of the adapter instance.
+### 8.3 What is NOT automatic
+- Preflight does **not** run at adapter construction time.
+- Preflight does **not** run automatically before each `submit_order` call.
+- There is **no** cached preflight result stored on the adapter instance.
 
 ---
 
 ## 9. Error Handling
 
-| Scenario | Behaviour |
-|----------|-----------|
-| Network error (timeout / connection refused) | Retry up to 3 times with exponential back-off (1 s, 2 s, 4 s); raise `RuntimeError` after exhausting retries |
-| HTTP 429 rate limit | Respect `Retry-After` header; sleep and retry; log `WARNING` |
-| Order rejected by Alpaca | Return `OrderResult(status="rejected")`; log `WARNING` with reason |
-| Partial fill | Return `OrderResult(status="filled")`; store `filled_qty` in `metadata`; log `WARNING` |
-| Submit timeout (no response within 10 s) | Cancel the order via `DELETE /v2/orders/{id}`; raise `RuntimeError` |
-| Missing / expired credentials | Raise `RuntimeError` before any network call; log `ERROR` (no key values in log) |
-| Orders submitted outside market hours | Raise `RuntimeError` before any network call; log `ERROR` |
+> **Note:** Only the behaviours marked **Implemented** are present in the
+> current code.  Items marked **Future** are design targets for a later PR.
+
+| Scenario | Behaviour | Status |
+|----------|-----------|--------|
+| Missing / expired credentials | Raise `RuntimeError` before any network call (no key values logged) | **Implemented** |
+| Orders submitted outside market hours | Raise `RuntimeError` before any network call | **Implemented** |
+| Order rejected by Alpaca | Return `OrderResult(status="rejected")`; `metadata["raw_status"]` preserved | **Implemented** |
+| Partial fill | Return `OrderResult(status="filled")`; `filled_qty` in `metadata["filled_qty"]`; `metadata["partial_fill"] = True` | **Implemented** |
+| Unknown Alpaca status string | Raise `ValueError` from `_normalize_status()` | **Implemented** |
+| Client missing `submit_order`/`create_order` | Raise `NotImplementedError` with explicit message | **Implemented** |
+| Network error (timeout / connection refused) | Retry up to 3 times with exponential back-off (1 s, 2 s, 4 s); raise `RuntimeError` | **Future** |
+| HTTP 429 rate limit | Respect `Retry-After` header; sleep and retry; log `WARNING` | **Future** |
+| Submit timeout (no response within N s) | Cancel the order and raise `RuntimeError` | **Future** |
 
 ---
 
 ## 10. Testing Plan
 
-### 10.1 Unit tests (no real API calls)
+### 10.1 Unit tests (no real API calls) — current state
 
-- All tests mock the Alpaca HTTP client at the `requests` / SDK layer.
-- CI must never make real network calls.
-- Tests cover:
-  - `submit_order` happy path (market buy, market sell)
-  - Status normalisation for every Alpaca status string
-  - `client_order_id` round-trip
-  - Partial fill detection
-  - Each error scenario in section 9
-  - Market-hours guard (mock `datetime.now()`)
+- All tests mock the Alpaca SDK (`alpaca.trading.client.TradingClient`) or
+  use injected fake clients.
+- CI never makes real network calls; the full suite passes without
+  `ALPACA_API_KEY` set.
+- Tests cover (859 passing as of this writing):
+  - `submit_order` happy path (market buy, market sell) via injected client
+  - `submit_order` via lazy `_get_client()` factory (mocked SDK)
+  - Status normalisation for all 14 Alpaca status strings
+  - `client_order_id` required — `ValueError` if absent or blank
+  - `client_order_id` round-trip through `_order_response_to_result`
+  - Partial fill detection (`metadata["partial_fill"]`)
+  - Market-hours guard (injected `now` datetime)
   - Missing credentials → `RuntimeError` before network call
   - `paper=False` → `ValueError` at construction
+  - `_get_client()` caches client; constructs SDK once
+  - `get_account()` and `get_positions()` with injected and factory clients
+  - `cancel_order()` method dispatch, status codes, missing-method error
+  - `preflight_check()` happy path, symbol normalisation, account/position guards
+  - `main.py` paper path: disabled flag raises; enabled flag calls preflight
 
 ### 10.2 Paper integration tests (gated by env vars)
 
@@ -225,24 +243,26 @@ and the result is cached for the lifetime of the adapter instance.
 
 ### 10.3 Regression tests
 
-- All existing 589 tests continue to pass without any new dependencies.
-- `AlpacaBrokerAdapter` skeleton tests (17 tests) remain green.
+- All existing tests continue to pass without `ALPACA_API_KEY` present.
+- No new mandatory dependencies beyond `alpaca-py` (already in `requirements.txt`).
 
 ---
 
 ## 11. Manual Go / No-Go Checklist
 
-Before removing the `NotImplementedError` guard in `main.py`:
+Before removing the `NotImplementedError` that blocks order execution in `main.py`:
 
-| # | Item | Confirmed |
-|---|------|-----------|
-| 1 | `AlpacaBrokerAdapter` unit tests pass (mocked) | ☐ |
-| 2 | Paper integration test passes against live Alpaca paper account | ☐ |
-| 3 | Market-hours guard tested manually outside RTH | ☐ |
-| 4 | Startup account check tested with blocked account (expected failure) | ☐ |
-| 5 | Startup position check tested with pre-existing position (expected failure) | ☐ |
-| 6 | Reconciliation PASS for a full dry-run session | ☐ |
-| 7 | No API keys or secrets present in source code or `settings.yaml` | ☐ |
-| 8 | Full test suite passes without `ALPACA_API_KEY` set (`pytest`) | ☐ |
-| 9 | Code review completed | ☐ |
-| 10 | Paper trading readiness checklist updated and confirmed | ☐ |
+| # | Item | Status |
+|---|------|--------|
+| 1 | `AlpacaBrokerAdapter` unit tests pass (mocked) | ✅ Done |
+| 2 | Full test suite passes without `ALPACA_API_KEY` set (`pytest`) | ✅ Done |
+| 3 | No API keys or secrets present in source code or `settings.yaml` | ✅ Done |
+| 4 | `paper_trading_enabled=False` still fail-closed | ✅ Done |
+| 5 | Paper integration test passes against live Alpaca paper account | ☐ |
+| 6 | Market-hours guard tested manually outside RTH | ☐ |
+| 7 | Startup account check tested with blocked account (expected failure) | ☐ |
+| 8 | Startup position check tested with pre-existing position (expected failure) | ☐ |
+| 9 | `order_results.csv` and reconciliation wired for paper mode | ☐ |
+| 10 | Reconciliation PASS for a full paper session | ☐ |
+| 11 | Code review completed | ☐ |
+| 12 | Paper execution readiness checklist confirmed | ☐ |
