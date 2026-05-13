@@ -277,7 +277,7 @@ class TestAlpacaBrokerAdapterNotImplemented:
 
     def test_cancel_order_raises_without_credentials(self):
         with pytest.raises(RuntimeError, match="Missing Alpaca paper API credentials"):
-            self._adapter().cancel_order("some-order-id")
+            self._adapter().cancel_order("00000000-0000-0000-0000-000000000001")
 
 
 # ---------------------------------------------------------------------------
@@ -1110,13 +1110,14 @@ class TestSubmitOrderMockClient:
         assert "client" in call_order
 
     def test_outside_market_hours_raises_and_does_not_call_client(self):
-        client = mock.MagicMock(spec=["submit_order"])
+        client = mock.MagicMock(spec=["submit_order", "create_order"])
         adapter = self._adapter(client=client)
-        outside = datetime(2024, 1, 15, 8, 0, tzinfo=ZoneInfo("America/New_York"))
-        with pytest.raises(RuntimeError, match="Outside regular market hours"):
-            adapter.submit_order(self._intent())  # real clock check; force via now kwarg
-        # client must not have been called
+        with mock.patch.object(adapter, "_ensure_market_hours",
+                               side_effect=RuntimeError("Outside regular market hours")):
+            with pytest.raises(RuntimeError, match="Outside regular market hours"):
+                adapter.submit_order(self._intent())
         client.submit_order.assert_not_called()
+        client.create_order.assert_not_called()
 
     def test_outside_market_hours_via_inject(self):
         client = mock.MagicMock(spec=["submit_order"])
