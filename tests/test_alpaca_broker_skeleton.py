@@ -900,6 +900,50 @@ class TestNormalizeStatus:
 
 
 # ---------------------------------------------------------------------------
+# _normalize_side
+# ---------------------------------------------------------------------------
+
+class TestNormalizeSide:
+    def _side(self, s) -> str:
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        return AlpacaBrokerAdapter._normalize_side(s)
+
+    def test_plain_buy(self):
+        assert self._side("buy") == "buy"
+
+    def test_plain_sell(self):
+        assert self._side("sell") == "sell"
+
+    def test_sdk_enum_string_buy(self):
+        assert self._side("OrderSide.BUY") == "buy"
+
+    def test_sdk_enum_string_sell(self):
+        assert self._side("OrderSide.SELL") == "sell"
+
+    def test_uppercase_buy(self):
+        assert self._side("BUY") == "buy"
+
+    def test_uppercase_sell(self):
+        assert self._side("SELL") == "sell"
+
+    def test_sdk_enum_object_buy(self):
+        try:
+            from alpaca.trading.enums import OrderSide
+            result = self._side(OrderSide.BUY)
+        except ImportError:
+            pytest.skip("alpaca-py not installed")
+        assert result == "buy"
+
+    def test_sdk_enum_object_sell(self):
+        try:
+            from alpaca.trading.enums import OrderSide
+            result = self._side(OrderSide.SELL)
+        except ImportError:
+            pytest.skip("alpaca-py not installed")
+        assert result == "sell"
+
+
+# ---------------------------------------------------------------------------
 # _is_partial_fill
 # ---------------------------------------------------------------------------
 
@@ -1165,6 +1209,43 @@ class TestOrderResponseToResult:
         r = self._adapter()._order_response_to_result(d, self._intent())
         assert r.status == "accepted"
         assert r.metadata["raw_status"] == "OrderStatus.PENDING_NEW"
+
+    # --- side normalization ---
+
+    def test_side_sdk_enum_string_buy(self):
+        d = self._filled_dict(side="OrderSide.BUY")
+        r = self._adapter()._order_response_to_result(d, self._intent(side="buy"))
+        assert r.side == "buy"
+
+    def test_side_sdk_enum_string_sell(self):
+        d = self._filled_dict(side="OrderSide.SELL", status="filled")
+        r = self._adapter()._order_response_to_result(d, self._intent(side="sell"))
+        assert r.side == "sell"
+
+    def test_side_sdk_enum_object_buy(self):
+        try:
+            from alpaca.trading.enums import OrderSide
+        except ImportError:
+            pytest.skip("alpaca-py not installed")
+        d = self._filled_dict(side=OrderSide.BUY)
+        r = self._adapter()._order_response_to_result(d, self._intent(side="buy"))
+        assert r.side == "buy"
+
+    def test_pending_new_side_buy_full_result(self):
+        """Mirrors BT-000035: status=PENDING_NEW, side=BUY — no reconciliation mismatch."""
+        d = self._filled_dict(
+            status="OrderStatus.PENDING_NEW",
+            side="OrderSide.BUY",
+            client_order_id="BT-000035",
+            filled_at=None,
+            filled_avg_price=None,
+            filled_qty="0",
+        )
+        intent = self._intent(side="buy", client_order_id="BT-000035")
+        r = self._adapter()._order_response_to_result(d, intent)
+        assert r.status == "accepted"
+        assert r.side == "buy"
+        assert r.client_order_id == "BT-000035"
 
     # --- submit_order requires credentials when no client is injected ---
 
