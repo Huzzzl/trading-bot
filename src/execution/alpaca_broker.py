@@ -478,4 +478,54 @@ class AlpacaBrokerAdapter(BrokerAdapter):
         return result
 
     def cancel_order(self, order_id: str) -> bool:
-        raise NotImplementedError("AlpacaBrokerAdapter is not implemented yet.")
+        """Request cancellation of an open order.
+
+        Parameters
+        ----------
+        order_id:
+            The broker-assigned order ID to cancel.  Must be non-empty.
+
+        Returns
+        -------
+        bool
+            ``True`` when the cancellation is accepted (HTTP 200/202/204,
+            or the client method returns ``None`` without raising).
+
+        Raises
+        ------
+        ValueError
+            If *order_id* is empty or whitespace-only.
+        RuntimeError
+            If credentials are missing.
+        NotImplementedError
+            If the client exposes neither ``cancel_order_by_id`` nor
+            ``cancel_order``.
+        """
+        if not order_id or not order_id.strip():
+            raise ValueError("order_id is required")
+
+        client = self._get_client()
+        if hasattr(client, "cancel_order_by_id"):
+            response = client.cancel_order_by_id(order_id)
+        elif hasattr(client, "cancel_order"):
+            response = client.cancel_order(order_id)
+        else:
+            raise NotImplementedError(
+                "Alpaca client must provide cancel_order_by_id or cancel_order"
+            )
+
+        # None response (no body) → success
+        if response is None:
+            return True
+
+        # Dict-style or object-style status code
+        if isinstance(response, dict):
+            code = response.get("status_code") or response.get("status")
+        else:
+            code = getattr(response, "status_code", None) or getattr(response, "status", None)
+
+        if code is not None:
+            return int(code) in {200, 202, 204}
+
+        # No recognisable status indicator but no exception → treat as success
+        return True

@@ -275,8 +275,8 @@ class TestAlpacaBrokerAdapterNotImplemented:
         with pytest.raises(RuntimeError, match="Missing Alpaca paper API credentials"):
             self._adapter().get_account()
 
-    def test_cancel_order_raises(self):
-        with pytest.raises(NotImplementedError, match="AlpacaBrokerAdapter is not implemented yet"):
+    def test_cancel_order_raises_without_credentials(self):
+        with pytest.raises(RuntimeError, match="Missing Alpaca paper API credentials"):
             self._adapter().cancel_order("some-order-id")
 
 
@@ -1982,8 +1982,8 @@ class TestGetPositions:
         with pytest.raises(RuntimeError, match="Missing Alpaca paper API credentials"):
             self._adapter().get_positions()
 
-    def test_cancel_order_remains_not_implemented(self):
-        with pytest.raises(NotImplementedError):
+    def test_cancel_order_raises_without_credentials(self):
+        with pytest.raises(RuntimeError, match="Missing Alpaca paper API credentials"):
             self._adapter().cancel_order("some-id")
 
 
@@ -2023,3 +2023,125 @@ class TestMainPaperModeGuardStillActive:
                 from src.main import main as _main
                 with pytest.raises(NotImplementedError):
                     _main()
+
+
+# ---------------------------------------------------------------------------
+# cancel_order
+# ---------------------------------------------------------------------------
+
+class TestCancelOrder:
+    def _adapter(self, **kwargs):
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        return AlpacaBrokerAdapter(**kwargs)
+
+    def test_empty_order_id_raises_value_error(self):
+        class FakeClient:
+            def cancel_order_by_id(self, oid): pass
+
+        with pytest.raises(ValueError, match="order_id is required"):
+            self._adapter(client=FakeClient()).cancel_order("")
+
+    def test_whitespace_order_id_raises_value_error(self):
+        class FakeClient:
+            def cancel_order_by_id(self, oid): pass
+
+        with pytest.raises(ValueError, match="order_id is required"):
+            self._adapter(client=FakeClient()).cancel_order("   ")
+
+    def test_uses_injected_mock_client(self):
+        class FakeClient:
+            called_with = None
+            def cancel_order_by_id(self, oid):
+                FakeClient.called_with = oid
+                return None
+
+        self._adapter(client=FakeClient()).cancel_order("order-001")
+        assert FakeClient.called_with == "order-001"
+
+    def test_uses_get_client_when_no_injected_client(self, monkeypatch):
+        monkeypatch.setenv("ALPACA_API_KEY", "k")
+        monkeypatch.setenv("ALPACA_SECRET_KEY", "s")
+        adapter = self._adapter()
+        fake_client = mock.MagicMock()
+        fake_client.cancel_order_by_id.return_value = None
+        with mock.patch.object(adapter, "_get_client", return_value=fake_client) as mock_gc:
+            result = adapter.cancel_order("order-001")
+        mock_gc.assert_called_once()
+        assert result is True
+
+    def test_prefers_cancel_order_by_id_over_cancel_order(self):
+        class FakeClient:
+            def cancel_order_by_id(self, oid):
+                return None
+            def cancel_order(self, oid):
+                raise AssertionError("cancel_order should not be called")
+
+        assert self._adapter(client=FakeClient()).cancel_order("order-001") is True
+
+    def test_falls_back_to_cancel_order(self):
+        class FakeClient:
+            def cancel_order(self, oid):
+                return None
+
+        assert self._adapter(client=FakeClient()).cancel_order("order-001") is True
+
+    def test_returns_true_for_none_response(self):
+        class FakeClient:
+            def cancel_order_by_id(self, oid):
+                return None
+
+        assert self._adapter(client=FakeClient()).cancel_order("order-001") is True
+
+    def test_returns_true_for_status_code_200(self):
+        class FakeClient:
+            def cancel_order_by_id(self, oid):
+                return {"status_code": 200}
+
+        assert self._adapter(client=FakeClient()).cancel_order("order-001") is True
+
+    def test_returns_true_for_status_code_202(self):
+        class FakeClient:
+            def cancel_order_by_id(self, oid):
+                return {"status_code": 202}
+
+        assert self._adapter(client=FakeClient()).cancel_order("order-001") is True
+
+    def test_returns_true_for_status_code_204(self):
+        class FakeClient:
+            def cancel_order_by_id(self, oid):
+                return {"status_code": 204}
+
+        assert self._adapter(client=FakeClient()).cancel_order("order-001") is True
+
+    def test_missing_cancel_methods_raise_not_implemented(self):
+        class FakeClient:
+            pass
+
+        with pytest.raises(NotImplementedError, match="cancel_order_by_id or cancel_order"):
+            self._adapter(client=FakeClient()).cancel_order("order-001")
+
+    def test_missing_credentials_raise_before_client_creation(self, monkeypatch):
+        monkeypatch.delenv("ALPACA_API_KEY", raising=False)
+        monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
+        with pytest.raises(RuntimeError, match="Missing Alpaca paper API credentials"):
+            self._adapter().cancel_order("order-001")
+
+    def test_no_real_network_calls(self, monkeypatch):
+        monkeypatch.setenv("ALPACA_API_KEY", "k")
+        monkeypatch.setenv("ALPACA_SECRET_KEY", "s")
+        adapter = self._adapter()
+        with mock.patch("alpaca.trading.client.TradingClient") as MockTC:
+            fake_client = mock.MagicMock()
+            fake_client.cancel_order_by_id.return_value = None
+            MockTC.return_value = fake_client
+            result = adapter.cancel_order("order-001")
+        assert result is True
+        MockTC.assert_called_once()
+
+    def test_unexpected_exception_is_not_swallowed(self):
+        class FakeClient:
+            def cancel_order_by_id(self, oid):
+                raise RuntimeError("broker exploded")
+
+        with pytest.raises(RuntimeError, match="broker exploded"):
+            self._adapter(client=FakeClient()).cancel_order("order-001")
