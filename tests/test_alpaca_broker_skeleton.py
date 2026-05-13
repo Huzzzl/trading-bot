@@ -2392,108 +2392,105 @@ class TestPaperTradingEnabledFlag:
 
     # --- enabled path (paper_trading_enabled=True) ---
 
-    def test_paper_enabled_creates_adapter_and_calls_preflight(self):
-        from src.execution.alpaca_broker import AlpacaBrokerAdapter
-        cfg = self._make_config(mode="paper", paper_trading_enabled=True)
-        fake_preflight = {
+    def _fake_engine(self, intents=None):
+        """Return a MagicMock that mimics BacktestEngine for paper path tests."""
+        eng = mock.MagicMock()
+        eng.run.return_value = {
+            "order_intents": intents if intents is not None else [],
+            "metrics": {"total_return": 0.0},
+            "trades": [],
+            "equity_curve": [],
+        }
+        eng._portfolio.positions = {}
+        return eng
+
+    def _fake_preflight(self, symbols=None):
+        return {
             "ok": True,
             "account": {"status": "ACTIVE"},
             "positions": {},
-            "symbols": ["SPY", "QQQ"],
+            "symbols": symbols or ["SPY", "QQQ"],
         }
+
+    @staticmethod
+    def _make_generate_all_mock(tmp_path):
+        """Return a generate_all side_effect that writes a PASS reconciliation JSON."""
+        import json as _json
+
+        def _impl(rg_self):
+            rg_self._output_dir.mkdir(parents=True, exist_ok=True)
+            (rg_self._output_dir / "order_reconciliation.json").write_text(
+                _json.dumps({"overall_status": "PASS"})
+            )
+
+        return _impl
+
+    def test_paper_enabled_creates_adapter_and_calls_preflight(self, tmp_path):
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_config(mode="paper", paper_trading_enabled=True)
         with mock.patch.object(AlpacaBrokerAdapter, "__init__",
                                return_value=None) as mock_init, \
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
-                               return_value=fake_preflight) as mock_pf, \
+                               return_value=self._fake_preflight()) as mock_pf, \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine()), \
+             mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
+                        self._make_generate_all_mock(tmp_path)), \
              mock.patch("src.main.load_config", return_value=cfg), \
-             mock.patch("sys.argv", ["prog"]):
-            with pytest.raises(NotImplementedError):
-                from src.main import main as _main
-                _main()
+             mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            from src.main import main as _main
+            _main()
         mock_init.assert_called_once()
         mock_pf.assert_called_once_with(cfg.symbols)
 
-    def test_paper_enabled_still_raises_before_order_execution(self):
+    def test_paper_enabled_submit_order_not_called_when_no_valid_intents(self, tmp_path):
+        """submit_order is not called when no intents are generated."""
         from src.execution.alpaca_broker import AlpacaBrokerAdapter
         cfg = self._make_config(mode="paper", paper_trading_enabled=True)
-        fake_preflight = {
-            "ok": True,
-            "account": {"status": "ACTIVE"},
-            "positions": {},
-            "symbols": ["SPY", "QQQ"],
-        }
+        mock_submit = mock.MagicMock()
         with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
-                               return_value=fake_preflight), \
+                               return_value=self._fake_preflight()), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine()), \
+             mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
+                        self._make_generate_all_mock(tmp_path)), \
              mock.patch("src.main.load_config", return_value=cfg), \
-             mock.patch("sys.argv", ["prog"]):
-            with pytest.raises(NotImplementedError, match="order execution is not yet wired"):
-                from src.main import main as _main
-                _main()
+             mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            from src.main import main as _main
+            _main()
+        mock_submit.assert_not_called()
 
-    def test_paper_enabled_submit_order_never_called(self):
+    def test_paper_enabled_cancel_order_never_called(self, tmp_path):
         from src.execution.alpaca_broker import AlpacaBrokerAdapter
         cfg = self._make_config(mode="paper", paper_trading_enabled=True)
-        fake_preflight = {"ok": True, "account": {"status": "ACTIVE"},
-                          "positions": {}, "symbols": ["SPY", "QQQ"]}
+        mock_cancel = mock.MagicMock()
         with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
-                               return_value=fake_preflight), \
-             mock.patch.object(AlpacaBrokerAdapter, "submit_order",
-                               side_effect=AssertionError("submit_order must not be called")), \
+                               return_value=self._fake_preflight()), \
+             mock.patch.object(AlpacaBrokerAdapter, "cancel_order", mock_cancel), \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine()), \
+             mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
+                        self._make_generate_all_mock(tmp_path)), \
              mock.patch("src.main.load_config", return_value=cfg), \
-             mock.patch("sys.argv", ["prog"]):
-            with pytest.raises(NotImplementedError):
-                from src.main import main as _main
-                _main()
+             mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            from src.main import main as _main
+            _main()
+        mock_cancel.assert_not_called()
 
-    def test_paper_enabled_cancel_order_never_called(self):
+    def test_no_real_network_calls_when_enabled(self, tmp_path):
         from src.execution.alpaca_broker import AlpacaBrokerAdapter
         cfg = self._make_config(mode="paper", paper_trading_enabled=True)
-        fake_preflight = {"ok": True, "account": {"status": "ACTIVE"},
-                          "positions": {}, "symbols": ["SPY", "QQQ"]}
         with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
-                               return_value=fake_preflight), \
-             mock.patch.object(AlpacaBrokerAdapter, "cancel_order",
-                               side_effect=AssertionError("cancel_order must not be called")), \
-             mock.patch("src.main.load_config", return_value=cfg), \
-             mock.patch("sys.argv", ["prog"]):
-            with pytest.raises(NotImplementedError):
-                from src.main import main as _main
-                _main()
-
-    def test_paper_enabled_backtest_engine_not_created(self):
-        from src.execution.alpaca_broker import AlpacaBrokerAdapter
-        from src.backtest.engine import BacktestEngine
-        cfg = self._make_config(mode="paper", paper_trading_enabled=True)
-        fake_preflight = {"ok": True, "account": {"status": "ACTIVE"},
-                          "positions": {}, "symbols": ["SPY", "QQQ"]}
-        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
-             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
-                               return_value=fake_preflight), \
-             mock.patch.object(BacktestEngine, "__init__",
-                               side_effect=AssertionError("BacktestEngine must not be created")), \
-             mock.patch("src.main.load_config", return_value=cfg), \
-             mock.patch("sys.argv", ["prog"]):
-            with pytest.raises(NotImplementedError):
-                from src.main import main as _main
-                _main()
-
-    def test_no_real_network_calls_when_enabled(self):
-        from src.execution.alpaca_broker import AlpacaBrokerAdapter
-        cfg = self._make_config(mode="paper", paper_trading_enabled=True)
-        fake_preflight = {"ok": True, "account": {"status": "ACTIVE"},
-                          "positions": {}, "symbols": ["SPY", "QQQ"]}
-        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
-             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
-                               return_value=fake_preflight), \
+                               return_value=self._fake_preflight()), \
              mock.patch("alpaca.trading.client.TradingClient") as MockTC, \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine()), \
+             mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
+                        self._make_generate_all_mock(tmp_path)), \
              mock.patch("src.main.load_config", return_value=cfg), \
-             mock.patch("sys.argv", ["prog"]):
-            with pytest.raises(NotImplementedError):
-                from src.main import main as _main
-                _main()
+             mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            from src.main import main as _main
+            _main()
         MockTC.assert_not_called()
 
     # --- backtest mode unchanged ---
@@ -2691,14 +2688,11 @@ class TestIntendedPaperExecutionFlow:
                 from src.main import main as _main
                 _main()
 
-    # --- step 7: current state is still blocked ---
+    # --- step 7: execution path is now wired ---
 
-    def test_step7_current_paper_path_still_raises_after_preflight(self):
-        """Confirm the current NotImplementedError guard is still in place.
-
-        This test will be removed (or updated to a positive assertion) when
-        the final paper execution wiring PR is merged.
-        """
+    def test_step7_paper_path_runs_and_reports_without_valid_intents(self, tmp_path):
+        """After preflight, the engine runs and writes artifacts even with no intents."""
+        import json as _json
         from src.execution.alpaca_broker import AlpacaBrokerAdapter
         from src.config.loader import (
             AppConfig, BacktestConfig, DataConfig, ExecutionConfig,
@@ -2721,13 +2715,554 @@ class TestIntendedPaperExecutionFlow:
         )
         fake_preflight = {"ok": True, "account": {"status": "ACTIVE"},
                           "positions": {}, "symbols": ["SPY"]}
+        fake_engine = mock.MagicMock()
+        fake_engine.run.return_value = {
+            "order_intents": [], "metrics": {}, "trades": [], "equity_curve": [],
+        }
+        fake_engine._portfolio.positions = {}
+
+        def _fake_generate(rg_self):
+            rg_self._output_dir.mkdir(parents=True, exist_ok=True)
+            (rg_self._output_dir / "order_reconciliation.json").write_text(
+                _json.dumps({"overall_status": "PASS"})
+            )
+
         with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=fake_preflight), \
-             mock.patch.object(AlpacaBrokerAdapter, "submit_order",
-                               side_effect=AssertionError("submit_order must not be called")), \
+             mock.patch("src.main.build_engine", return_value=fake_engine), \
+             mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
+                        _fake_generate), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            from src.main import main as _main
+            _main()
+        fake_engine.run.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Paper execution path — constrained, fail-closed wiring
+# ---------------------------------------------------------------------------
+
+class TestPaperExecutionPath:
+    """Tests for the constrained paper execution path in main.py.
+
+    Behavior: any safety-constraint violation raises RuntimeError before
+    submit_order is called.  More than 1 intent → RuntimeError.  Zero
+    intents → empty artifacts written.  Reconciliation JSON must always exist.
+
+    All tests are fully mocked — no real Alpaca network calls.
+    """
+
+    def _make_config(self, paper_trading_enabled: bool = True):
+        from src.config.loader import (
+            AppConfig, BacktestConfig, DataConfig, ExecutionConfig,
+            LoggingConfig, RiskConfig, StrategyConfig,
+        )
+        return AppConfig(
+            backtest=BacktestConfig(
+                start_date="2024-01-15", end_date="2024-01-15",
+                initial_capital=100_000, commission_per_share=0.0, slippage_per_share=0.0,
+            ),
+            symbols=["SPY"],
+            data=DataConfig(provider="yahoo", bar_interval="5m", timezone="America/New_York"),
+            strategy=StrategyConfig(name="opening_range_breakout", params={
+                "opening_range_start": "09:30", "opening_range_end": "10:00",
+                "force_exit_time": "15:55", "position_size_pct": 0.95, "long_only": True,
+            }),
+            risk=RiskConfig(),
+            logging=LoggingConfig(level="WARNING", format="%(message)s"),
+            execution=ExecutionConfig(mode="paper", paper_trading_enabled=paper_trading_enabled),
+        )
+
+    def _make_intent(self, symbol="SPY", side="buy", quantity=1.0,
+                     order_type="market", client_order_id="BT-000001"):
+        from src.execution.order_intent import OrderIntent
+        return OrderIntent(
+            symbol=symbol, side=side, quantity=quantity,
+            order_type=order_type, reason="entry",
+            timestamp=pd.Timestamp("2024-01-15 10:00:00", tz="America/New_York"),
+            client_order_id=client_order_id,
+        )
+
+    _UNSET = object()
+
+    def _make_order_result(self, intent, status="accepted", client_order_id=_UNSET):
+        from src.execution.broker import OrderResult
+        cid = intent.client_order_id if client_order_id is self._UNSET else client_order_id
+        return OrderResult(
+            order_id=f"ALPACA-{intent.client_order_id}",
+            symbol=intent.symbol,
+            side=intent.side,
+            quantity=intent.quantity,
+            status=status,
+            submitted_at=intent.timestamp,
+            reason=intent.reason,
+            client_order_id=cid,
+            metadata={"raw_status": status, "partial_fill": False},
+        )
+
+    def _fake_engine(self, intents=None):
+        eng = mock.MagicMock()
+        eng.run.return_value = {
+            "order_intents": intents if intents is not None else [],
+            "metrics": {"total_return": 0.0},
+            "trades": [],
+            "equity_curve": [],
+        }
+        eng._portfolio.positions = {}
+        return eng
+
+    def _fake_preflight(self):
+        return {"ok": True, "account": {"status": "ACTIVE"}, "positions": {}, "symbols": ["SPY"]}
+
+    @staticmethod
+    def _pass_recon_generate(rg_self):
+        """generate_all side_effect that writes a PASS reconciliation JSON."""
+        import json as _j
+        rg_self._output_dir.mkdir(parents=True, exist_ok=True)
+        (rg_self._output_dir / "order_reconciliation.json").write_text(
+            _j.dumps({"overall_status": "PASS"})
+        )
+
+    def _run_paper(self, cfg, intents, mock_submit_return=None, tmp_path=None):
+        """Run main() paper path with mocked engine, broker, and reporter.
+
+        generate_all writes a PASS reconciliation JSON so the fail-closed
+        recon check passes.  Returns mock_submit.
+        """
+        import tempfile
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        out = str(tmp_path) if tmp_path is not None else tempfile.mkdtemp()
+        eng = self._fake_engine(intents)
+        mock_submit = mock.MagicMock(return_value=mock_submit_return)
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=self._fake_preflight()), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
+             mock.patch("src.main.build_engine", return_value=eng), \
+             mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
+                        self._pass_recon_generate), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog", "--output-dir", out]):
+            from src.main import main as _main
+            _main()
+        return mock_submit
+
+    # --- happy path: valid SPY market intent, qty=1 ---
+
+    def test_spy_intent_is_submitted(self, tmp_path):
+        """A valid SPY market intent with qty=1 reaches submit_order."""
+        cfg = self._make_config()
+        intent = self._make_intent()
+        result = self._make_order_result(intent)
+        mock_submit = self._run_paper(cfg, [intent], mock_submit_return=result,
+                                      tmp_path=tmp_path)
+        mock_submit.assert_called_once()
+        submitted = mock_submit.call_args[0][0]
+        assert submitted.symbol == "SPY"
+        assert submitted.client_order_id == "BT-000001"
+
+    def test_qty_eq1_is_submitted(self, tmp_path):
+        """Intents with quantity == 1.0 pass the safety constraints."""
+        cfg = self._make_config()
+        intent = self._make_intent(quantity=1.0)
+        result = self._make_order_result(intent)
+        mock_submit = self._run_paper(cfg, [intent], mock_submit_return=result,
+                                      tmp_path=tmp_path)
+        mock_submit.assert_called_once()
+
+    # --- fail closed: non-SPY symbol → RuntimeError, submit_order not called ---
+
+    def test_non_spy_raises_before_submit(self):
+        """Non-SPY intent raises RuntimeError; submit_order is never called."""
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_config()
+        intent = self._make_intent(symbol="QQQ")
+        mock_submit = mock.MagicMock()
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=self._fake_preflight()), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog"]):
-            with pytest.raises(NotImplementedError, match="order execution is not yet wired"):
-                from src.main import main as _main
+            from src.main import main as _main
+            with pytest.raises(RuntimeError, match="symbol="):
                 _main()
+        mock_submit.assert_not_called()
+
+    # --- fail closed: non-market order_type → RuntimeError ---
+
+    def test_limit_order_raises_before_submit(self):
+        """Limit order intent raises RuntimeError; submit_order is never called."""
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_config()
+        intent = self._make_intent(order_type="limit")
+        mock_submit = mock.MagicMock()
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=self._fake_preflight()), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog"]):
+            from src.main import main as _main
+            with pytest.raises(RuntimeError, match="order_type="):
+                _main()
+        mock_submit.assert_not_called()
+
+    # --- fail closed: quantity > 1 → RuntimeError ---
+
+    def test_qty_gt1_raises_before_submit(self):
+        """Intent with quantity > 1 raises RuntimeError; submit_order is never called."""
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_config()
+        intent = self._make_intent(quantity=2.0)
+        mock_submit = mock.MagicMock()
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=self._fake_preflight()), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog"]):
+            from src.main import main as _main
+            with pytest.raises(RuntimeError, match="quantity="):
+                _main()
+        mock_submit.assert_not_called()
+
+    # --- fail closed: missing client_order_id → RuntimeError ---
+
+    def test_missing_client_order_id_raises(self):
+        """Intent with no client_order_id raises RuntimeError."""
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_config()
+        intent = self._make_intent(client_order_id=None)
+        mock_submit = mock.MagicMock()
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=self._fake_preflight()), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog"]):
+            from src.main import main as _main
+            with pytest.raises(RuntimeError, match="client_order_id"):
+                _main()
+        mock_submit.assert_not_called()
+
+    def test_blank_client_order_id_raises(self):
+        """Intent with a whitespace-only client_order_id raises RuntimeError."""
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_config()
+        intent = self._make_intent(client_order_id="   ")
+        mock_submit = mock.MagicMock()
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=self._fake_preflight()), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog"]):
+            from src.main import main as _main
+            with pytest.raises(RuntimeError, match="client_order_id"):
+                _main()
+        mock_submit.assert_not_called()
+
+    # --- fail closed: more than 1 safe intent → RuntimeError ---
+
+    def test_multiple_safe_intents_raises(self):
+        """More than 1 safe intent raises RuntimeError; submit_order is never called."""
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_config()
+        intents = [
+            self._make_intent(client_order_id="BT-000001"),
+            self._make_intent(client_order_id="BT-000002"),
+        ]
+        mock_submit = mock.MagicMock()
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=self._fake_preflight()), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine(intents)), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog"]):
+            from src.main import main as _main
+            with pytest.raises(RuntimeError, match="2 intents"):
+                _main()
+        mock_submit.assert_not_called()
+
+    # --- zero intents: empty artifacts, no submission ---
+
+    def test_no_orders_when_no_intents_generated(self, tmp_path):
+        """submit_order not called when engine produces no intents."""
+        cfg = self._make_config()
+        mock_submit = self._run_paper(cfg, [], tmp_path=tmp_path)
+        mock_submit.assert_not_called()
+
+    # --- reporter always called (no exception path) ---
+
+    def test_reporter_always_called(self, tmp_path):
+        """ReportGenerator.generate_all is called when no intents are generated."""
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_config()
+        call_log: list[str] = []
+
+        def _gen(rg_self):
+            call_log.append("generate_all")
+            self._pass_recon_generate(rg_self)
+
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=self._fake_preflight()), \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine([])), \
+             mock.patch("src.reporting.report_generator.ReportGenerator.generate_all", _gen), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            from src.main import main as _main
+            _main()
+        assert "generate_all" in call_log
+
+    def test_reporter_called_after_order_submission(self, tmp_path):
+        """ReportGenerator.generate_all is called when an order is submitted."""
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_config()
+        intent = self._make_intent()
+        result = self._make_order_result(intent)
+        call_log: list[str] = []
+
+        def _gen(rg_self):
+            call_log.append("generate_all")
+            self._pass_recon_generate(rg_self)
+
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=self._fake_preflight()), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order",
+                               return_value=result), \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.reporting.report_generator.ReportGenerator.generate_all", _gen), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            from src.main import main as _main
+            _main()
+        assert "generate_all" in call_log
+
+    # --- reconciliation JSON always written (order_results=[] not None) ---
+
+    def test_empty_path_writes_reconciliation_json(self, tmp_path):
+        """Zero intents: order_reconciliation.json is written (order_results=[] not None)."""
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_config()
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=self._fake_preflight()), \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine([])), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            from src.main import main as _main
+            _main()
+        recon = tmp_path / "order_reconciliation.json"
+        assert recon.exists(), "order_reconciliation.json must be written even with 0 intents"
+        import json
+        data = json.loads(recon.read_text())
+        assert data.get("overall_status") in ("PASS", "N/A")
+
+    def test_submitted_order_writes_reconciliation_json(self, tmp_path):
+        """After a successful submission, order_reconciliation.json is written."""
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_config()
+        intent = self._make_intent()
+        result = self._make_order_result(intent)
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=self._fake_preflight()), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order", return_value=result), \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            from src.main import main as _main
+            _main()
+        recon = tmp_path / "order_reconciliation.json"
+        assert recon.exists()
+        import json
+        data = json.loads(recon.read_text())
+        assert data.get("overall_status") in ("PASS", "N/A")
+
+    # --- fail closed: missing reconciliation JSON → RuntimeError ---
+
+    def test_missing_reconciliation_json_raises(self, tmp_path):
+        """If order_reconciliation.json is not written, RuntimeError is raised."""
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_config()
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=self._fake_preflight()), \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine([])), \
+             mock.patch("src.reporting.report_generator.ReportGenerator.generate_all"), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            from src.main import main as _main
+            with pytest.raises(RuntimeError, match="order_reconciliation.json was not written"):
+                _main()
+
+    # --- fail closed: WARN reconciliation status → RuntimeError ---
+
+    def test_reconciliation_warn_raises(self, tmp_path):
+        """overall_status=WARN in reconciliation JSON raises RuntimeError."""
+        import json
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_config()
+
+        def _write_warn(rg_self):
+            rg_self._output_dir.mkdir(parents=True, exist_ok=True)
+            (rg_self._output_dir / "order_reconciliation.json").write_text(
+                json.dumps({"overall_status": "WARN", "unmatched_count": 1})
+            )
+
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=self._fake_preflight()), \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine([])), \
+             mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
+                        _write_warn), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            from src.main import main as _main
+            with pytest.raises(RuntimeError, match="reconciliation failed"):
+                _main()
+
+    def test_reconciliation_pass_does_not_raise(self, tmp_path):
+        """overall_status=PASS in reconciliation JSON does not raise."""
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_config()
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=self._fake_preflight()), \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine([])), \
+             mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
+                        self._pass_recon_generate), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            from src.main import main as _main
+            _main()  # must not raise
+
+    # --- fail closed: result without client_order_id → RuntimeError ---
+
+    def test_result_without_client_order_id_raises(self, tmp_path):
+        """If submit_order returns a result with no client_order_id, RuntimeError is raised."""
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_config()
+        intent = self._make_intent()
+        result_no_id = self._make_order_result(intent, client_order_id=None)
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=self._fake_preflight()), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order",
+                               return_value=result_no_id), \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            from src.main import main as _main
+            with pytest.raises(RuntimeError, match="client_order_id"):
+                _main()
+
+    # --- cancel_order never called ---
+
+    def test_cancel_order_never_called(self, tmp_path):
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_config()
+        mock_cancel = mock.MagicMock()
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=self._fake_preflight()), \
+             mock.patch.object(AlpacaBrokerAdapter, "cancel_order", mock_cancel), \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine([])), \
+             mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
+                        self._pass_recon_generate), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            from src.main import main as _main
+            _main()
+        mock_cancel.assert_not_called()
+
+    # --- preflight called before engine ---
+
+    def test_preflight_called_before_engine(self, tmp_path):
+        """preflight_check is invoked before build_engine."""
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        call_log: list[str] = []
+        cfg = self._make_config()
+
+        def fake_preflight(symbols):
+            call_log.append("preflight")
+            return self._fake_preflight()
+
+        def fake_build(c):
+            call_log.append("build_engine")
+            return self._fake_engine([])
+
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               side_effect=fake_preflight), \
+             mock.patch("src.main.build_engine", side_effect=fake_build), \
+             mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
+                        self._pass_recon_generate), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            from src.main import main as _main
+            _main()
+        assert call_log.index("preflight") < call_log.index("build_engine")
+
+    # --- candidate_intents passed to reporter (not just submitted) ---
+
+    def test_candidate_intents_passed_to_reporter(self, tmp_path):
+        """The reporter receives all candidate intents, not only the submitted one."""
+        import json
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_config()
+        intent = self._make_intent()
+        result = self._make_order_result(intent)
+        captured: list = []
+
+        def _gen(rg_self):
+            captured.append(list(rg_self._order_intents))
+            self._pass_recon_generate(rg_self)
+
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=self._fake_preflight()), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order", return_value=result), \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.reporting.report_generator.ReportGenerator.generate_all", _gen), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            from src.main import main as _main
+            _main()
+        assert len(captured) == 1
+        assert captured[0][0].client_order_id == "BT-000001"
+
+    # --- no live mode ---
+
+    def test_no_live_trading_mode(self):
+        from src.config.loader import _VALID_EXECUTION_MODES
+        assert "live" not in _VALID_EXECUTION_MODES
+
+    # --- no real network calls ---
+
+    def test_no_real_network_calls(self, tmp_path):
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_config()
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=self._fake_preflight()), \
+             mock.patch("alpaca.trading.client.TradingClient") as MockTC, \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine([])), \
+             mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
+                        self._pass_recon_generate), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            from src.main import main as _main
+            _main()
+        MockTC.assert_not_called()

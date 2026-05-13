@@ -2,19 +2,33 @@
 
 > **WARNING: This runbook is for the project owner only.**
 > Run this only in a controlled local environment against an Alpaca **paper** account.
-> Real paper order submission is **intentionally blocked** today — see section 1.
-> Do not follow this runbook until the final wiring is approved and merged.
+> **No manual run against a real Alpaca paper account has been completed yet.**
+> Follow each step exactly and stop at any unexpected result.
 
 ---
 
-## 1. Current Blocking State
+## 1. Current State
 
-Paper order execution has not been wired yet.  Even with `paper_trading_enabled: true`,
-`main.py` raises `NotImplementedError("order execution is not yet wired")` immediately
-after `preflight_check` succeeds.
+The minimal paper execution path is wired in `main.py` and is mock-tested only.
+A manual run against a real Alpaca paper account has not been performed yet.
 
-**Nothing submits orders today.** This runbook documents the procedure to follow once
-that block is explicitly removed in a future approved PR.
+### Hard constraints enforced by `main.py` (fail closed — raises before `submit_order`):
+
+| Constraint | Behaviour on violation |
+|------------|------------------------|
+| Symbol must be `SPY` | `RuntimeError` |
+| `order_type` must be `market` | `RuntimeError` |
+| `quantity` must be `<= 1` share | `RuntimeError` |
+| `client_order_id` must be non-empty | `RuntimeError` |
+| At most **1** intent generated per run | `RuntimeError` |
+| `OrderResult` must carry `client_order_id` | `RuntimeError` after order |
+| `order_reconciliation.json` must be written | `RuntimeError` if absent |
+| Reconciliation `overall_status` must be `PASS` or `N/A` | `RuntimeError` on mismatch |
+
+**First manual run must be during regular market hours (09:30–16:00 ET, Mon–Fri).**
+The `_ensure_market_hours` guard in `AlpacaBrokerAdapter.submit_order` raises outside
+these hours.  Running outside RTH with a real intent will raise `RuntimeError` before
+the order reaches Alpaca.
 
 ---
 
@@ -60,11 +74,12 @@ Complete every item before proceeding:
 | 2 | `execution.mode="live"` does not exist in `_VALID_EXECUTION_MODES` | ☐ |
 | 3 | The paper account has **no open positions** in any target symbol | ☐ |
 | 4 | Current time is within regular market hours (09:30–16:00 ET, Mon–Fri) | ☐ |
-| 5 | Target symbols are correct (`symbols:` in `settings.yaml`) | ☐ |
-| 6 | Position sizing is confirmed (`position_size_pct`) | ☐ |
-| 7 | Daily loss limit is confirmed (`daily_loss_limit_pct`, `daily_loss_action`) | ☐ |
-| 8 | Full test suite passes without credentials: `pytest` | ☐ |
-| 9 | The final wiring PR has been reviewed and merged | ☐ |
+| 5 | `symbols:` in `settings.yaml` is `["SPY"]` only (constraint: SPY only) | ☐ |
+| 6 | Position sizing will produce `quantity <= 1` share (constraint: max 1 share) | ☐ |
+| 7 | Strategy will produce at most 1 intent per run (constraint: max 1 order) | ☐ |
+| 8 | Daily loss limit is confirmed (`daily_loss_limit_pct`, `daily_loss_action`) | ☐ |
+| 9 | Full test suite passes without credentials: `pytest` | ☐ |
+| 10 | `paper_trading_enabled: true` is set in `settings.yaml` | ☐ |
 
 ---
 
@@ -160,7 +175,7 @@ orders, investigate before running again.
 
 ---
 
-## 8. What Is Still Blocked
+## 8. What Is Still Blocked or Constrained
 
 The following are explicitly **not** supported and will raise immediately:
 
@@ -172,7 +187,13 @@ The following are explicitly **not** supported and will raise immediately:
 | Missing `ALPACA_API_KEY` or `ALPACA_SECRET_KEY` | `RuntimeError` before any network call |
 | `submit_order` outside market hours | `RuntimeError` before request is sent |
 | `submit_order` without `client_order_id` | `ValueError` from `_validate_order_intent` |
-| Reconciliation mismatch | `RuntimeError` — execution halts, no silent continuation |
+| Intent with symbol other than `SPY` | `RuntimeError` in `main.py` before `submit_order` |
+| Intent with `order_type` other than `market` | `RuntimeError` in `main.py` before `submit_order` |
+| Intent with `quantity > 1` | `RuntimeError` in `main.py` before `submit_order` |
+| More than 1 intent generated in one run | `RuntimeError` in `main.py` — no order submitted |
+| `OrderResult` returned without `client_order_id` | `RuntimeError` in `main.py` after `submit_order` |
+| `order_reconciliation.json` not written | `RuntimeError` in `main.py` — internal error |
+| Reconciliation `overall_status` not `PASS`/`N/A` | `RuntimeError` — execution halts |
 
 ---
 
