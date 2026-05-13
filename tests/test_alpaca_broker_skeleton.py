@@ -258,18 +258,21 @@ class TestAlpacaBrokerAdapterNotImplemented:
             symbol="SPY", side="buy", quantity=1.0,
             order_type="market", reason="test",
             timestamp=pd.Timestamp("2024-01-15 10:00:00", tz="America/New_York"),
+            client_order_id="TEST-000001",
         )
 
-    def test_submit_order_raises(self):
-        with pytest.raises(NotImplementedError, match="Alpaca client is not implemented yet"):
-            self._adapter().submit_order(self._make_intent())
+    def test_submit_order_raises_without_credentials(self):
+        adapter = self._adapter()
+        with mock.patch.object(adapter, "_ensure_market_hours"):
+            with pytest.raises(RuntimeError, match="Missing Alpaca paper API credentials"):
+                adapter.submit_order(self._make_intent())
 
-    def test_get_positions_raises(self):
-        with pytest.raises(NotImplementedError, match="AlpacaBrokerAdapter is not implemented yet"):
+    def test_get_positions_raises_without_credentials(self):
+        with pytest.raises(RuntimeError, match="Missing Alpaca paper API credentials"):
             self._adapter().get_positions()
 
-    def test_get_account_raises(self):
-        with pytest.raises(NotImplementedError, match="AlpacaBrokerAdapter is not implemented yet"):
+    def test_get_account_raises_without_credentials(self):
+        with pytest.raises(RuntimeError, match="Missing Alpaca paper API credentials"):
             self._adapter().get_account()
 
     def test_cancel_order_raises(self):
@@ -430,11 +433,13 @@ class TestValidateOrderIntent:
                                side_effect=AssertionError("should not be called")):
             adapter._validate_order_intent(self._intent())  # must not raise
 
-    # --- submit_order still blocked ---
+    # --- submit_order requires credentials when no client is injected ---
 
-    def test_submit_order_still_raises_not_implemented(self):
-        with pytest.raises(NotImplementedError, match="Alpaca client is not implemented yet"):
-            self._adapter().submit_order(self._intent())
+    def test_submit_order_raises_without_credentials(self):
+        adapter = self._adapter()
+        with mock.patch.object(adapter, "_ensure_market_hours"):
+            with pytest.raises(RuntimeError, match="Missing Alpaca paper API credentials"):
+                adapter.submit_order(self._intent())
 
 
 # ---------------------------------------------------------------------------
@@ -528,11 +533,13 @@ class TestBuildOrderPayload:
                                side_effect=AssertionError("should not be called")):
             adapter._build_order_payload(self._intent())  # must not raise
 
-    # --- submit_order still blocked ---
+    # --- submit_order requires credentials when no client is injected ---
 
-    def test_submit_order_still_raises_not_implemented(self):
-        with pytest.raises(NotImplementedError, match="Alpaca client is not implemented yet"):
-            self._adapter().submit_order(self._intent())
+    def test_submit_order_raises_without_credentials(self):
+        adapter = self._adapter()
+        with mock.patch.object(adapter, "_ensure_market_hours"):
+            with pytest.raises(RuntimeError, match="Missing Alpaca paper API credentials"):
+                adapter.submit_order(self._intent())
 
 
 # ---------------------------------------------------------------------------
@@ -869,11 +876,13 @@ class TestOrderResponseToResult:
                                side_effect=AssertionError("should not be called")):
             adapter._order_response_to_result(self._filled_dict(), self._intent())
 
-    # --- submit_order still blocked ---
+    # --- submit_order requires credentials when no client is injected ---
 
-    def test_submit_order_still_raises_not_implemented(self):
-        with pytest.raises(NotImplementedError, match="Alpaca client is not implemented yet"):
-            self._adapter().submit_order(self._intent())
+    def test_submit_order_raises_without_credentials(self):
+        adapter = self._adapter()
+        with mock.patch.object(adapter, "_ensure_market_hours"):
+            with pytest.raises(RuntimeError, match="Missing Alpaca paper API credentials"):
+                adapter.submit_order(self._intent())
 
 
 # ---------------------------------------------------------------------------
@@ -950,10 +959,12 @@ class TestClientInjection:
                                side_effect=AssertionError("should not be called")):
             adapter._get_client()
 
-    def test_submit_order_still_raises_not_implemented(self):
-        # No client injected → NotImplementedError before market-hours check
-        with pytest.raises(NotImplementedError, match="Alpaca client is not implemented yet"):
-            self._adapter().submit_order(self._intent())
+    def test_submit_order_raises_without_credentials(self):
+        # No client injected → _get_client() calls _validate_credentials → RuntimeError
+        adapter = self._adapter()
+        with mock.patch.object(adapter, "_ensure_market_hours"):
+            with pytest.raises(RuntimeError, match="Missing Alpaca paper API credentials"):
+                adapter.submit_order(self._intent())
 
 
 # ---------------------------------------------------------------------------
@@ -1002,18 +1013,24 @@ class TestSubmitOrderMockClient:
             "src.execution.alpaca_broker.AlpacaBrokerAdapter._ensure_market_hours"
         )
 
-    # --- no client → NotImplementedError ---
+    # --- no client, no credentials → RuntimeError ---
 
-    def test_no_client_raises_not_implemented(self):
-        with pytest.raises(NotImplementedError, match="Alpaca client is not implemented yet"):
-            with self._rth_patch():
-                self._adapter()._ensure_market_hours = mock.Mock()
-            self._adapter().submit_order(self._intent())
-
-    def test_no_client_raises_not_implemented_direct(self):
+    def test_no_client_no_credentials_raises_runtime_error(self):
         adapter = self._adapter(client=None)
-        with pytest.raises(NotImplementedError, match="Alpaca client is not implemented yet"):
-            adapter.submit_order(self._intent())
+        with mock.patch.object(adapter, "_validate_order_intent"):
+            with mock.patch.object(adapter, "_ensure_market_hours"):
+                with pytest.raises(RuntimeError, match="Missing Alpaca paper API credentials"):
+                    adapter.submit_order(self._intent())
+
+    def test_no_client_calls_get_client(self):
+        adapter = self._adapter(client=None)
+        with mock.patch.object(adapter, "_get_client",
+                               side_effect=RuntimeError("Missing Alpaca paper API credentials")) as mock_gc:
+            with mock.patch.object(adapter, "_validate_order_intent"):
+                with mock.patch.object(adapter, "_ensure_market_hours"):
+                    with pytest.raises(RuntimeError):
+                        adapter.submit_order(self._intent())
+        mock_gc.assert_called_once()
 
     # --- submit_order method ---
 
@@ -1554,15 +1571,18 @@ class TestAccountBooleanParsing:
             self._parse(account_blocked="no")
 
 
-class TestGetAccountGetPositionsStillNotImplemented:
-    def test_get_account_raises(self):
+class TestGetAccountGetPositionsRequireCredentials:
+    """get_account() and get_positions() are now implemented but require
+    credentials (or an injected client) — they no longer raise NotImplementedError."""
+
+    def test_get_account_raises_without_credentials(self):
         from src.execution.alpaca_broker import AlpacaBrokerAdapter
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(RuntimeError, match="Missing Alpaca paper API credentials"):
             AlpacaBrokerAdapter().get_account()
 
-    def test_get_positions_raises(self):
+    def test_get_positions_raises_without_credentials(self):
         from src.execution.alpaca_broker import AlpacaBrokerAdapter
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(RuntimeError, match="Missing Alpaca paper API credentials"):
             AlpacaBrokerAdapter().get_positions()
 
 
@@ -1722,3 +1742,284 @@ class TestClientFactory:
         assert result.order_id == "order-123"
         assert result.status == "accepted"
         assert result.client_order_id == "BT-000001"
+
+
+# ---------------------------------------------------------------------------
+# submit_order via _get_client (no injected client, credentials available)
+# ---------------------------------------------------------------------------
+
+class TestSubmitOrderViaGetClient:
+    """submit_order() uses _get_client() when no client is injected."""
+
+    def _adapter(self, **kwargs):
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        return AlpacaBrokerAdapter(**kwargs)
+
+    def _intent(self):
+        from src.execution.order_intent import OrderIntent
+        return OrderIntent(
+            symbol="SPY", side="buy", quantity=10.0,
+            order_type="market", reason="entry",
+            timestamp=pd.Timestamp("2024-01-15 10:00:00", tz="America/New_York"),
+            client_order_id="BT-000001",
+        )
+
+    def _fake_response(self):
+        return {
+            "id": "order-abc",
+            "symbol": "SPY",
+            "side": "buy",
+            "qty": 10,
+            "status": "accepted",
+            "submitted_at": "2024-01-15T15:00:00Z",
+            "filled_at": None,
+            "filled_avg_price": None,
+            "filled_qty": None,
+            "client_order_id": "BT-000001",
+        }
+
+    def test_submit_order_calls_get_client_when_no_injected_client(self, monkeypatch):
+        monkeypatch.setenv("ALPACA_API_KEY", "test-key")
+        monkeypatch.setenv("ALPACA_SECRET_KEY", "test-secret")
+        adapter = self._adapter()
+        fake_client = mock.MagicMock()
+        fake_client.submit_order.return_value = self._fake_response()
+        with mock.patch.object(adapter, "_get_client", return_value=fake_client) as mock_gc:
+            with mock.patch.object(adapter, "_ensure_market_hours"):
+                adapter.submit_order(self._intent())
+        mock_gc.assert_called_once()
+
+    def test_submit_order_no_real_network_calls(self, monkeypatch):
+        monkeypatch.setenv("ALPACA_API_KEY", "test-key")
+        monkeypatch.setenv("ALPACA_SECRET_KEY", "test-secret")
+        adapter = self._adapter()
+        fake_client = mock.MagicMock()
+        fake_client.submit_order.return_value = self._fake_response()
+        with mock.patch("alpaca.trading.client.TradingClient") as MockTC:
+            MockTC.return_value = fake_client
+            with mock.patch.object(adapter, "_ensure_market_hours"):
+                result = adapter.submit_order(self._intent())
+        assert result.order_id == "order-abc"
+        # TradingClient was mocked — no real HTTP was made
+        MockTC.assert_called_once()
+
+    def test_missing_credentials_raise_before_broker_call(self, monkeypatch):
+        monkeypatch.delenv("ALPACA_API_KEY", raising=False)
+        monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
+        adapter = self._adapter()
+        with mock.patch.object(adapter, "_ensure_market_hours"):
+            with pytest.raises(RuntimeError, match="Missing Alpaca paper API credentials"):
+                adapter.submit_order(self._intent())
+
+
+# ---------------------------------------------------------------------------
+# get_account
+# ---------------------------------------------------------------------------
+
+class TestGetAccount:
+    def _adapter(self, **kwargs):
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        return AlpacaBrokerAdapter(**kwargs)
+
+    def _raw_account(self):
+        return {
+            "id": "acc-001",
+            "status": "ACTIVE",
+            "currency": "USD",
+            "cash": "50000.00",
+            "equity": "120000.00",
+            "buying_power": "100000.00",
+            "trading_blocked": False,
+            "account_blocked": False,
+        }
+
+    def test_get_account_with_injected_mock_client(self):
+        class FakeClient:
+            def get_account(self_inner):
+                return self._raw_account()
+
+        adapter = self._adapter(client=FakeClient())
+        result = adapter.get_account()
+        assert result["id"] == "acc-001"
+        assert result["status"] == "ACTIVE"
+        assert result["cash"] == 50000.0
+        assert result["trading_blocked"] is False
+
+    def test_get_account_uses_get_client(self, monkeypatch):
+        monkeypatch.setenv("ALPACA_API_KEY", "k")
+        monkeypatch.setenv("ALPACA_SECRET_KEY", "s")
+        adapter = self._adapter()
+        fake_client = mock.MagicMock()
+        fake_client.get_account.return_value = self._raw_account()
+        with mock.patch.object(adapter, "_get_client", return_value=fake_client) as mock_gc:
+            adapter.get_account()
+        mock_gc.assert_called_once()
+        fake_client.get_account.assert_called_once()
+
+    def test_get_account_maps_response(self):
+        class FakeClient:
+            def get_account(self_inner):
+                return {"id": "x", "status": "ACTIVE", "cash": "999.99",
+                        "equity": "1000.00", "buying_power": "2000.00",
+                        "trading_blocked": False, "account_blocked": False,
+                        "currency": "USD"}
+
+        result = self._adapter(client=FakeClient()).get_account()
+        assert isinstance(result["cash"], float)
+        assert result["cash"] == 999.99
+
+    def test_get_account_does_not_log_secrets(self, monkeypatch, caplog):
+        import logging
+        monkeypatch.setenv("ALPACA_API_KEY", "my-secret-api-key-xyz")
+        monkeypatch.setenv("ALPACA_SECRET_KEY", "my-secret-value-abc")
+        adapter = self._adapter()
+        fake_client = mock.MagicMock()
+        fake_client.get_account.return_value = self._raw_account()
+        with mock.patch("alpaca.trading.client.TradingClient", return_value=fake_client):
+            with caplog.at_level(logging.DEBUG):
+                adapter.get_account()
+        assert "my-secret-api-key-xyz" not in caplog.text
+        assert "my-secret-value-abc" not in caplog.text
+
+    def test_get_account_raises_without_credentials(self, monkeypatch):
+        monkeypatch.delenv("ALPACA_API_KEY", raising=False)
+        monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
+        with pytest.raises(RuntimeError, match="Missing Alpaca paper API credentials"):
+            self._adapter().get_account()
+
+
+# ---------------------------------------------------------------------------
+# get_positions
+# ---------------------------------------------------------------------------
+
+class TestGetPositions:
+    def _adapter(self, **kwargs):
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        return AlpacaBrokerAdapter(**kwargs)
+
+    def _raw_positions(self):
+        return [
+            {"symbol": "SPY", "qty": "10", "market_value": "4500.00",
+             "avg_entry_price": "440.00", "current_price": "450.00",
+             "unrealized_pl": "100.00"},
+            {"symbol": "QQQ", "qty": "5", "market_value": "1500.00",
+             "avg_entry_price": "295.00", "current_price": "300.00",
+             "unrealized_pl": "25.00"},
+        ]
+
+    def test_get_positions_with_injected_mock_client_get_all_positions(self):
+        class FakeClient:
+            def get_all_positions(self_inner):
+                return self._raw_positions()
+
+        result = self._adapter(client=FakeClient()).get_positions()
+        assert "SPY" in result
+        assert "QQQ" in result
+        assert result["SPY"]["qty"] == 10.0
+        assert result["QQQ"]["qty"] == 5.0
+
+    def test_get_positions_prefers_get_all_positions(self):
+        class FakeClient:
+            def get_all_positions(self_inner):
+                return self._raw_positions()
+            def get_positions(self_inner):
+                raise AssertionError("get_positions should not be called")
+
+        result = self._adapter(client=FakeClient()).get_positions()
+        assert set(result.keys()) == {"SPY", "QQQ"}
+
+    def test_get_positions_falls_back_to_get_positions(self):
+        class FakeClient:
+            def get_positions(self_inner):
+                return self._raw_positions()
+
+        result = self._adapter(client=FakeClient()).get_positions()
+        assert "SPY" in result
+        assert "QQQ" in result
+
+    def test_get_positions_returns_symbol_keyed_dict(self):
+        class FakeClient:
+            def get_all_positions(self_inner):
+                return self._raw_positions()
+
+        result = self._adapter(client=FakeClient()).get_positions()
+        assert isinstance(result, dict)
+        for sym, pos in result.items():
+            assert pos["symbol"] == sym
+
+    def test_get_positions_maps_numeric_fields(self):
+        class FakeClient:
+            def get_all_positions(self_inner):
+                return [{"symbol": "SPY", "qty": "7", "market_value": "3150.00",
+                         "avg_entry_price": "445.00", "current_price": "450.00",
+                         "unrealized_pl": "35.00"}]
+
+        result = self._adapter(client=FakeClient()).get_positions()
+        pos = result["SPY"]
+        assert isinstance(pos["qty"], float)
+        assert isinstance(pos["market_value"], float)
+
+    def test_get_positions_no_method_raises_not_implemented(self):
+        class FakeClient:
+            pass  # neither get_all_positions nor get_positions
+
+        with pytest.raises(NotImplementedError, match="get_all_positions or get_positions"):
+            self._adapter(client=FakeClient()).get_positions()
+
+    def test_get_positions_uses_get_client(self, monkeypatch):
+        monkeypatch.setenv("ALPACA_API_KEY", "k")
+        monkeypatch.setenv("ALPACA_SECRET_KEY", "s")
+        adapter = self._adapter()
+        fake_client = mock.MagicMock()
+        fake_client.get_all_positions.return_value = []
+        with mock.patch.object(adapter, "_get_client", return_value=fake_client) as mock_gc:
+            adapter.get_positions()
+        mock_gc.assert_called_once()
+
+    def test_get_positions_raises_without_credentials(self, monkeypatch):
+        monkeypatch.delenv("ALPACA_API_KEY", raising=False)
+        monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
+        with pytest.raises(RuntimeError, match="Missing Alpaca paper API credentials"):
+            self._adapter().get_positions()
+
+    def test_cancel_order_remains_not_implemented(self):
+        with pytest.raises(NotImplementedError):
+            self._adapter().cancel_order("some-id")
+
+
+# ---------------------------------------------------------------------------
+# main.py paper mode guard still fires before adapter creation
+# ---------------------------------------------------------------------------
+
+class TestMainPaperModeGuardStillActive:
+    def _make_paper_config(self):
+        from src.config.loader import (
+            AppConfig, BacktestConfig, DataConfig, ExecutionConfig,
+            LoggingConfig, RiskConfig, StrategyConfig,
+        )
+        return AppConfig(
+            backtest=BacktestConfig(
+                start_date="2024-01-15", end_date="2024-01-15",
+                initial_capital=100_000, commission_per_share=0.0, slippage_per_share=0.0,
+            ),
+            symbols=["SPY"],
+            data=DataConfig(provider="yahoo", bar_interval="5m", timezone="America/New_York"),
+            strategy=StrategyConfig(name="opening_range_breakout", params={
+                "opening_range_start": "09:30", "opening_range_end": "10:00",
+                "force_exit_time": "15:55", "position_size_pct": 0.95, "long_only": True,
+            }),
+            risk=RiskConfig(),
+            logging=LoggingConfig(level="WARNING", format="%(message)s"),
+            execution=ExecutionConfig(mode="paper", dry_run_broker=False),
+        )
+
+    def test_paper_mode_raises_before_adapter_creation(self):
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_paper_config()
+        with mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog"]):
+            with mock.patch.object(AlpacaBrokerAdapter, "__init__",
+                                   side_effect=AssertionError("adapter must not be created")):
+                from src.main import main as _main
+                with pytest.raises(NotImplementedError):
+                    _main()

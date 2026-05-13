@@ -405,22 +405,18 @@ class AlpacaBrokerAdapter(BrokerAdapter):
     # ------------------------------------------------------------------
 
     def submit_order(self, intent: OrderIntent) -> OrderResult:
-        """Submit a market order through the injected client.
+        """Submit a market order through the broker client.
 
         Raises
         ------
-        NotImplementedError
-            If no client was injected (``self._client is None``).
         RuntimeError
-            If the current time is outside regular market hours.
+            If credentials are missing or the current time is outside RTH.
         NotImplementedError
-            If ``intent.order_type`` is not ``"market"``.
+            If ``intent.order_type`` is not ``"market"``, or if the client
+            exposes neither ``submit_order`` nor ``create_order``.
         ValueError
             If any required field on *intent* is invalid.
         """
-        if self._client is None:
-            raise NotImplementedError("Alpaca client is not implemented yet.")
-
         self._validate_order_intent(intent)
         self._ensure_market_hours()
         payload = self._build_order_payload(intent)
@@ -437,11 +433,49 @@ class AlpacaBrokerAdapter(BrokerAdapter):
 
         return self._order_response_to_result(response, intent)
 
-    def get_positions(self) -> dict[str, Any]:
-        raise NotImplementedError("AlpacaBrokerAdapter is not implemented yet.")
-
     def get_account(self) -> dict[str, Any]:
-        raise NotImplementedError("AlpacaBrokerAdapter is not implemented yet.")
+        """Return the Alpaca account state as a plain dict.
+
+        Raises
+        ------
+        RuntimeError
+            If credentials are missing.
+        """
+        client = self._get_client()
+        raw = client.get_account()
+        return self._account_response_to_dict(raw)
+
+    def get_positions(self) -> dict[str, Any]:
+        """Return open positions keyed by symbol.
+
+        Prefers ``client.get_all_positions()`` when available; falls back to
+        ``client.get_positions()``.  Each raw position is mapped through
+        :meth:`_position_response_to_dict`.
+
+        Raises
+        ------
+        RuntimeError
+            If credentials are missing.
+        NotImplementedError
+            If the client exposes neither ``get_all_positions`` nor
+            ``get_positions``.
+        """
+        client = self._get_client()
+        if hasattr(client, "get_all_positions"):
+            raw_list = client.get_all_positions()
+        elif hasattr(client, "get_positions"):
+            raw_list = client.get_positions()
+        else:
+            raise NotImplementedError(
+                "Alpaca client must provide get_all_positions or get_positions"
+            )
+        result: dict[str, Any] = {}
+        for raw in raw_list:
+            pos = self._position_response_to_dict(raw)
+            sym = pos.get("symbol")
+            if sym:
+                result[sym] = pos
+        return result
 
     def cancel_order(self, order_id: str) -> bool:
         raise NotImplementedError("AlpacaBrokerAdapter is not implemented yet.")
