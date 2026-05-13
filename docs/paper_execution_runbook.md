@@ -40,12 +40,37 @@ validates safety constraints, submits exactly one order, and writes full audit a
 | `order_type` of selected intent must be `market` | `RuntimeError` |
 | `quantity` of selected intent must be `<= 1` (after override) | `RuntimeError` |
 | `client_order_id` must be non-empty | `RuntimeError` |
+| **Selected buy intent with existing nonzero position for that symbol** | `RuntimeError` — no order submitted |
 | `OrderResult` must carry `client_order_id` | `RuntimeError` after order |
 | `order_reconciliation.json` must be written | `RuntimeError` if absent |
 | Reconciliation `overall_status` must be `PASS` or `N/A` | `RuntimeError` on mismatch |
 
 Non-selected candidate intents are visible in `paper_candidate_intents.csv` but their
 content does not block submission of the selected intent.
+
+### Position-aware safety rule
+
+**Preview-only mode** (`paper_preview_only: true`) always runs the engine and writes
+`paper_candidate_intents.csv` even when the paper account already holds a position in
+the target symbol.  No order is ever submitted in preview mode.
+
+**Submit mode** (`paper_preview_only: false`) enforces an additional check before calling
+`submit_order`:
+
+- If the selected intent is a **buy** and the Alpaca paper account already holds a
+  **nonzero position** in that symbol, `main.py` raises `RuntimeError` before any
+  order reaches Alpaca.  The error message confirms no order was submitted.
+- Positions in non-target symbols are ignored.
+- A position with `qty = 0` is treated as no position and does not block the buy.
+
+**To submit another buy after a prior fill:**
+
+1. Log in to <https://app.alpaca.markets> (paper account).
+2. Close / liquidate the existing position manually from the dashboard.
+3. Confirm the position is gone (qty = 0 or position absent).
+4. Re-run `main.py` in submit mode.
+
+There is no automatic close or sell logic in this bot.  Manual action is required.
 
 **Submit phase must run during regular market hours (09:30–16:00 ET, Mon–Fri).**
 The `_ensure_market_hours` guard in `AlpacaBrokerAdapter.submit_order` raises outside
