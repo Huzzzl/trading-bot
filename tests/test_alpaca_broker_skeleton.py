@@ -1260,3 +1260,240 @@ class TestSubmitOrderClientMethodValidation:
                                side_effect=RuntimeError("Outside regular market hours")):
             with pytest.raises(RuntimeError, match="Outside regular market hours"):
                 adapter.submit_order(self._intent())
+
+
+# ---------------------------------------------------------------------------
+# _account_response_to_dict
+# ---------------------------------------------------------------------------
+
+class TestAccountResponseToDict:
+    def _adapter(self):
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        return AlpacaBrokerAdapter()
+
+    def test_dict_response_maps_all_fields(self):
+        resp = {
+            "id": "acc-1",
+            "status": "ACTIVE",
+            "currency": "USD",
+            "cash": "10000.50",
+            "equity": "20000.75",
+            "buying_power": "40000.00",
+            "trading_blocked": False,
+            "account_blocked": False,
+        }
+        result = self._adapter()._account_response_to_dict(resp)
+        assert result["id"] == "acc-1"
+        assert result["status"] == "ACTIVE"
+        assert result["currency"] == "USD"
+        assert result["cash"] == 10000.50
+        assert result["equity"] == 20000.75
+        assert result["buying_power"] == 40000.00
+        assert result["trading_blocked"] is False
+        assert result["account_blocked"] is False
+
+    def test_object_response_maps_all_fields(self):
+        class FakeAccount:
+            id = "acc-obj"
+            status = "ACTIVE"
+            currency = "USD"
+            cash = 5000.0
+            equity = 10000.0
+            buying_power = 20000.0
+            trading_blocked = False
+            account_blocked = False
+
+        result = self._adapter()._account_response_to_dict(FakeAccount())
+        assert result["id"] == "acc-obj"
+        assert result["cash"] == 5000.0
+        assert result["trading_blocked"] is False
+
+    def test_numeric_strings_convert_to_float(self):
+        resp = {"cash": "1234.56", "equity": "7890.12", "buying_power": "3000.00"}
+        result = self._adapter()._account_response_to_dict(resp)
+        assert isinstance(result["cash"], float)
+        assert result["cash"] == 1234.56
+        assert isinstance(result["equity"], float)
+        assert isinstance(result["buying_power"], float)
+
+    def test_missing_fields_become_none(self):
+        result = self._adapter()._account_response_to_dict({})
+        assert result["id"] is None
+        assert result["status"] is None
+        assert result["currency"] is None
+        assert result["cash"] is None
+        assert result["equity"] is None
+        assert result["buying_power"] is None
+        assert result["trading_blocked"] is None
+        assert result["account_blocked"] is None
+
+    def test_does_not_read_env_vars(self, monkeypatch):
+        monkeypatch.setenv("ALPACA_API_KEY", "should-not-matter")
+        monkeypatch.setenv("ALPACA_SECRET_KEY", "should-not-matter")
+        # Should not raise even without real credentials
+        result = self._adapter()._account_response_to_dict({"status": "ACTIVE"})
+        assert result["status"] == "ACTIVE"
+
+    def test_does_not_make_network_calls(self):
+        # No network mock needed — method is purely local
+        result = self._adapter()._account_response_to_dict({"id": "x"})
+        assert result["id"] == "x"
+
+
+# ---------------------------------------------------------------------------
+# _position_response_to_dict
+# ---------------------------------------------------------------------------
+
+class TestPositionResponseToDict:
+    def _adapter(self):
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        return AlpacaBrokerAdapter()
+
+    def test_dict_response_maps_all_fields(self):
+        resp = {
+            "symbol": "SPY",
+            "qty": "10",
+            "market_value": "4500.00",
+            "avg_entry_price": "440.00",
+            "current_price": "450.00",
+            "unrealized_pl": "100.00",
+        }
+        result = self._adapter()._position_response_to_dict(resp)
+        assert result["symbol"] == "SPY"
+        assert result["qty"] == 10.0
+        assert result["market_value"] == 4500.0
+        assert result["avg_entry_price"] == 440.0
+        assert result["current_price"] == 450.0
+        assert result["unrealized_pl"] == 100.0
+
+    def test_object_response_maps_all_fields(self):
+        class FakePosition:
+            symbol = "QQQ"
+            qty = 5.0
+            market_value = 1500.0
+            avg_entry_price = 295.0
+            current_price = 300.0
+            unrealized_pl = 25.0
+
+        result = self._adapter()._position_response_to_dict(FakePosition())
+        assert result["symbol"] == "QQQ"
+        assert result["qty"] == 5.0
+        assert result["unrealized_pl"] == 25.0
+
+    def test_numeric_strings_convert_to_float(self):
+        resp = {
+            "symbol": "SPY",
+            "qty": "3",
+            "market_value": "1350.00",
+            "avg_entry_price": "445.00",
+            "current_price": "450.00",
+            "unrealized_pl": "15.00",
+        }
+        result = self._adapter()._position_response_to_dict(resp)
+        assert isinstance(result["qty"], float)
+        assert isinstance(result["market_value"], float)
+        assert isinstance(result["avg_entry_price"], float)
+        assert isinstance(result["current_price"], float)
+        assert isinstance(result["unrealized_pl"], float)
+
+    def test_missing_fields_become_none(self):
+        result = self._adapter()._position_response_to_dict({})
+        assert result["symbol"] is None
+        assert result["qty"] is None
+        assert result["market_value"] is None
+        assert result["avg_entry_price"] is None
+        assert result["current_price"] is None
+        assert result["unrealized_pl"] is None
+
+    def test_does_not_read_env_vars(self, monkeypatch):
+        monkeypatch.setenv("ALPACA_API_KEY", "should-not-matter")
+        result = self._adapter()._position_response_to_dict({"symbol": "SPY"})
+        assert result["symbol"] == "SPY"
+
+    def test_does_not_make_network_calls(self):
+        result = self._adapter()._position_response_to_dict({"symbol": "QQQ"})
+        assert result["symbol"] == "QQQ"
+
+
+# ---------------------------------------------------------------------------
+# _validate_startup_state
+# ---------------------------------------------------------------------------
+
+class TestValidateStartupState:
+    def _adapter(self):
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        return AlpacaBrokerAdapter()
+
+    def _active_account(self, **overrides):
+        base = {
+            "status": "ACTIVE",
+            "trading_blocked": False,
+            "account_blocked": False,
+        }
+        base.update(overrides)
+        return base
+
+    def test_passes_for_active_unblocked_account_no_overlap(self):
+        account = self._active_account()
+        positions = [{"symbol": "MSFT"}, {"symbol": "AAPL"}]
+        # Should not raise
+        self._adapter()._validate_startup_state(account, positions, ["SPY", "QQQ"])
+
+    def test_inactive_account_raises(self):
+        account = self._active_account(status="INACTIVE")
+        with pytest.raises(RuntimeError, match="not active"):
+            self._adapter()._validate_startup_state(account, [], ["SPY"])
+
+    def test_trading_blocked_raises(self):
+        account = self._active_account(trading_blocked=True)
+        with pytest.raises(RuntimeError, match="trading is blocked"):
+            self._adapter()._validate_startup_state(account, [], ["SPY"])
+
+    def test_account_blocked_raises(self):
+        account = self._active_account(account_blocked=True)
+        with pytest.raises(RuntimeError, match="account is blocked"):
+            self._adapter()._validate_startup_state(account, [], ["SPY"])
+
+    def test_overlapping_position_raises(self):
+        account = self._active_account()
+        positions = [{"symbol": "SPY"}, {"symbol": "MSFT"}]
+        with pytest.raises(RuntimeError, match="Unexpected open positions"):
+            self._adapter()._validate_startup_state(account, positions, ["SPY"])
+
+    def test_unrelated_position_does_not_raise(self):
+        account = self._active_account()
+        positions = [{"symbol": "MSFT"}, {"symbol": "AAPL"}]
+        # No overlap with target symbols — must not raise
+        self._adapter()._validate_startup_state(account, positions, ["SPY", "QQQ"])
+
+    def test_symbol_matching_is_case_insensitive(self):
+        account = self._active_account()
+        positions = [{"symbol": "spy"}]
+        with pytest.raises(RuntimeError, match="Unexpected open positions"):
+            self._adapter()._validate_startup_state(account, positions, ["SPY"])
+
+    def test_passes_with_empty_positions(self):
+        account = self._active_account()
+        self._adapter()._validate_startup_state(account, [], ["SPY", "QQQ"])
+
+    def test_passes_with_empty_target_symbols(self):
+        account = self._active_account()
+        positions = [{"symbol": "SPY"}]
+        # No target symbols → no overlap possible
+        self._adapter()._validate_startup_state(account, positions, [])
+
+
+# ---------------------------------------------------------------------------
+# get_account / get_positions still raise NotImplementedError
+# ---------------------------------------------------------------------------
+
+class TestGetAccountGetPositionsStillNotImplemented:
+    def test_get_account_raises(self):
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        with pytest.raises(NotImplementedError):
+            AlpacaBrokerAdapter().get_account()
+
+    def test_get_positions_raises(self):
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        with pytest.raises(NotImplementedError):
+            AlpacaBrokerAdapter().get_positions()

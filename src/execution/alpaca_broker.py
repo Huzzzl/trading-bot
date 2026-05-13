@@ -285,6 +285,85 @@ class AlpacaBrokerAdapter(BrokerAdapter):
             client_order_id = client_order_id,
         )
 
+    def _account_response_to_dict(self, response: Any) -> dict[str, Any]:
+        """Convert an Alpaca account response to a plain dict.
+
+        Accepts either a ``dict``-like object or an attribute-based object.
+        Numeric fields are cast to ``float``; boolean fields to ``bool``.
+        Missing fields become ``None``.
+        """
+        def _get(key: str) -> Any:
+            if isinstance(response, dict):
+                return response.get(key)
+            return getattr(response, key, None)
+
+        def _float(val: Any) -> float | None:
+            return float(val) if val is not None else None
+
+        def _bool(val: Any) -> bool | None:
+            return bool(val) if val is not None else None
+
+        return {
+            "id":              _get("id"),
+            "status":          _get("status"),
+            "currency":        _get("currency"),
+            "cash":            _float(_get("cash")),
+            "equity":          _float(_get("equity")),
+            "buying_power":    _float(_get("buying_power")),
+            "trading_blocked": _bool(_get("trading_blocked")),
+            "account_blocked": _bool(_get("account_blocked")),
+        }
+
+    def _position_response_to_dict(self, response: Any) -> dict[str, Any]:
+        """Convert an Alpaca position response to a plain dict.
+
+        Accepts either a ``dict``-like object or an attribute-based object.
+        Numeric fields are cast to ``float``.  Missing fields become ``None``.
+        """
+        def _get(key: str) -> Any:
+            if isinstance(response, dict):
+                return response.get(key)
+            return getattr(response, key, None)
+
+        def _float(val: Any) -> float | None:
+            return float(val) if val is not None else None
+
+        return {
+            "symbol":          _get("symbol"),
+            "qty":             _float(_get("qty")),
+            "market_value":    _float(_get("market_value")),
+            "avg_entry_price": _float(_get("avg_entry_price")),
+            "current_price":   _float(_get("current_price")),
+            "unrealized_pl":   _float(_get("unrealized_pl")),
+        }
+
+    def _validate_startup_state(
+        self,
+        account: dict[str, Any],
+        positions: list[dict[str, Any]],
+        symbols: list[str],
+    ) -> None:
+        """Validate account state and open positions before trading begins.
+
+        Raises
+        ------
+        RuntimeError
+            If the account is not active, trading is blocked, or any open
+            position overlaps the target symbol list.
+        """
+        if account.get("status") != "ACTIVE":
+            raise RuntimeError("Alpaca account is not active")
+        if account.get("trading_blocked") is True:
+            raise RuntimeError("Alpaca account trading is blocked")
+        if account.get("account_blocked") is True:
+            raise RuntimeError("Alpaca account is blocked")
+
+        target = {s.upper() for s in symbols}
+        for pos in positions:
+            sym = pos.get("symbol")
+            if sym and sym.upper() in target:
+                raise RuntimeError("Unexpected open positions for target symbols")
+
     # ------------------------------------------------------------------
     # BrokerAdapter interface
     # ------------------------------------------------------------------
