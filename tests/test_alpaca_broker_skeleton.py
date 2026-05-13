@@ -2508,3 +2508,226 @@ class TestPaperTradingEnabledFlag:
     def test_no_live_trading_mode_introduced(self):
         from src.config.loader import _VALID_EXECUTION_MODES  # noqa
         assert "live" not in _VALID_EXECUTION_MODES
+
+
+# ---------------------------------------------------------------------------
+# Intended future paper execution flow (mock-only documentation test)
+#
+# These tests document the sequence main.py will follow once the final paper
+# execution wiring PR is merged and the NotImplementedError after preflight
+# is removed.  They do NOT test real execution today; they verify that the
+# building-blocks are in place and behave correctly in isolation.
+# ---------------------------------------------------------------------------
+
+class TestIntendedPaperExecutionFlow:
+    """Mock-only documentation tests for the planned paper execution sequence.
+
+    None of these tests submit real orders or make real network calls.
+    The NotImplementedError that blocks order execution in main.py is
+    intentionally NOT removed by this test class.
+    """
+
+    def _adapter(self, **kwargs):
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        return AlpacaBrokerAdapter(**kwargs)
+
+    def _make_intent(self, client_order_id="BT-000001"):
+        from src.execution.order_intent import OrderIntent
+        return OrderIntent(
+            symbol="SPY", side="buy", quantity=10.0,
+            order_type="market", reason="entry",
+            timestamp=pd.Timestamp("2024-01-15 10:00:00", tz="America/New_York"),
+            client_order_id=client_order_id,
+        )
+
+    def _mock_result(self, intent, status="accepted"):
+        from src.execution.broker import OrderResult
+        return OrderResult(
+            order_id=f"ALPACA-{intent.client_order_id}",
+            symbol=intent.symbol,
+            side=intent.side,
+            quantity=intent.quantity,
+            status=status,
+            submitted_at=intent.timestamp,
+            reason=intent.reason,
+            client_order_id=intent.client_order_id,
+            metadata={"raw_status": status, "partial_fill": False},
+        )
+
+    # --- step 1: preflight must succeed before any submit_order call ---
+
+    def test_step1_preflight_runs_before_submit_order(self):
+        """preflight_check must be called before the first submit_order."""
+        call_log: list[str] = []
+        adapter = self._adapter()
+        intent   = self._make_intent()
+
+        def fake_preflight(symbols):
+            call_log.append("preflight")
+            return {"ok": True, "account": {"status": "ACTIVE"},
+                    "positions": {}, "symbols": symbols}
+
+        def fake_submit(i):
+            call_log.append("submit_order")
+            return self._mock_result(i)
+
+        adapter.preflight_check = fake_preflight
+        adapter.submit_order    = fake_submit
+
+        # Simulate the intended main.py paper execution sequence
+        adapter.preflight_check(["SPY"])
+        adapter.submit_order(intent)
+
+        assert call_log.index("preflight") < call_log.index("submit_order")
+
+    # --- step 2: every intent must carry a non-empty client_order_id ---
+
+    def test_step2_every_intent_has_client_order_id(self):
+        """Intents without client_order_id must be rejected before submission."""
+        intent_with_id    = self._make_intent(client_order_id="BT-000001")
+        intent_without_id = self._make_intent(client_order_id=None)
+
+        adapter = self._adapter(client=mock.MagicMock())
+        with mock.patch.object(adapter, "_ensure_market_hours"):
+            # Intent with ID must pass validation
+            with mock.patch.object(adapter, "_get_client") as mock_gc:
+                mock_gc.return_value.submit_order.return_value = {
+                    "id": "x", "symbol": "SPY", "side": "buy", "qty": 10,
+                    "status": "accepted", "submitted_at": "2024-01-15T10:00:00Z",
+                    "filled_at": None, "filled_avg_price": None,
+                    "filled_qty": None, "client_order_id": "BT-000001",
+                }
+                result = adapter.submit_order(intent_with_id)
+            assert result.client_order_id == "BT-000001"
+
+            # Intent without ID must raise before network call
+            with pytest.raises(ValueError, match="client_order_id is required"):
+                adapter.submit_order(intent_without_id)
+
+    # --- step 3: results preserve client_order_id for reconciliation ---
+
+    def test_step3_result_preserves_client_order_id(self):
+        """OrderResult.client_order_id must match the submitted intent's ID."""
+        intent = self._make_intent(client_order_id="BT-000042")
+        result = self._mock_result(intent)
+        assert result.client_order_id == "BT-000042"
+
+    # --- step 4: multiple intents submitted independently ---
+
+    def test_step4_multiple_intents_submitted_one_by_one(self):
+        """Each OrderIntent is submitted in a separate submit_order call."""
+        intents = [self._make_intent(client_order_id=f"BT-{i:06d}") for i in range(1, 4)]
+        submitted: list[str] = []
+
+        class FakeClient:
+            def submit_order(self_inner, payload):
+                cid = payload["client_order_id"]
+                submitted.append(cid)
+                return {
+                    "id": f"ALPACA-{cid}", "symbol": "SPY", "side": "buy",
+                    "qty": 10, "status": "accepted",
+                    "submitted_at": "2024-01-15T10:00:00Z",
+                    "filled_at": None, "filled_avg_price": None,
+                    "filled_qty": None, "client_order_id": cid,
+                }
+
+        adapter = self._adapter(client=FakeClient())
+        results = []
+        with mock.patch.object(adapter, "_ensure_market_hours"):
+            for intent in intents:
+                results.append(adapter.submit_order(intent))
+
+        assert submitted == ["BT-000001", "BT-000002", "BT-000003"]
+        assert all(r.status == "accepted" for r in results)
+        assert [r.client_order_id for r in results] == ["BT-000001", "BT-000002", "BT-000003"]
+
+    # --- step 5: preflight failure prevents any submission ---
+
+    def test_step5_preflight_failure_prevents_submit(self):
+        """If preflight_check raises, submit_order must not be called."""
+        adapter = self._adapter()
+        intent  = self._make_intent()
+
+        def failing_preflight(symbols):
+            raise RuntimeError("Alpaca account is not active")
+
+        adapter.preflight_check = failing_preflight
+        adapter.submit_order    = mock.Mock(side_effect=AssertionError("must not be called"))
+
+        with pytest.raises(RuntimeError, match="not active"):
+            adapter.preflight_check(["SPY"])
+        # submit_order was not called
+        adapter.submit_order.assert_not_called()
+
+    # --- step 6: no orders if disabled ---
+
+    def test_step6_paper_disabled_submit_never_called(self):
+        """paper_trading_enabled=False must prevent adapter creation (main.py guard)."""
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        from src.config.loader import (
+            AppConfig, BacktestConfig, DataConfig, ExecutionConfig,
+            LoggingConfig, RiskConfig, StrategyConfig,
+        )
+        cfg = AppConfig(
+            backtest=BacktestConfig(
+                start_date="2024-01-15", end_date="2024-01-15",
+                initial_capital=100_000, commission_per_share=0.0, slippage_per_share=0.0,
+            ),
+            symbols=["SPY"],
+            data=DataConfig(provider="yahoo", bar_interval="5m", timezone="America/New_York"),
+            strategy=StrategyConfig(name="opening_range_breakout", params={
+                "opening_range_start": "09:30", "opening_range_end": "10:00",
+                "force_exit_time": "15:55", "position_size_pct": 0.95, "long_only": True,
+            }),
+            risk=RiskConfig(),
+            logging=LoggingConfig(level="WARNING", format="%(message)s"),
+            execution=ExecutionConfig(mode="paper", paper_trading_enabled=False),
+        )
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__",
+                               side_effect=AssertionError("adapter must not be created")), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog"]):
+            with pytest.raises(NotImplementedError, match="Paper trading is disabled"):
+                from src.main import main as _main
+                _main()
+
+    # --- step 7: current state is still blocked ---
+
+    def test_step7_current_paper_path_still_raises_after_preflight(self):
+        """Confirm the current NotImplementedError guard is still in place.
+
+        This test will be removed (or updated to a positive assertion) when
+        the final paper execution wiring PR is merged.
+        """
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        from src.config.loader import (
+            AppConfig, BacktestConfig, DataConfig, ExecutionConfig,
+            LoggingConfig, RiskConfig, StrategyConfig,
+        )
+        cfg = AppConfig(
+            backtest=BacktestConfig(
+                start_date="2024-01-15", end_date="2024-01-15",
+                initial_capital=100_000, commission_per_share=0.0, slippage_per_share=0.0,
+            ),
+            symbols=["SPY"],
+            data=DataConfig(provider="yahoo", bar_interval="5m", timezone="America/New_York"),
+            strategy=StrategyConfig(name="opening_range_breakout", params={
+                "opening_range_start": "09:30", "opening_range_end": "10:00",
+                "force_exit_time": "15:55", "position_size_pct": 0.95, "long_only": True,
+            }),
+            risk=RiskConfig(),
+            logging=LoggingConfig(level="WARNING", format="%(message)s"),
+            execution=ExecutionConfig(mode="paper", paper_trading_enabled=True),
+        )
+        fake_preflight = {"ok": True, "account": {"status": "ACTIVE"},
+                          "positions": {}, "symbols": ["SPY"]}
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=fake_preflight), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order",
+                               side_effect=AssertionError("submit_order must not be called")), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog"]):
+            with pytest.raises(NotImplementedError, match="order execution is not yet wired"):
+                from src.main import main as _main
+                _main()

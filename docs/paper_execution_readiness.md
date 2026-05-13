@@ -7,6 +7,7 @@ preflight-only state and actual paper order execution.
 See also:
 - [Alpaca Adapter Design](alpaca_adapter_design.md) — full adapter specification
 - [Paper Trading Readiness Checklist](paper_trading_readiness.md) — original system-level checklist
+- [Paper Execution Runbook](paper_execution_runbook.md) — step-by-step manual procedure for the project owner
 
 ---
 
