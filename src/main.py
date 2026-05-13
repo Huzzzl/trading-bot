@@ -157,8 +157,10 @@ def main() -> None:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    logger.info("Loaded config: strategy=%s  symbols=%s  mode=%s",
-                cfg.strategy.name, cfg.symbols, args.mode)
+    logger.info(
+        "Loaded config: strategy=%s  symbols=%s  cli_mode=%s  execution.mode=%s",
+        cfg.strategy.name, cfg.symbols, args.mode, cfg.execution.mode,
+    )
     logger.info(
         "Startup | execution.mode=%s  dry_run_broker=%s  symbols=%s  strategy=%s  output_dir=%s",
         cfg.execution.mode,

@@ -167,6 +167,24 @@ class TestStartupLogs:
         combined = "\n".join(msgs)
         assert "opening_range_breakout" in combined
 
+    def test_startup_log_distinguishes_cli_mode_from_execution_mode(self):
+        """First log line must show both cli_mode and execution.mode separately.
+
+        This prevents confusion when args.mode (e.g. "backtest") differs from
+        cfg.execution.mode (e.g. "paper").
+        """
+        msgs = self._capture_startup_logs(mode="backtest")
+        combined = "\n".join(msgs)
+        assert "cli_mode=" in combined
+        assert "execution.mode=" in combined
+
+    def test_startup_log_shows_correct_execution_mode(self):
+        """execution.mode in the first log line must reflect cfg, not args."""
+        msgs = self._capture_startup_logs(mode="backtest")
+        # Find the "Loaded config" line
+        loaded_line = next((m for m in msgs if "Loaded config" in m), "")
+        assert "execution.mode=backtest" in loaded_line
+
     def test_startup_logs_output_dir(self):
         msgs = self._capture_startup_logs()
         combined = "\n".join(msgs)
