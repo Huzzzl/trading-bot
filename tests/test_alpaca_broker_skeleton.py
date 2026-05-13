@@ -2689,6 +2689,50 @@ class TestPreflightCheck:
         assert result["ok"] is True
         MockTC.assert_called_once()  # mocked — no real HTTP
 
+    # --- allow_existing_positions parameter ---
+
+    def test_default_raises_on_target_position(self):
+        """Default (allow_existing_positions=False) still raises on target overlap."""
+        positions = {"SPY": {"symbol": "SPY", "qty": 1.0}}
+        adapter   = self._patch_broker(self._adapter(), positions=positions)
+        with pytest.raises(RuntimeError, match="Unexpected open positions"):
+            adapter.preflight_check(["SPY"])
+
+    def test_allow_existing_positions_true_returns_ok(self):
+        """allow_existing_positions=True passes even with a target-symbol position."""
+        positions = {"SPY": {"symbol": "SPY", "qty": 1.0}}
+        adapter   = self._patch_broker(self._adapter(), positions=positions)
+        result    = adapter.preflight_check(["SPY"], allow_existing_positions=True)
+        assert result["ok"] is True
+
+    def test_allow_existing_positions_true_returns_positions(self):
+        positions = {"SPY": {"symbol": "SPY", "qty": 1.0}}
+        adapter   = self._patch_broker(self._adapter(), positions=positions)
+        result    = adapter.preflight_check(["SPY"], allow_existing_positions=True)
+        assert result["positions"] is positions
+
+    def test_allow_existing_positions_true_still_fails_on_inactive_account(self):
+        """Account safety checks are not relaxed when allow_existing_positions=True."""
+        account   = self._active_account(status="INACTIVE")
+        positions = {"SPY": {"symbol": "SPY", "qty": 1.0}}
+        adapter   = self._patch_broker(self._adapter(), account=account, positions=positions)
+        with pytest.raises(RuntimeError, match="not active"):
+            adapter.preflight_check(["SPY"], allow_existing_positions=True)
+
+    def test_allow_existing_positions_true_still_fails_on_trading_blocked(self):
+        account   = self._active_account(trading_blocked=True)
+        positions = {"SPY": {"symbol": "SPY", "qty": 1.0}}
+        adapter   = self._patch_broker(self._adapter(), account=account, positions=positions)
+        with pytest.raises(RuntimeError, match="trading is blocked"):
+            adapter.preflight_check(["SPY"], allow_existing_positions=True)
+
+    def test_allow_existing_positions_false_explicit_still_raises(self):
+        """Passing allow_existing_positions=False explicitly matches default."""
+        positions = {"SPY": {"symbol": "SPY", "qty": 1.0}}
+        adapter   = self._patch_broker(self._adapter(), positions=positions)
+        with pytest.raises(RuntimeError, match="Unexpected open positions"):
+            adapter.preflight_check(["SPY"], allow_existing_positions=False)
+
 
 # ---------------------------------------------------------------------------
 # main.py paper_trading_enabled flag
@@ -2812,7 +2856,7 @@ class TestPaperTradingEnabledFlag:
             from src.main import main as _main
             _main()
         mock_init.assert_called_once()
-        mock_pf.assert_called_once_with(cfg.symbols)
+        mock_pf.assert_called_once_with(cfg.symbols, allow_existing_positions=True)
 
     def test_paper_enabled_submit_order_not_called_when_no_valid_intents(self, tmp_path):
         """submit_order is not called when no intents are generated."""
@@ -3581,7 +3625,7 @@ class TestPaperExecutionPath:
         call_log: list[str] = []
         cfg = self._make_config(paper_preview_only=True, paper_selected_client_order_id=None)
 
-        def fake_preflight(symbols):
+        def fake_preflight(symbols, **kwargs):
             call_log.append("preflight")
             return self._fake_preflight()
 
@@ -4528,3 +4572,235 @@ class TestPaperPreviewFlow:
             from src.main import main as _main
             _main()
         MockTC.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Position-aware paper safety (main.py integration)
+# ---------------------------------------------------------------------------
+
+class TestPositionAwarePaperSafety:
+    """Tests for position-aware submit blocking and preview-only pass-through.
+
+    Rules:
+    - Preview-only always runs (writes CSV) even with existing target positions.
+    - Submit buy is blocked if preflight reports a nonzero position for the symbol.
+    - Submit with no existing position proceeds to mocked submit_order.
+    - Non-target positions never block the selected buy.
+    - No cancel_order or sell is automatically called.
+    """
+
+    def _make_config(self, paper_preview_only: bool = False,
+                     paper_selected_client_order_id: str | None = "BT-000001",
+                     paper_order_quantity_override=None):
+        from src.config.loader import (
+            AppConfig, BacktestConfig, DataConfig, ExecutionConfig,
+            LoggingConfig, RiskConfig, StrategyConfig,
+        )
+        return AppConfig(
+            backtest=BacktestConfig(
+                start_date="2024-01-15", end_date="2024-01-15",
+                initial_capital=100_000, commission_per_share=0.0, slippage_per_share=0.0,
+            ),
+            symbols=["SPY"],
+            data=DataConfig(provider="yahoo", bar_interval="5m", timezone="America/New_York"),
+            strategy=StrategyConfig(name="opening_range_breakout", params={
+                "opening_range_start": "09:30", "opening_range_end": "10:00",
+                "force_exit_time": "15:55", "position_size_pct": 0.95, "long_only": True,
+            }),
+            risk=RiskConfig(),
+            logging=LoggingConfig(level="WARNING", format="%(message)s"),
+            execution=ExecutionConfig(
+                mode="paper",
+                paper_trading_enabled=True,
+                paper_preview_only=paper_preview_only,
+                paper_selected_client_order_id=paper_selected_client_order_id,
+                paper_order_quantity_override=paper_order_quantity_override,
+            ),
+        )
+
+    def _make_intent(self, symbol="SPY", side="buy", quantity=1.0,
+                     client_order_id="BT-000001"):
+        from src.execution.order_intent import OrderIntent
+        return OrderIntent(
+            symbol=symbol, side=side, quantity=quantity,
+            order_type="market", reason="entry",
+            timestamp=pd.Timestamp("2024-01-15 10:00:00", tz="America/New_York"),
+            client_order_id=client_order_id,
+        )
+
+    def _make_result(self, client_order_id="BT-000001"):
+        from src.execution.broker import OrderResult
+        return OrderResult(
+            order_id=f"ALPACA-{client_order_id}",
+            symbol="SPY", side="buy", quantity=1.0, status="accepted",
+            submitted_at=pd.Timestamp("2024-01-15 10:00:00", tz="America/New_York"),
+            reason="entry", client_order_id=client_order_id,
+            metadata={"raw_status": "accepted", "partial_fill": False},
+        )
+
+    def _fake_engine(self, intents):
+        eng = mock.MagicMock()
+        eng.run.return_value = {
+            "order_intents": intents,
+            "metrics": {"total_return": 0.0},
+            "trades": [], "equity_curve": [],
+        }
+        eng._portfolio.positions = {}
+        return eng
+
+    def _fake_preflight(self, positions=None):
+        return {
+            "ok": True,
+            "account": {"status": "ACTIVE"},
+            "positions": positions or {},
+            "symbols": ["SPY"],
+        }
+
+    @staticmethod
+    def _pass_recon_generate(rg_self):
+        import json as _j
+        rg_self._output_dir.mkdir(parents=True, exist_ok=True)
+        (rg_self._output_dir / "order_reconciliation.json").write_text(
+            _j.dumps({"overall_status": "PASS"})
+        )
+
+    def _run(self, cfg, intents, preflight=None, submit_return=None, tmp_path=None):
+        import tempfile
+        import src.main  # must be imported before mock.patch resolves "src.main.*"
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        out = str(tmp_path) if tmp_path is not None else tempfile.mkdtemp()
+        if preflight is None:
+            preflight = self._fake_preflight()
+        mock_submit = mock.MagicMock(return_value=submit_return)
+        mock_cancel = mock.MagicMock(side_effect=AssertionError("cancel_order must not be called"))
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=preflight), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
+             mock.patch.object(AlpacaBrokerAdapter, "cancel_order", mock_cancel), \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine(intents)), \
+             mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
+                        self._pass_recon_generate), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog", "--output-dir", out]):
+            src.main.main()
+        return mock_submit
+
+    # --- preview-only with existing SPY position ---
+
+    def test_preview_with_existing_spy_position_writes_csv(self, tmp_path):
+        """Preview-only runs and writes candidate CSV even with existing SPY position."""
+        import pandas
+        cfg     = self._make_config(paper_preview_only=True,
+                                    paper_selected_client_order_id=None)
+        intents = [self._make_intent()]
+        preflight = self._fake_preflight(positions={"SPY": {"symbol": "SPY", "qty": 1.0}})
+        self._run(cfg, intents, preflight=preflight, tmp_path=tmp_path)
+        cand_path = tmp_path / "paper_candidate_intents.csv"
+        assert cand_path.exists()
+        df = pandas.read_csv(cand_path)
+        assert len(df) == 1
+
+    def test_preview_with_existing_spy_position_does_not_call_submit(self, tmp_path):
+        """Preview-only never calls submit_order, regardless of existing positions."""
+        cfg       = self._make_config(paper_preview_only=True,
+                                      paper_selected_client_order_id=None)
+        intents   = [self._make_intent()]
+        preflight = self._fake_preflight(positions={"SPY": {"symbol": "SPY", "qty": 1.0}})
+        mock_submit = self._run(cfg, intents, preflight=preflight, tmp_path=tmp_path)
+        mock_submit.assert_not_called()
+
+    # --- submit buy blocked by existing position ---
+
+    def test_submit_buy_with_existing_spy_position_raises(self, tmp_path):
+        """Submit mode buy is blocked when preflight reports an existing SPY position."""
+        cfg       = self._make_config()
+        intents   = [self._make_intent()]
+        preflight = self._fake_preflight(positions={"SPY": {"symbol": "SPY", "qty": 1.0}})
+        with pytest.raises(RuntimeError, match="existing SPY position detected"):
+            self._run(cfg, intents, preflight=preflight, tmp_path=tmp_path)
+
+    def test_submit_buy_with_existing_spy_position_does_not_call_submit(self, tmp_path):
+        """submit_order is never called when position safety blocks the buy."""
+        cfg       = self._make_config()
+        intents   = [self._make_intent()]
+        preflight = self._fake_preflight(positions={"SPY": {"symbol": "SPY", "qty": 1.0}})
+        import src.main
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        out = str(tmp_path)
+        mock_submit = mock.MagicMock()
+        mock_cancel = mock.MagicMock(side_effect=AssertionError("cancel_order must not be called"))
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=preflight), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
+             mock.patch.object(AlpacaBrokerAdapter, "cancel_order", mock_cancel), \
+             mock.patch("src.main.build_engine",
+                        return_value=self._fake_engine(intents)), \
+             mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
+                        self._pass_recon_generate), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog", "--output-dir", out]):
+            with pytest.raises(RuntimeError, match="existing SPY position"):
+                src.main.main()
+        mock_submit.assert_not_called()
+
+    def test_submit_buy_error_message_says_no_order_submitted(self, tmp_path):
+        """Error message must say no order was submitted."""
+        cfg       = self._make_config()
+        intents   = [self._make_intent()]
+        preflight = self._fake_preflight(positions={"SPY": {"symbol": "SPY", "qty": 1.0}})
+        with pytest.raises(RuntimeError, match="No order was submitted"):
+            self._run(cfg, intents, preflight=preflight, tmp_path=tmp_path)
+
+    # --- submit buy proceeds when no position ---
+
+    def test_submit_buy_with_no_position_calls_submit(self, tmp_path):
+        """Submit mode buy proceeds to submit_order when no existing position."""
+        cfg       = self._make_config()
+        intents   = [self._make_intent()]
+        result    = self._make_result()
+        preflight = self._fake_preflight(positions={})
+        mock_submit = self._run(cfg, intents, preflight=preflight,
+                                submit_return=result, tmp_path=tmp_path)
+        mock_submit.assert_called_once()
+
+    # --- non-target position does not block SPY buy ---
+
+    def test_non_target_position_does_not_block_spy_buy(self, tmp_path):
+        """An existing QQQ position should not block a selected SPY buy."""
+        cfg       = self._make_config()
+        intents   = [self._make_intent()]
+        result    = self._make_result()
+        preflight = self._fake_preflight(
+            positions={"QQQ": {"symbol": "QQQ", "qty": 5.0}}
+        )
+        mock_submit = self._run(cfg, intents, preflight=preflight,
+                                submit_return=result, tmp_path=tmp_path)
+        mock_submit.assert_called_once()
+
+    # --- zero-qty position does not block ---
+
+    def test_zero_qty_position_does_not_block_spy_buy(self, tmp_path):
+        """A position with qty=0 is treated as no position and does not block buy."""
+        cfg       = self._make_config()
+        intents   = [self._make_intent()]
+        result    = self._make_result()
+        preflight = self._fake_preflight(
+            positions={"SPY": {"symbol": "SPY", "qty": 0.0}}
+        )
+        mock_submit = self._run(cfg, intents, preflight=preflight,
+                                submit_return=result, tmp_path=tmp_path)
+        mock_submit.assert_called_once()
+
+    # --- cancel_order is never called ---
+
+    def test_cancel_order_never_called_on_position_block(self, tmp_path):
+        """cancel_order must never be called when a position blocks the buy."""
+        cfg       = self._make_config()
+        intents   = [self._make_intent()]
+        preflight = self._fake_preflight(positions={"SPY": {"symbol": "SPY", "qty": 1.0}})
+        # _run already mocks cancel_order to raise AssertionError if called
+        with pytest.raises(RuntimeError, match="existing SPY position"):
+            self._run(cfg, intents, preflight=preflight, tmp_path=tmp_path)
+        # If we get here without AssertionError, cancel_order was not called — pass.

@@ -422,14 +422,16 @@ class AlpacaBrokerAdapter(BrokerAdapter):
         account: dict[str, Any],
         positions: list[dict[str, Any]],
         symbols: list[str],
+        allow_existing_positions: bool = False,
     ) -> None:
         """Validate account state and open positions before trading begins.
 
         Raises
         ------
         RuntimeError
-            If the account is not active, trading is blocked, or any open
-            position overlaps the target symbol list.
+            If the account is not active, trading is blocked, or (when
+            *allow_existing_positions* is ``False``) any open position
+            overlaps the target symbol list.
         """
         if account.get("status") != "ACTIVE":
             raise RuntimeError("Alpaca account is not active")
@@ -438,13 +440,18 @@ class AlpacaBrokerAdapter(BrokerAdapter):
         if account.get("account_blocked") is True:
             raise RuntimeError("Alpaca account is blocked")
 
-        target = {s.upper() for s in symbols}
-        for pos in positions:
-            sym = pos.get("symbol")
-            if sym and sym.upper() in target:
-                raise RuntimeError("Unexpected open positions for target symbols")
+        if not allow_existing_positions:
+            target = {s.upper() for s in symbols}
+            for pos in positions:
+                sym = pos.get("symbol")
+                if sym and sym.upper() in target:
+                    raise RuntimeError("Unexpected open positions for target symbols")
 
-    def preflight_check(self, symbols: list[str]) -> dict[str, Any]:
+    def preflight_check(
+        self,
+        symbols: list[str],
+        allow_existing_positions: bool = False,
+    ) -> dict[str, Any]:
         """Validate account and position state before paper trading begins.
 
         Parameters
@@ -453,6 +460,12 @@ class AlpacaBrokerAdapter(BrokerAdapter):
             Target trading symbols.  Must be non-empty; each entry must be
             non-blank after stripping whitespace.  All symbols are normalised
             to upper-case before validation.
+        allow_existing_positions:
+            When ``False`` (default) any open position in a target symbol
+            raises :exc:`RuntimeError` — the original fail-closed behaviour.
+            When ``True`` the position check is skipped; the caller is
+            responsible for inspecting ``result["positions"]`` and enforcing
+            its own policy (e.g. main.py blocks buy submits but allows preview).
 
         Returns
         -------
@@ -465,8 +478,9 @@ class AlpacaBrokerAdapter(BrokerAdapter):
         ValueError
             If *symbols* is empty or any symbol is blank.
         RuntimeError
-            If the account is inactive, trading is blocked, or an open
-            position exists for one of the target symbols.
+            If the account is inactive, trading is blocked, or
+            (*allow_existing_positions* is ``False`` and) an open position
+            exists for one of the target symbols.
         """
         if not symbols:
             raise ValueError("symbols must not be empty")
@@ -481,7 +495,12 @@ class AlpacaBrokerAdapter(BrokerAdapter):
         account   = self.get_account()
         positions = self.get_positions()
 
-        self._validate_startup_state(account, list(positions.values()), normalised)
+        self._validate_startup_state(
+            account,
+            list(positions.values()),
+            normalised,
+            allow_existing_positions=allow_existing_positions,
+        )
 
         return {
             "ok":        True,

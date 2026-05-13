@@ -62,12 +62,26 @@ has been completed yet.**
 | `order_type` must be `market` | `RuntimeError` |
 | `quantity` must be `<= 1` (after override) | `RuntimeError` |
 | `client_order_id` must be non-empty | `RuntimeError` |
+| Selected buy with existing nonzero position for that symbol | `RuntimeError` — no order submitted |
 | `OrderResult` must carry `client_order_id` | `RuntimeError` after `submit_order` |
 | `order_reconciliation.json` must be written | `RuntimeError` if file absent after `generate_all` |
 | Reconciliation `overall_status` must be `PASS` or `N/A` | `RuntimeError` on `WARN` or other |
 
 Non-selected candidate intents are visible in `paper_candidate_intents.csv` but their
 content does not block submission of the selected intent.
+
+**Position-aware buy safety (`main.py`):**
+
+- Preview-only mode always runs the engine and writes `paper_candidate_intents.csv`
+  even when the paper account already holds a position in the target symbol.
+- Submit mode calls `preflight_check(..., allow_existing_positions=True)` so that
+  the check does not abort preview runs; `main.py` then enforces its own position rule.
+- If the selected intent is a buy and the paper account holds a nonzero position in that
+  symbol, `main.py` raises `RuntimeError` before `submit_order`.  The error message
+  explicitly states no order was submitted.
+- Positions in non-target symbols and positions with `qty = 0` do not block a buy.
+- There is no automatic close or sell logic.  To submit another buy, manually close the
+  existing position in the Alpaca dashboard first.
 
 **Optional quantity override (`paper_order_quantity_override`):**
 
@@ -114,9 +128,10 @@ that blocks order submission.
 
 ### 2.3 Startup preflight
 
-- `preflight_check(symbols)` must pass before any order is submitted.
+- `preflight_check(symbols, allow_existing_positions=True)` is called in paper mode.
 - Account must be `ACTIVE`, `trading_blocked=False`, `account_blocked=False`.
-- No existing open position may overlap the target symbol list.
+- Existing target-symbol positions do **not** block preflight in paper mode; position
+  blocking for buy submits is handled separately by `main.py` (see position-aware safety above).
 - If preflight fails for any reason, order submission must not proceed.
 
 ### 2.4 Order submission rules

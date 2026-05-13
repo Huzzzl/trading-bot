@@ -214,7 +214,10 @@ def main() -> None:
         _PAPER_MAX_QTY    = 1
 
         broker = AlpacaBrokerAdapter()
-        preflight = broker.preflight_check(cfg.symbols)
+        # allow_existing_positions=True: account safety is still enforced but an
+        # existing target-symbol position does not abort preview runs.  Submit mode
+        # enforces its own buy-blocking check below using preflight["positions"].
+        preflight = broker.preflight_check(cfg.symbols, allow_existing_positions=True)
         logger.info(
             "Paper trading preflight passed: account_status=%s symbols=%s",
             preflight["account"].get("status"),
@@ -351,6 +354,18 @@ def main() -> None:
                 f"Paper safety constraint violated for selected intent "
                 f"{selected_intent.client_order_id!r}: " + "; ".join(_violations)
             )
+
+        # Position safety: block a buy if an existing position already exists for the
+        # selected symbol.  Sell intents are not blocked (no automatic close logic).
+        if selected_intent.side == "buy":
+            _existing_pos = preflight["positions"].get(selected_intent.symbol.upper())
+            if _existing_pos and (_existing_pos.get("qty") or 0) != 0:
+                raise RuntimeError(
+                    f"Paper safety: existing {selected_intent.symbol} position detected "
+                    f"(qty={_existing_pos.get('qty')}). "
+                    f"Close it in the Alpaca dashboard before submitting another buy. "
+                    f"No order was submitted."
+                )
 
         logger.info(
             "Paper execution: submitting intent client_order_id=%s symbol=%s side=%s qty=%s",
