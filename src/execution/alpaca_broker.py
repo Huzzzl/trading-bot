@@ -179,14 +179,17 @@ class AlpacaBrokerAdapter(BrokerAdapter):
             raise ValueError("side must be buy or sell")
 
     @staticmethod
-    def _normalize_status(status: str) -> str:
-        """Map an Alpaca order status string to an internal ``OrderResult.status``.
+    def _normalize_status(status: Any) -> str:
+        """Map an Alpaca order status (str or SDK enum) to an internal ``OrderResult.status``.
 
         Parameters
         ----------
         status:
-            Raw status string from the Alpaca API.  Leading/trailing whitespace
-            is stripped and comparison is case-insensitive.
+            Raw status from the Alpaca API — either a plain string or an SDK
+            enum such as ``OrderStatus.PENDING_NEW``.  Leading/trailing
+            whitespace is stripped and comparison is case-insensitive.
+            Enum-style values (containing ``"."``) are split on the last
+            ``"."`` so ``"OrderStatus.PENDING_NEW"`` becomes ``"pending_new"``.
 
         Returns
         -------
@@ -199,7 +202,10 @@ class AlpacaBrokerAdapter(BrokerAdapter):
         ValueError
             If *status* does not match any known Alpaca status.
         """
-        s = status.strip().lower()
+        raw = str(status).strip()
+        if "." in raw:
+            raw = raw.rsplit(".", 1)[-1]
+        s = raw.lower()
         if s in {"new", "pending_new", "accepted", "accepted_for_bidding"}:
             return "accepted"
         if s in {"filled", "partially_filled"}:
@@ -211,16 +217,19 @@ class AlpacaBrokerAdapter(BrokerAdapter):
         raise ValueError(f"Unknown Alpaca order status: {status!r}")
 
     @staticmethod
-    def _is_partial_fill(status: str) -> bool:
+    def _is_partial_fill(status: Any) -> bool:
         """Return ``True`` if *status* indicates a partial fill.
 
         Parameters
         ----------
         status:
-            Raw status string from the Alpaca API.  Leading/trailing whitespace
-            is stripped and comparison is case-insensitive.
+            Raw status from the Alpaca API — either a plain string or an SDK
+            enum.  Normalised the same way as :meth:`_normalize_status`.
         """
-        return status.strip().lower() == "partially_filled"
+        raw = str(status).strip()
+        if "." in raw:
+            raw = raw.rsplit(".", 1)[-1]
+        return raw.lower() == "partially_filled"
 
     def _build_order_payload(self, intent: OrderIntent) -> dict[str, Any]:
         """Convert an :class:`OrderIntent` into an Alpaca market order request dict.

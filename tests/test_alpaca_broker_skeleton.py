@@ -866,6 +866,38 @@ class TestNormalizeStatus:
         with pytest.raises(ValueError, match="Unknown Alpaca order status"):
             self._norm("banana")
 
+    # --- SDK enum-style strings (e.g. "OrderStatus.PENDING_NEW") ---
+
+    def test_sdk_enum_pending_new_maps_to_accepted(self):
+        assert self._norm("OrderStatus.PENDING_NEW") == "accepted"
+
+    def test_sdk_enum_new_maps_to_accepted(self):
+        assert self._norm("OrderStatus.NEW") == "accepted"
+
+    def test_sdk_enum_accepted_maps_to_accepted(self):
+        assert self._norm("OrderStatus.ACCEPTED") == "accepted"
+
+    def test_sdk_enum_filled_maps_to_filled(self):
+        assert self._norm("OrderStatus.FILLED") == "filled"
+
+    def test_sdk_enum_partially_filled_maps_to_filled(self):
+        assert self._norm("OrderStatus.PARTIALLY_FILLED") == "filled"
+
+    def test_sdk_enum_canceled_maps_to_cancelled(self):
+        assert self._norm("OrderStatus.CANCELED") == "cancelled"
+
+    def test_sdk_enum_rejected_maps_to_rejected(self):
+        assert self._norm("OrderStatus.REJECTED") == "rejected"
+
+    def test_sdk_enum_object_pending_new_maps_to_accepted(self):
+        """If alpaca-py OrderStatus enum is importable, test the real enum object."""
+        try:
+            from alpaca.trading.enums import OrderStatus
+            result = self._norm(OrderStatus.PENDING_NEW)
+        except ImportError:
+            pytest.skip("alpaca-py not installed")
+        assert result == "accepted"
+
 
 # ---------------------------------------------------------------------------
 # _is_partial_fill
@@ -1101,6 +1133,38 @@ class TestOrderResponseToResult:
         with mock.patch.object(adapter, "_ensure_market_hours",
                                side_effect=AssertionError("should not be called")):
             adapter._order_response_to_result(self._filled_dict(), self._intent())
+
+    # --- SDK enum status on response object ---
+
+    def test_order_response_to_result_with_sdk_enum_status_string(self):
+        """response.status that str()s to 'OrderStatus.PENDING_NEW' is parsed correctly."""
+        class _FakeSDKOrder:
+            id               = "alpaca-uuid-sdk-001"
+            symbol           = "SPY"
+            side             = "buy"
+            qty              = "1"
+            submitted_at     = "2026-05-13T15:42:35-05:00"
+            filled_at        = None
+            filled_avg_price = None
+            filled_qty       = None
+            client_order_id  = "BT-000039"
+
+            class _SDKStatus:
+                def __str__(self):
+                    return "OrderStatus.PENDING_NEW"
+
+            status = _SDKStatus()
+
+        r = self._adapter()._order_response_to_result(_FakeSDKOrder(), self._intent())
+        assert r.status == "accepted"
+        assert r.metadata["raw_status"] == "OrderStatus.PENDING_NEW"
+
+    def test_order_response_to_result_with_sdk_enum_status_str_argument(self):
+        """dict response with status='OrderStatus.PENDING_NEW' string is parsed correctly."""
+        d = self._filled_dict(status="OrderStatus.PENDING_NEW")
+        r = self._adapter()._order_response_to_result(d, self._intent())
+        assert r.status == "accepted"
+        assert r.metadata["raw_status"] == "OrderStatus.PENDING_NEW"
 
     # --- submit_order requires credentials when no client is injected ---
 
