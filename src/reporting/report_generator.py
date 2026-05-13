@@ -19,6 +19,7 @@ from src.backtest.trade import Trade
 from src.config.loader import AppConfig
 from src.execution.broker import OrderResult
 from src.execution.order_intent import OrderIntent
+from src.reporting.reconciliation import build_reconciliation
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -265,77 +266,12 @@ class ReportGenerator:
     def _build_reconciliation(self) -> dict:
         """Compare order_intents with order_results and return a summary dict.
 
-        When all intents and results carry a ``client_order_id``, matching is
-        done by ID (order-independent).  Otherwise falls back to positional
-        comparison.  Sets ``missing_ids_warn=True`` when intents have IDs but
-        results don't, which promotes overall_status to WARN.
-
-        Fields
-        ------
-        intent_count, result_count, unmatched_count, rejected_count,
-        accepted_count, filled_count, mismatch_count, missing_ids_warn,
-        overall_status ("PASS"|"WARN")
+        Delegates to :func:`~src.reporting.reconciliation.build_reconciliation`.
         """
-        intents = self._order_intents
-        results = self._order_results or []
-
-        intent_count   = len(intents)
-        result_count   = len(results)
-        rejected_count = sum(1 for r in results if r.status == "rejected")
-        accepted_count = sum(1 for r in results if r.status == "accepted")
-        filled_count   = sum(1 for r in results if r.status == "filled")
-
-        intent_ids = [oi.client_order_id for oi in intents]
-        result_ids = [r.client_order_id  for r  in results]
-
-        all_intents_have_ids = intents and all(cid is not None for cid in intent_ids)
-        all_results_have_ids = results and all(cid is not None for cid in result_ids)
-        missing_ids_warn = bool(all_intents_have_ids and not all_results_have_ids)
-
-        mismatch_count  = 0
-        unmatched_count = 0
-
-        if all_intents_have_ids and all_results_have_ids:
-            # ID-based matching — order-independent
-            intent_map: dict[str, OrderIntent] = {oi.client_order_id: oi for oi in intents}  # type: ignore[index]
-            result_map: dict[str, OrderResult] = {r.client_order_id:  r  for r  in results}  # type: ignore[index]
-            all_ids = set(intent_map) | set(result_map)
-            unmatched_count = len(all_ids) - len(set(intent_map) & set(result_map))
-            for cid in set(intent_map) & set(result_map):
-                oi = intent_map[cid]
-                r  = result_map[cid]
-                if (oi.symbol   != r.symbol   or
-                    oi.side     != r.side     or
-                    oi.quantity != r.quantity or
-                    oi.reason   != r.reason):
-                    mismatch_count += 1
-        else:
-            # Positional fallback
-            unmatched_count = abs(intent_count - result_count)
-            for oi, r in zip(intents, results):
-                if (oi.symbol   != r.symbol   or
-                    oi.side     != r.side     or
-                    oi.quantity != r.quantity or
-                    oi.reason   != r.reason):
-                    mismatch_count += 1
-
-        warn = (
-            missing_ids_warn
-            or result_count != intent_count
-            or unmatched_count > 0
-            or mismatch_count > 0
+        return build_reconciliation(
+            self._order_intents,
+            self._order_results or [],
         )
-        return {
-            "intent_count":    intent_count,
-            "result_count":    result_count,
-            "unmatched_count": unmatched_count,
-            "rejected_count":  rejected_count,
-            "accepted_count":  accepted_count,
-            "filled_count":    filled_count,
-            "mismatch_count":  mismatch_count,
-            "missing_ids_warn": missing_ids_warn,
-            "overall_status":  "WARN" if warn else "PASS",
-        }
 
     def _write_reconciliation_json(self, reconciliation: dict) -> None:
         path = self._output_dir / "order_reconciliation.json"
