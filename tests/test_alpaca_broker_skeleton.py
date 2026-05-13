@@ -2316,3 +2316,195 @@ class TestPreflightCheck:
             result = adapter.preflight_check(["SPY"])
         assert result["ok"] is True
         MockTC.assert_called_once()  # mocked — no real HTTP
+
+
+# ---------------------------------------------------------------------------
+# main.py paper_trading_enabled flag
+# ---------------------------------------------------------------------------
+
+class TestPaperTradingEnabledFlag:
+    """Tests for the paper_trading_enabled config flag in main.py."""
+
+    def _make_config(self, mode: str = "paper", paper_trading_enabled: bool = False,
+                     **exec_kwargs):
+        from src.config.loader import (
+            AppConfig, BacktestConfig, DataConfig, ExecutionConfig,
+            LoggingConfig, RiskConfig, StrategyConfig,
+        )
+        return AppConfig(
+            backtest=BacktestConfig(
+                start_date="2024-01-15", end_date="2024-01-15",
+                initial_capital=100_000, commission_per_share=0.0, slippage_per_share=0.0,
+            ),
+            symbols=["SPY", "QQQ"],
+            data=DataConfig(provider="yahoo", bar_interval="5m", timezone="America/New_York"),
+            strategy=StrategyConfig(name="opening_range_breakout", params={
+                "opening_range_start": "09:30", "opening_range_end": "10:00",
+                "force_exit_time": "15:55", "position_size_pct": 0.95, "long_only": True,
+            }),
+            risk=RiskConfig(),
+            logging=LoggingConfig(level="WARNING", format="%(message)s"),
+            execution=ExecutionConfig(
+                mode=mode,
+                paper_trading_enabled=paper_trading_enabled,
+                **exec_kwargs,
+            ),
+        )
+
+    def _run_main(self, cfg):
+        from src.main import main as _main
+        with mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog"]):
+            _main()
+
+    # --- default / missing flag ---
+
+    def test_default_paper_trading_enabled_is_false(self):
+        from src.config.loader import ExecutionConfig
+        assert ExecutionConfig().paper_trading_enabled is False
+
+    def test_config_without_flag_defaults_to_false(self):
+        from src.config.loader import ExecutionConfig
+        cfg = ExecutionConfig(mode="paper")
+        assert cfg.paper_trading_enabled is False
+
+    # --- disabled path (paper_trading_enabled=False) ---
+
+    def test_paper_disabled_raises_before_adapter_creation(self):
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_config(mode="paper", paper_trading_enabled=False)
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__",
+                               side_effect=AssertionError("adapter must not be created")):
+            with mock.patch("src.main.load_config", return_value=cfg), \
+                 mock.patch("sys.argv", ["prog"]):
+                with pytest.raises(NotImplementedError, match="Paper trading is disabled"):
+                    from src.main import main as _main
+                    _main()
+
+    def test_paper_disabled_fail_closed_message(self):
+        cfg = self._make_config(mode="paper", paper_trading_enabled=False)
+        with mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog"]):
+            with pytest.raises(NotImplementedError) as exc_info:
+                from src.main import main as _main
+                _main()
+        assert "paper" in str(exc_info.value).lower()
+
+    # --- enabled path (paper_trading_enabled=True) ---
+
+    def test_paper_enabled_creates_adapter_and_calls_preflight(self):
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_config(mode="paper", paper_trading_enabled=True)
+        fake_preflight = {
+            "ok": True,
+            "account": {"status": "ACTIVE"},
+            "positions": {},
+            "symbols": ["SPY", "QQQ"],
+        }
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__",
+                               return_value=None) as mock_init, \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=fake_preflight) as mock_pf, \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog"]):
+            with pytest.raises(NotImplementedError):
+                from src.main import main as _main
+                _main()
+        mock_init.assert_called_once()
+        mock_pf.assert_called_once_with(cfg.symbols)
+
+    def test_paper_enabled_still_raises_before_order_execution(self):
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_config(mode="paper", paper_trading_enabled=True)
+        fake_preflight = {
+            "ok": True,
+            "account": {"status": "ACTIVE"},
+            "positions": {},
+            "symbols": ["SPY", "QQQ"],
+        }
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=fake_preflight), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog"]):
+            with pytest.raises(NotImplementedError, match="order execution is not yet wired"):
+                from src.main import main as _main
+                _main()
+
+    def test_paper_enabled_submit_order_never_called(self):
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_config(mode="paper", paper_trading_enabled=True)
+        fake_preflight = {"ok": True, "account": {"status": "ACTIVE"},
+                          "positions": {}, "symbols": ["SPY", "QQQ"]}
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=fake_preflight), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order",
+                               side_effect=AssertionError("submit_order must not be called")), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog"]):
+            with pytest.raises(NotImplementedError):
+                from src.main import main as _main
+                _main()
+
+    def test_paper_enabled_cancel_order_never_called(self):
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_config(mode="paper", paper_trading_enabled=True)
+        fake_preflight = {"ok": True, "account": {"status": "ACTIVE"},
+                          "positions": {}, "symbols": ["SPY", "QQQ"]}
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=fake_preflight), \
+             mock.patch.object(AlpacaBrokerAdapter, "cancel_order",
+                               side_effect=AssertionError("cancel_order must not be called")), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog"]):
+            with pytest.raises(NotImplementedError):
+                from src.main import main as _main
+                _main()
+
+    def test_paper_enabled_backtest_engine_not_created(self):
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        from src.backtest.engine import BacktestEngine
+        cfg = self._make_config(mode="paper", paper_trading_enabled=True)
+        fake_preflight = {"ok": True, "account": {"status": "ACTIVE"},
+                          "positions": {}, "symbols": ["SPY", "QQQ"]}
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=fake_preflight), \
+             mock.patch.object(BacktestEngine, "__init__",
+                               side_effect=AssertionError("BacktestEngine must not be created")), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog"]):
+            with pytest.raises(NotImplementedError):
+                from src.main import main as _main
+                _main()
+
+    def test_no_real_network_calls_when_enabled(self):
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_config(mode="paper", paper_trading_enabled=True)
+        fake_preflight = {"ok": True, "account": {"status": "ACTIVE"},
+                          "positions": {}, "symbols": ["SPY", "QQQ"]}
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=fake_preflight), \
+             mock.patch("alpaca.trading.client.TradingClient") as MockTC, \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog"]):
+            with pytest.raises(NotImplementedError):
+                from src.main import main as _main
+                _main()
+        MockTC.assert_not_called()
+
+    # --- backtest mode unchanged ---
+
+    def test_backtest_mode_unaffected_by_flag(self):
+        """Backtest still runs normally when paper_trading_enabled is in config."""
+        from src.config.loader import ExecutionConfig
+        cfg = self._make_config(mode="backtest", paper_trading_enabled=False)
+        assert cfg.execution.paper_trading_enabled is False
+        assert cfg.execution.mode == "backtest"
+
+    def test_no_live_trading_mode_introduced(self):
+        from src.config.loader import _VALID_EXECUTION_MODES  # noqa
+        assert "live" not in _VALID_EXECUTION_MODES

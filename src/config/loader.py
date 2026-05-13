@@ -56,8 +56,9 @@ class RiskConfig:
 
 @dataclass
 class ExecutionConfig:
-    mode:            str  = "backtest"
-    dry_run_broker:  bool = False
+    mode:                   str  = "backtest"
+    dry_run_broker:         bool = False
+    paper_trading_enabled:  bool = False
 
 
 @dataclass
@@ -169,6 +170,7 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
     execution_cfg = ExecutionConfig(
         mode=raw_mode,
         dry_run_broker=bool(ex.get("dry_run_broker", False)),
+        paper_trading_enabled=bool(ex.get("paper_trading_enabled", False)),
     )
 
     return AppConfig(
