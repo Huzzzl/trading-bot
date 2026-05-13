@@ -1487,6 +1487,69 @@ class TestValidateStartupState:
 # get_account / get_positions still raise NotImplementedError
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Strict boolean parsing in _account_response_to_dict
+# ---------------------------------------------------------------------------
+
+class TestAccountBooleanParsing:
+    def _adapter(self):
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        return AlpacaBrokerAdapter()
+
+    def _parse(self, trading_blocked=None, account_blocked=None):
+        resp = {}
+        if trading_blocked is not None:
+            resp["trading_blocked"] = trading_blocked
+        if account_blocked is not None:
+            resp["account_blocked"] = account_blocked
+        return self._adapter()._account_response_to_dict(resp)
+
+    def test_bool_true_maps_to_true(self):
+        result = self._parse(trading_blocked=True)
+        assert result["trading_blocked"] is True
+
+    def test_bool_false_maps_to_false(self):
+        result = self._parse(trading_blocked=False)
+        assert result["trading_blocked"] is False
+
+    def test_string_true_maps_to_true(self):
+        assert self._parse(trading_blocked="true")["trading_blocked"] is True
+        assert self._parse(trading_blocked="True")["trading_blocked"] is True
+        assert self._parse(trading_blocked="TRUE")["trading_blocked"] is True
+
+    def test_string_false_maps_to_false(self):
+        assert self._parse(trading_blocked="false")["trading_blocked"] is False
+        assert self._parse(trading_blocked="False")["trading_blocked"] is False
+        assert self._parse(trading_blocked="FALSE")["trading_blocked"] is False
+
+    def test_string_one_maps_to_true(self):
+        assert self._parse(trading_blocked="1")["trading_blocked"] is True
+
+    def test_string_zero_maps_to_false(self):
+        assert self._parse(trading_blocked="0")["trading_blocked"] is False
+
+    def test_int_one_maps_to_true(self):
+        assert self._parse(trading_blocked=1)["trading_blocked"] is True
+
+    def test_int_zero_maps_to_false(self):
+        assert self._parse(trading_blocked=0)["trading_blocked"] is False
+
+    def test_none_maps_to_none(self):
+        result = self._adapter()._account_response_to_dict({})
+        assert result["trading_blocked"] is None
+        assert result["account_blocked"] is None
+
+    def test_unknown_string_raises_value_error(self):
+        with pytest.raises(ValueError, match="Invalid boolean value"):
+            self._parse(trading_blocked="yes")
+
+    def test_account_blocked_uses_strict_parser(self):
+        assert self._parse(account_blocked=True)["account_blocked"] is True
+        assert self._parse(account_blocked="false")["account_blocked"] is False
+        with pytest.raises(ValueError, match="Invalid boolean value"):
+            self._parse(account_blocked="no")
+
+
 class TestGetAccountGetPositionsStillNotImplemented:
     def test_get_account_raises(self):
         from src.execution.alpaca_broker import AlpacaBrokerAdapter

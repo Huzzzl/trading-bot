@@ -301,7 +301,21 @@ class AlpacaBrokerAdapter(BrokerAdapter):
             return float(val) if val is not None else None
 
         def _bool(val: Any) -> bool | None:
-            return bool(val) if val is not None else None
+            if val is None:
+                return None
+            if isinstance(val, bool):
+                return val
+            if isinstance(val, int):
+                if val == 1:
+                    return True
+                if val == 0:
+                    return False
+            if isinstance(val, str):
+                if val.lower() in {"true", "1"}:
+                    return True
+                if val.lower() in {"false", "0"}:
+                    return False
+            raise ValueError("Invalid boolean value in Alpaca account response")
 
         return {
             "id":              _get("id"),
