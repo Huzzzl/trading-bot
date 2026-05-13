@@ -1,17 +1,20 @@
 """
 execution/alpaca_broker.py
 --------------------------
-Safety-only layer for a future Alpaca paper broker adapter.
+Paper-only Alpaca broker adapter.
 
 Current state
 -------------
 * Constructor enforces paper=True.
 * _validate_credentials() resolves credentials from constructor args or env
   vars and fails closed if either is missing or empty.
+* _get_client() lazily creates an alpaca-py TradingClient (paper=True) on
+  first call, caches it, and returns it.  An injected client bypasses
+  creation entirely (used by tests).
 * _ensure_market_hours() gates order submission to weekday RTH
   (09:30–16:00 America/New_York).
-* All four BrokerAdapter methods still raise NotImplementedError.
-* No Alpaca SDK is imported, no network connections are made.
+* get_positions(), get_account(), and cancel_order() still raise
+  NotImplementedError.
 """
 
 from __future__ import annotations
@@ -70,17 +73,36 @@ class AlpacaBrokerAdapter(BrokerAdapter):
     # ------------------------------------------------------------------
 
     def _get_client(self) -> Any:
-        """Return the injected broker client.
+        """Return the broker client, creating it lazily if necessary.
+
+        If a client was injected at construction time it is returned as-is
+        (test / mock path).  Otherwise credentials are resolved via
+        :meth:`_validate_credentials` and an ``alpaca.trading.client.TradingClient``
+        is created with ``paper=True`` and cached in ``self._client``.
+
+        The optional ``ALPACA_PAPER_BASE_URL`` env var overrides the SDK's
+        default paper endpoint (useful for integration test stubs).
 
         Raises
         ------
-        NotImplementedError
-            If no client was injected at construction time.  A real client
-            factory will be wired in once the Alpaca SDK dependency is added.
+        RuntimeError
+            If credentials are missing or empty.
         """
         if self._client is not None:
             return self._client
-        raise NotImplementedError("Alpaca client is not implemented yet.")
+
+        api_key, secret_key = self._validate_credentials()
+
+        from alpaca.trading.client import TradingClient  # lazy import — SDK not required at module load
+
+        url_override = os.environ.get("ALPACA_PAPER_BASE_URL") or None
+        self._client = TradingClient(
+            api_key=api_key,
+            secret_key=secret_key,
+            paper=True,
+            url_override=url_override,
+        )
+        return self._client
 
     def _validate_credentials(self) -> tuple[str, str]:
         """Resolve and validate Alpaca API credentials.

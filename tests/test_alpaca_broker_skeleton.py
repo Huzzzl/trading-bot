@@ -919,9 +919,13 @@ class TestClientInjection:
         adapter = self._adapter(client=fake)
         assert adapter._get_client() is adapter._get_client()
 
-    def test_get_client_without_client_raises_not_implemented(self):
-        with pytest.raises(NotImplementedError, match="Alpaca client is not implemented yet"):
-            self._adapter()._get_client()
+    def test_get_client_without_client_calls_validate_credentials(self):
+        adapter = self._adapter()
+        with mock.patch.object(adapter, "_validate_credentials",
+                               side_effect=RuntimeError("Missing Alpaca paper API credentials")) as mock_vc:
+            with pytest.raises(RuntimeError, match="Missing Alpaca paper API credentials"):
+                adapter._get_client()
+        mock_vc.assert_called_once()
 
     def test_get_client_does_not_read_env_vars(self):
         fake = object()
@@ -1560,3 +1564,161 @@ class TestGetAccountGetPositionsStillNotImplemented:
         from src.execution.alpaca_broker import AlpacaBrokerAdapter
         with pytest.raises(NotImplementedError):
             AlpacaBrokerAdapter().get_positions()
+
+
+# ---------------------------------------------------------------------------
+# _get_client() SDK client factory
+# ---------------------------------------------------------------------------
+
+class TestClientFactory:
+    """Tests for the lazy SDK client factory in _get_client().
+
+    All tests mock alpaca.trading.client.TradingClient so no real network
+    calls are made and no real credentials are required.
+    """
+
+    def _adapter(self, **kwargs):
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        return AlpacaBrokerAdapter(**kwargs)
+
+    def _mock_trading_client(self):
+        """Return a mock that stands in for TradingClient."""
+        return mock.MagicMock(name="TradingClient")
+
+    def test_init_does_not_read_env_vars(self, monkeypatch):
+        monkeypatch.delenv("ALPACA_API_KEY", raising=False)
+        monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
+        # Constructor must not raise even without credentials
+        adapter = self._adapter()
+        assert adapter._client is None
+
+    def test_get_client_with_injected_client_returns_it(self):
+        fake = object()
+        adapter = self._adapter(client=fake)
+        assert adapter._get_client() is fake
+
+    def test_get_client_with_injected_client_does_not_read_env_vars(self, monkeypatch):
+        monkeypatch.delenv("ALPACA_API_KEY", raising=False)
+        monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
+        fake = object()
+        adapter = self._adapter(client=fake)
+        assert adapter._get_client() is fake
+
+    def test_get_client_without_injected_client_calls_validate_credentials(self, monkeypatch):
+        monkeypatch.setenv("ALPACA_API_KEY", "test-key")
+        monkeypatch.setenv("ALPACA_SECRET_KEY", "test-secret")
+        adapter = self._adapter()
+        with mock.patch("alpaca.trading.client.TradingClient") as MockTC:
+            MockTC.return_value = self._mock_trading_client()
+            with mock.patch.object(adapter, "_validate_credentials",
+                                   wraps=adapter._validate_credentials) as spy:
+                adapter._get_client()
+            spy.assert_called_once()
+
+    def test_get_client_creates_sdk_client_with_paper_true(self, monkeypatch):
+        monkeypatch.setenv("ALPACA_API_KEY", "test-key")
+        monkeypatch.setenv("ALPACA_SECRET_KEY", "test-secret")
+        monkeypatch.delenv("ALPACA_PAPER_BASE_URL", raising=False)
+        adapter = self._adapter()
+        with mock.patch("alpaca.trading.client.TradingClient") as MockTC:
+            fake_instance = self._mock_trading_client()
+            MockTC.return_value = fake_instance
+            result = adapter._get_client()
+        MockTC.assert_called_once_with(
+            api_key="test-key",
+            secret_key="test-secret",
+            paper=True,
+            url_override=None,
+        )
+        assert result is fake_instance
+
+    def test_get_client_passes_url_override_when_env_var_set(self, monkeypatch):
+        monkeypatch.setenv("ALPACA_API_KEY", "test-key")
+        monkeypatch.setenv("ALPACA_SECRET_KEY", "test-secret")
+        monkeypatch.setenv("ALPACA_PAPER_BASE_URL", "https://custom.paper.endpoint")
+        adapter = self._adapter()
+        with mock.patch("alpaca.trading.client.TradingClient") as MockTC:
+            MockTC.return_value = self._mock_trading_client()
+            adapter._get_client()
+        _, kwargs = MockTC.call_args
+        assert kwargs["url_override"] == "https://custom.paper.endpoint"
+
+    def test_get_client_caches_client(self, monkeypatch):
+        monkeypatch.setenv("ALPACA_API_KEY", "test-key")
+        monkeypatch.setenv("ALPACA_SECRET_KEY", "test-secret")
+        adapter = self._adapter()
+        with mock.patch("alpaca.trading.client.TradingClient") as MockTC:
+            fake_instance = self._mock_trading_client()
+            MockTC.return_value = fake_instance
+            first  = adapter._get_client()
+            second = adapter._get_client()
+        assert first is second
+        MockTC.assert_called_once()  # only one construction
+
+    def test_missing_credentials_raise_before_sdk_import(self, monkeypatch):
+        monkeypatch.delenv("ALPACA_API_KEY", raising=False)
+        monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
+        adapter = self._adapter()
+        with mock.patch("alpaca.trading.client.TradingClient") as MockTC:
+            with pytest.raises(RuntimeError, match="Missing Alpaca paper API credentials"):
+                adapter._get_client()
+        MockTC.assert_not_called()
+
+    def test_no_secrets_in_logs(self, monkeypatch, caplog):
+        import logging
+        monkeypatch.setenv("ALPACA_API_KEY", "super-secret-key-xyz")
+        monkeypatch.setenv("ALPACA_SECRET_KEY", "super-secret-value-abc")
+        adapter = self._adapter()
+        with mock.patch("alpaca.trading.client.TradingClient") as MockTC:
+            MockTC.return_value = self._mock_trading_client()
+            with caplog.at_level(logging.DEBUG):
+                adapter._get_client()
+        log_text = caplog.text
+        assert "super-secret-key-xyz" not in log_text
+        assert "super-secret-value-abc" not in log_text
+
+    def test_no_real_network_calls(self, monkeypatch):
+        monkeypatch.setenv("ALPACA_API_KEY", "test-key")
+        monkeypatch.setenv("ALPACA_SECRET_KEY", "test-secret")
+        adapter = self._adapter()
+        with mock.patch("alpaca.trading.client.TradingClient") as MockTC:
+            MockTC.return_value = self._mock_trading_client()
+            adapter._get_client()
+        # TradingClient was mocked so no real HTTP was made; assertion is
+        # that MockTC was called (not the real class)
+        MockTC.assert_called_once()
+
+    def test_submit_order_with_injected_mock_client_still_works(self, monkeypatch):
+        from src.execution.order_intent import OrderIntent
+        monkeypatch.delenv("ALPACA_API_KEY", raising=False)
+        monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
+
+        fake_response = {
+            "id": "order-123",
+            "symbol": "SPY",
+            "side": "buy",
+            "qty": 10,
+            "status": "accepted",
+            "submitted_at": "2024-01-15T10:00:00Z",
+            "filled_at": None,
+            "filled_avg_price": None,
+            "filled_qty": None,
+            "client_order_id": "BT-000001",
+        }
+
+        class FakeClient:
+            def submit_order(self, payload):
+                return fake_response
+
+        adapter = self._adapter(client=FakeClient())
+        intent = OrderIntent(
+            symbol="SPY", side="buy", quantity=10.0,
+            order_type="market", reason="entry",
+            timestamp=pd.Timestamp("2024-01-15 10:00:00", tz="America/New_York"),
+            client_order_id="BT-000001",
+        )
+        with mock.patch.object(adapter, "_ensure_market_hours"):
+            result = adapter.submit_order(intent)
+        assert result.order_id == "order-123"
+        assert result.status == "accepted"
+        assert result.client_order_id == "BT-000001"
