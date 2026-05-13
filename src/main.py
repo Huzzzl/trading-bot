@@ -147,6 +147,271 @@ def build_engine(cfg: AppConfig) -> BacktestEngine:
     )
 
 
+def _run_paper_close(cfg: AppConfig, output_dir: Path) -> None:
+    """Two-phase paper close/flatten flow.
+
+    Phase A (paper_close_preview_only=True, the default):
+        Fetch current positions, generate SPY sell-market close candidates,
+        write paper_close_candidate_intents.csv, return without submitting.
+
+    Phase B (paper_close_preview_only=False):
+        Require paper_selected_close_client_order_id.  Select exactly that
+        one candidate, apply paper_close_quantity_override if set (only 1.0
+        accepted), validate all safety constraints, submit exactly one order,
+        write audit artifacts, reconcile.
+
+    Safety constraints (fail closed — raises before submit_order):
+        - Symbol must be SPY.
+        - Side must be sell (no buys in close flow, no shorting).
+        - order_type must be market.
+        - quantity must be <= 1 (or paper_close_quantity_override=1).
+        - quantity must be <= current position qty (no shorting).
+        - client_order_id must be non-empty.
+        - Selected ID must match exactly one candidate.
+        - cancel_order is never called.
+    """
+    import json as _json
+    import pandas as _pd
+    from dataclasses import replace as _dc_replace
+    from zoneinfo import ZoneInfo as _ZoneInfo
+
+    from src.execution.alpaca_broker import AlpacaBrokerAdapter
+    from src.execution.order_intent import OrderIntent
+    from src.reporting.report_generator import ReportGenerator
+    from src.utils.logger import get_logger as _get_logger
+
+    logger = _get_logger(__name__)
+
+    _CLOSE_SYMBOL     = "SPY"
+    _CLOSE_SIDE       = "sell"
+    _CLOSE_ORDER_TYPE = "market"
+    _CLOSE_REASON     = "paper_close"
+    _CLOSE_MAX_QTY    = 1
+    _EASTERN          = _ZoneInfo("America/New_York")
+
+    broker    = AlpacaBrokerAdapter()
+    preflight = broker.preflight_check(cfg.symbols, allow_existing_positions=True)
+    logger.info(
+        "Paper close preflight passed: account_status=%s symbols=%s",
+        preflight["account"].get("status"),
+        preflight["symbols"],
+    )
+
+    positions = preflight["positions"]
+    now_ts    = _pd.Timestamp.now(tz=_EASTERN)
+    ts_label  = now_ts.strftime("%Y%m%d%H%M%S")
+
+    # --- Generate close candidates (SPY only, sell market) ---
+    close_candidates: list[OrderIntent] = []
+    for sym, pos in positions.items():
+        if sym.upper() != _CLOSE_SYMBOL:
+            continue
+        qty = float(pos.get("qty") or 0.0)
+        if qty <= 0:
+            continue
+        intent = OrderIntent(
+            symbol=_CLOSE_SYMBOL,
+            side=_CLOSE_SIDE,
+            quantity=qty,
+            order_type=_CLOSE_ORDER_TYPE,
+            reason=_CLOSE_REASON,
+            timestamp=now_ts,
+            client_order_id=f"BC-{ts_label}-{_CLOSE_SYMBOL}",
+            metadata={"current_position_qty": qty},
+        )
+        close_candidates.append(intent)
+
+    # --- Always write paper_close_candidate_intents.csv ---
+    _cand_cols = [
+        "client_order_id", "timestamp", "symbol", "side",
+        "quantity", "order_type", "reason", "current_position_qty",
+    ]
+    _cand_rows = [
+        {
+            "client_order_id":     c.client_order_id,
+            "timestamp":           str(c.timestamp),
+            "symbol":              c.symbol,
+            "side":                c.side,
+            "quantity":            c.quantity,
+            "order_type":          c.order_type,
+            "reason":              c.reason,
+            "current_position_qty": c.metadata.get("current_position_qty"),
+        }
+        for c in close_candidates
+    ]
+    _cand_path = output_dir / "paper_close_candidate_intents.csv"
+    _pd.DataFrame(_cand_rows, columns=_cand_cols).to_csv(_cand_path, index=False)
+    logger.info(
+        "Paper close candidates written: %d candidate(s) → %s",
+        len(close_candidates), _cand_path,
+    )
+
+    # --- Phase A: close preview-only ---
+    if cfg.execution.paper_close_preview_only:
+        logger.info(
+            "Paper close preview-only mode: %d candidate(s) written to %s. "
+            "No order submitted. Set paper_close_preview_only=false and "
+            "paper_selected_close_client_order_id=<id> to submit.",
+            len(close_candidates), _cand_path,
+        )
+        return
+
+    # --- Phase B: close submit ---
+    _selected_coid = cfg.execution.paper_selected_close_client_order_id
+    if not _selected_coid or not str(_selected_coid).strip():
+        raise RuntimeError(
+            "Paper close (non-preview mode): "
+            "execution.paper_selected_close_client_order_id must be set to a non-empty "
+            "client_order_id. Run in close preview mode first to see candidates."
+        )
+
+    _matches = [c for c in close_candidates if c.client_order_id == _selected_coid]
+    if len(_matches) == 0:
+        raise RuntimeError(
+            f"Paper close: no close candidate found with "
+            f"client_order_id={_selected_coid!r}. "
+            f"Available: {[c.client_order_id for c in close_candidates]}"
+        )
+    if len(_matches) > 1:
+        raise RuntimeError(
+            f"Paper close: {len(_matches)} candidates found with "
+            f"client_order_id={_selected_coid!r}. Expected exactly 1."
+        )
+
+    _selected_original = _matches[0]
+    selected_intent    = _selected_original
+    current_pos_qty    = float(_selected_original.metadata.get("current_position_qty", 0.0))
+
+    # Apply close quantity override (only 1.0 allowed).
+    _qty_override = cfg.execution.paper_close_quantity_override
+    if _qty_override is not None:
+        if _qty_override <= 0:
+            raise RuntimeError(
+                f"execution.paper_close_quantity_override must be > 0, got {_qty_override}."
+            )
+        if _qty_override > 1:
+            raise RuntimeError(
+                f"execution.paper_close_quantity_override must be <= 1, "
+                f"got {_qty_override}. Only 1.0 is supported in this implementation."
+            )
+        if _qty_override != 1.0:
+            raise RuntimeError(
+                f"execution.paper_close_quantity_override must be exactly 1.0, "
+                f"got {_qty_override}. Only 1.0 is supported in this implementation."
+            )
+        _new_meta = dict(_selected_original.metadata)
+        _new_meta["paper_close_quantity_override"] = True
+        _new_meta["original_quantity"] = _selected_original.quantity
+        selected_intent = _dc_replace(
+            _selected_original, quantity=_qty_override, metadata=_new_meta
+        )
+        logger.info(
+            "Paper close quantity override: client_order_id=%s "
+            "original_qty=%s -> submitted_qty=%s",
+            selected_intent.client_order_id,
+            _selected_original.quantity,
+            _qty_override,
+        )
+
+    # Safety validation (fail closed — all checks before submit_order).
+    _violations: list[str] = []
+    if selected_intent.symbol != _CLOSE_SYMBOL:
+        _violations.append(
+            f"symbol={selected_intent.symbol!r} (must be {_CLOSE_SYMBOL!r})"
+        )
+    if selected_intent.side != _CLOSE_SIDE:
+        _violations.append(
+            f"side={selected_intent.side!r} (must be {_CLOSE_SIDE!r} — no buys in close flow)"
+        )
+    if selected_intent.order_type != _CLOSE_ORDER_TYPE:
+        _violations.append(
+            f"order_type={selected_intent.order_type!r} (must be {_CLOSE_ORDER_TYPE!r})"
+        )
+    if selected_intent.quantity > _CLOSE_MAX_QTY:
+        _violations.append(
+            f"quantity={selected_intent.quantity} (must be <= {_CLOSE_MAX_QTY})"
+        )
+    if selected_intent.quantity > current_pos_qty:
+        _violations.append(
+            f"quantity={selected_intent.quantity} exceeds current position "
+            f"qty={current_pos_qty} (no shorting)"
+        )
+    if not selected_intent.client_order_id or not str(selected_intent.client_order_id).strip():
+        _violations.append("client_order_id is missing or blank")
+    if _violations:
+        raise RuntimeError(
+            f"Paper close safety constraint violated for "
+            f"{selected_intent.client_order_id!r}: " + "; ".join(_violations)
+        )
+
+    logger.info(
+        "Paper close: submitting intent client_order_id=%s symbol=%s side=%s qty=%s",
+        selected_intent.client_order_id,
+        selected_intent.symbol,
+        selected_intent.side,
+        selected_intent.quantity,
+    )
+    result = broker.submit_order(selected_intent)
+    if not result.client_order_id:
+        raise RuntimeError(
+            f"Paper close: OrderResult for intent "
+            f"{selected_intent.client_order_id!r} has no client_order_id. Aborting."
+        )
+    order_results: list = [result]
+    logger.info(
+        "Paper close: order_id=%s status=%s client_order_id=%s",
+        result.order_id,
+        result.status,
+        result.client_order_id,
+    )
+
+    # Write paper_close_intent_audit.csv.
+    _audit_cols = [
+        "client_order_id", "symbol", "side",
+        "original_quantity", "submitted_quantity", "override_applied",
+        "current_position_qty",
+    ]
+    _audit_df = _pd.DataFrame([{
+        "client_order_id":      selected_intent.client_order_id,
+        "symbol":               selected_intent.symbol,
+        "side":                 selected_intent.side,
+        "original_quantity":    _selected_original.quantity,
+        "submitted_quantity":   selected_intent.quantity,
+        "override_applied":     _qty_override is not None,
+        "current_position_qty": current_pos_qty,
+    }], columns=_audit_cols)
+    _audit_path = output_dir / "paper_close_intent_audit.csv"
+    _audit_df.to_csv(_audit_path, index=False)
+    logger.info("Paper close intent audit written to %s", _audit_path)
+
+    # Write order_intents.csv, order_results.csv, order_reconciliation.json.
+    reporter = ReportGenerator(
+        metrics={},
+        trades=[],
+        equity_curve=_pd.DataFrame(),
+        config=cfg,
+        output_dir=output_dir,
+        order_intents=[selected_intent],
+        order_results=order_results,
+    )
+    reporter.generate_all()
+
+    recon_path = output_dir / "order_reconciliation.json"
+    if not recon_path.exists():
+        raise RuntimeError(
+            "Paper close: order_reconciliation.json was not written. "
+            "This is an internal error. Aborting."
+        )
+    recon = _json.loads(recon_path.read_text())
+
+    if recon.get("overall_status") not in ("PASS", "N/A"):
+        raise RuntimeError(
+            f"Paper close reconciliation failed: {recon.get('overall_status')}. "
+            "Check order_reconciliation.json for details."
+        )
+    logger.info("Paper close complete. Artifacts written to %s", output_dir)
+
+
 def main() -> None:
     args = parse_args()
 
@@ -181,6 +446,14 @@ def main() -> None:
                 "Set execution.paper_trading_enabled to true in config to enable preflight checks. "
                 "Paper order execution is not yet wired."
             )
+
+        # ------------------------------------------------------------------
+        # Close/flatten path — mutually exclusive with buy-submit path.
+        # Only active when paper_close_positions_enabled=True.
+        # ------------------------------------------------------------------
+        if cfg.execution.paper_close_positions_enabled:
+            _run_paper_close(cfg, output_dir)
+            return
 
         # ------------------------------------------------------------------
         # Two-phase paper execution path
