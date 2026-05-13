@@ -70,7 +70,7 @@ the target symbol.  No order is ever submitted in preview mode.
 3. Confirm the position is gone (qty = 0 or position absent).
 4. Re-run `main.py` in submit mode.
 
-There is no automatic close or sell logic in this bot.  Manual action is required.
+The close/flatten path (see below) allows you to explicitly submit a sell order to close a position through a separate two-phase flow.  It is **not automatic** — it must be enabled and a specific candidate must be selected.
 
 **Submit phase must run during regular market hours (09:30–16:00 ET, Mon–Fri).**
 The `_ensure_market_hours` guard in `AlpacaBrokerAdapter.submit_order` raises outside
@@ -79,7 +79,99 @@ the order reaches Alpaca.
 
 ---
 
-## 2. Required Environment Variables
+## 2. Close/Flatten Flow (paper_close_positions_enabled)
+
+> **WARNING — SPY only, sell market only, max 1 share in first implementation.**
+> This flow is separate from the buy-submit flow.  It does not run the backtest engine.
+> Enable it only when you have an existing SPY paper position you want to close.
+
+The close/flatten path is a distinct two-phase flow triggered by
+`execution.paper_close_positions_enabled: true`.  It is **mutually exclusive**
+with the buy-submit flow: when `paper_close_positions_enabled=true` the bot skips
+the buy-submit path entirely.
+
+### Phase A — Close preview (default)
+
+Set `execution.paper_close_preview_only: true` (or omit; it defaults to `true`).
+
+`main.py` runs preflight, calls `get_positions()` through the preflight result,
+generates SPY sell-market close candidates for any SPY position with `qty > 0`,
+and writes `paper_close_candidate_intents.csv`.  No order is submitted.
+Return cleanly.
+
+### Phase B — Close submit
+
+Set `execution.paper_close_preview_only: false` and
+`execution.paper_selected_close_client_order_id: <id>` to the `client_order_id`
+you chose from the close preview CSV.
+
+`main.py` selects exactly that one candidate, optionally applies
+`paper_close_quantity_override` (only `1.0` accepted), validates all safety
+constraints, submits exactly one sell-market order, and writes audit artifacts.
+
+### Hard constraints enforced for close/flatten (fail closed — raises before `submit_order`):
+
+| Constraint | Behaviour on violation |
+|------------|------------------------|
+| `paper_close_positions_enabled=false` (default) | Close path skipped entirely |
+| `paper_close_preview_only=false` requires non-empty `paper_selected_close_client_order_id` | `RuntimeError` |
+| Selected close ID must match exactly one candidate | `RuntimeError` |
+| Symbol of selected candidate must be `SPY` | `RuntimeError` |
+| `order_type` must be `market` | `RuntimeError` |
+| `side` must be `sell` — no buy orders in close flow | `RuntimeError` |
+| `quantity` must be `<= 1` (after override) | `RuntimeError` |
+| `quantity` must be `<= current position qty` — no shorting | `RuntimeError` |
+| `client_order_id` must be non-empty | `RuntimeError` |
+| `OrderResult` must carry `client_order_id` | `RuntimeError` after order |
+| `order_reconciliation.json` must be written | `RuntimeError` if absent |
+| Reconciliation `overall_status` must be `PASS` or `N/A` | `RuntimeError` on mismatch |
+| `cancel_order` is never called | By design |
+
+### Config for Phase A — Close preview
+
+```yaml
+execution:
+  mode: paper
+  paper_trading_enabled: true
+  paper_close_positions_enabled: true
+  paper_close_preview_only: true    # default; omitting also defaults to true
+```
+
+Run `python -m src.main`.  Open `output/paper_close_candidate_intents.csv` and note
+the `client_order_id` of the candidate you want to submit.
+
+### Config for Phase B — Close submit
+
+```yaml
+execution:
+  mode: paper
+  paper_trading_enabled: true
+  paper_close_positions_enabled: true
+  paper_close_preview_only: false
+  paper_selected_close_client_order_id: "BC-20260513154235-SPY"  # replace with your ID
+  paper_close_quantity_override: 1   # required if position qty > 1
+```
+
+**Why `paper_close_quantity_override: 1` is needed:**
+If the position holds more than 1 share (e.g. 5 shares), the close candidate will
+have `quantity=5` which exceeds the `<= 1` safety limit.  Setting
+`paper_close_quantity_override: 1` overrides the submitted quantity to `1.0`.
+The original position quantity is preserved in `paper_close_intent_audit.csv`
+and in the intent's metadata.
+
+**Close artifact files written:**
+
+| File | Contents |
+|------|----------|
+| `paper_close_candidate_intents.csv` | All close candidates (always written) |
+| `paper_close_intent_audit.csv` | The selected/submitted close intent (Phase B only) |
+| `order_intents.csv` | The submitted intent (Phase B only, via ReportGenerator) |
+| `order_results.csv` | The `OrderResult` from Alpaca (Phase B only) |
+| `order_reconciliation.json` | Reconciliation; `overall_status` must be `PASS` |
+
+---
+
+## 3. Required Environment Variables
 
 Set these in your local shell only.  **Never commit credentials.**
 
@@ -96,7 +188,7 @@ Credentials must come from your Alpaca **paper trading** account dashboard at
 
 ---
 
-## 3. Required Config (`config/settings.yaml`)
+## 4. Required Config (`config/settings.yaml`)
 
 ### Phase 1 — Preview run (inspect candidates, no order sent)
 
@@ -142,7 +234,7 @@ schema as for backtest mode.  Review them carefully before any run.
 
 ---
 
-## 4. Pre-Run Checklist
+## 5. Pre-Run Checklist
 
 Complete every item before proceeding:
 
@@ -162,7 +254,7 @@ Complete every item before proceeding:
 
 ---
 
-## 5. Safe Manual Flow
+## 6. Safe Manual Flow
 
 Follow these steps in order.  Stop at any step that produces an unexpected result.
 
@@ -242,7 +334,7 @@ Check the output directory for audit artifacts (see section 7).
 
 ---
 
-## 6. Emergency Stop
+## 7. Emergency Stop
 
 If at any point the process behaves unexpectedly:
 
@@ -256,7 +348,7 @@ If at any point the process behaves unexpectedly:
 
 ---
 
-## 7. Expected Output Artifacts
+## 8. Expected Output Artifacts
 
 After a successful paper run the output directory will contain:
 
@@ -272,7 +364,7 @@ orders, investigate before running again.
 
 ---
 
-## 8. What Is Still Blocked or Constrained
+## 9. What Is Still Blocked or Constrained
 
 The following are explicitly **not** supported and will raise immediately:
 
@@ -291,13 +383,19 @@ The following are explicitly **not** supported and will raise immediately:
 | Selected intent has `order_type` other than `market` | `RuntimeError` in `main.py` before `submit_order` |
 | Selected intent has `quantity > 1` (no override set) | `RuntimeError` in `main.py` before `submit_order` |
 | `paper_order_quantity_override` set to `> 1` or `<= 0` | `RuntimeError` in `main.py` — only 1.0 accepted |
+| `paper_close_positions_enabled=false` (default) | Close path skipped; buy-submit path runs |
+| `paper_close_preview_only=false` with no `paper_selected_close_client_order_id` | `RuntimeError` before `submit_order` |
+| Close candidate selected with side other than `sell` | `RuntimeError` in `main.py` before `submit_order` |
+| Close submitted quantity `> current position qty` | `RuntimeError` — no shorting |
+| `paper_close_quantity_override` set to `> 1` or `<= 0` | `RuntimeError` — only 1.0 accepted |
+| No SPY position exists during close preview | Empty `paper_close_candidate_intents.csv`; no error |
 | `OrderResult` returned without `client_order_id` | `RuntimeError` in `main.py` after `submit_order` |
 | `order_reconciliation.json` not written | `RuntimeError` in `main.py` — internal error |
 | Reconciliation `overall_status` not `PASS`/`N/A` | `RuntimeError` — execution halts |
 
 ---
 
-## 9. References
+## 10. References
 
 - [Alpaca Adapter Design](alpaca_adapter_design.md) — full adapter specification
 - [Paper Execution Readiness](paper_execution_readiness.md) — safety gates and merge checklist

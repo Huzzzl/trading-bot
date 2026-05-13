@@ -56,12 +56,16 @@ class RiskConfig:
 
 @dataclass
 class ExecutionConfig:
-    mode:                            str         = "backtest"
-    dry_run_broker:                  bool        = False
-    paper_trading_enabled:           bool        = False
-    paper_order_quantity_override:   float | None = None
-    paper_preview_only:              bool        = True
-    paper_selected_client_order_id:  str | None  = None
+    mode:                                    str          = "backtest"
+    dry_run_broker:                          bool         = False
+    paper_trading_enabled:                   bool         = False
+    paper_order_quantity_override:           float | None = None
+    paper_preview_only:                      bool         = True
+    paper_selected_client_order_id:          str | None   = None
+    paper_close_positions_enabled:           bool         = False
+    paper_close_preview_only:                bool         = True
+    paper_selected_close_client_order_id:    str | None   = None
+    paper_close_quantity_override:           float | None = None
 
 
 @dataclass
@@ -170,8 +174,10 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
             f"Invalid execution.mode={raw_mode!r}. "
             f"Must be one of {sorted(_VALID_EXECUTION_MODES)}."
         )
-    _override_raw = ex.get("paper_order_quantity_override", None)
-    _selected_coid_raw = ex.get("paper_selected_client_order_id", None)
+    _override_raw               = ex.get("paper_order_quantity_override", None)
+    _selected_coid_raw          = ex.get("paper_selected_client_order_id", None)
+    _close_qty_override_raw     = ex.get("paper_close_quantity_override", None)
+    _selected_close_coid_raw    = ex.get("paper_selected_close_client_order_id", None)
     execution_cfg = ExecutionConfig(
         mode=raw_mode,
         dry_run_broker=bool(ex.get("dry_run_broker", False)),
@@ -179,6 +185,10 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
         paper_order_quantity_override=float(_override_raw) if _override_raw is not None else None,
         paper_preview_only=bool(ex.get("paper_preview_only", True)),
         paper_selected_client_order_id=str(_selected_coid_raw) if _selected_coid_raw is not None else None,
+        paper_close_positions_enabled=bool(ex.get("paper_close_positions_enabled", False)),
+        paper_close_preview_only=bool(ex.get("paper_close_preview_only", True)),
+        paper_selected_close_client_order_id=str(_selected_close_coid_raw) if _selected_close_coid_raw is not None else None,
+        paper_close_quantity_override=float(_close_qty_override_raw) if _close_qty_override_raw is not None else None,
     )
 
     return AppConfig(

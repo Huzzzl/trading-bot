@@ -24,8 +24,13 @@ See also:
 | `execution.paper_order_quantity_override` flag | Present; defaults to `None` (fail-closed); only `1.0` accepted |
 | `execution.paper_preview_only` flag | Present; defaults to `True` (preview-only, no submit) |
 | `execution.paper_selected_client_order_id` field | Present; defaults to `None`; required in submit mode |
+| `execution.paper_close_positions_enabled` flag | Present; defaults to `False` (close path disabled) |
+| `execution.paper_close_preview_only` flag | Present; defaults to `True` (close preview only, no submit) |
+| `execution.paper_selected_close_client_order_id` field | Present; defaults to `None`; required in close submit mode |
+| `execution.paper_close_quantity_override` flag | Present; defaults to `None`; only `1.0` accepted |
 | `paper_trading_enabled=False` | Raises `NotImplementedError` before adapter creation |
 | `paper_trading_enabled=True` | Two-phase preview/selection paper path — mock-tested only (see § 1.1) |
+| `paper_close_positions_enabled=True` | Two-phase close/flatten path — mock-tested only (see § 1.2) |
 | Live trading (`paper=False`) | Permanently blocked — raises `ValueError` in constructor |
 | Real Alpaca network calls in CI | None — all tests mocked |
 
@@ -103,7 +108,65 @@ Rules for the override field:
 - `order_results.csv` — only actually submitted `OrderResult` objects
 - `order_reconciliation.json` — reconciliation keyed by `client_order_id`
 
-**cancel_order is never called** in the paper execution path.
+**cancel_order is never called** in the paper execution or close paths.
+
+### 1.2 Two-Phase Paper Close/Flatten Path (current)
+
+`paper_close_positions_enabled=True` wires a separate two-phase close/flatten
+execution path in `main.py` that is mutually exclusive with the buy-submit path.
+The path is mock-tested only.
+
+> **First implementation constraints:** SPY only, sell market only, max 1 share
+> (via `paper_close_quantity_override=1`).
+
+**Phase A — Close preview (`paper_close_preview_only=True`, the default):**
+- Calls `preflight_check(..., allow_existing_positions=True)`.
+- Fetches current positions from preflight result.
+- Generates SPY sell-market close candidates for all SPY positions with `qty > 0`.
+- Writes `paper_close_candidate_intents.csv` (empty if no qualifying positions).
+- No order is submitted; no engine run; returns cleanly.
+
+**Phase B — Close submit (`paper_close_preview_only=False`):**
+- `paper_selected_close_client_order_id` must be set to a non-empty value.
+- Exactly one candidate matching that ID must exist; 0 or >1 matches raises `RuntimeError`.
+- `paper_close_quantity_override` (if set) is applied to the selected candidate only.
+- Safety validation runs on the selected candidate.
+- Exactly one sell-market order is submitted.
+- `paper_close_intent_audit.csv`, `order_intents.csv`, `order_results.csv`, and
+  `order_reconciliation.json` are written after submission.
+
+**Hard constraints on the selected close candidate (fail closed — raises before `submit_order`):**
+
+| Constraint | Behaviour on violation |
+|------------|------------------------|
+| `paper_close_preview_only=false` requires non-empty `paper_selected_close_client_order_id` | `RuntimeError` |
+| Selected close ID must match exactly one candidate | `RuntimeError` (0 or >1 matches) |
+| Symbol must be `SPY` | `RuntimeError` |
+| Side must be `sell` — no buys in close flow | `RuntimeError` |
+| `order_type` must be `market` | `RuntimeError` |
+| `quantity` must be `<= 1` (after override) | `RuntimeError` |
+| `quantity` must be `<= current position qty` — no shorting | `RuntimeError` |
+| `client_order_id` must be non-empty | `RuntimeError` |
+| `OrderResult` must carry `client_order_id` | `RuntimeError` after `submit_order` |
+| `order_reconciliation.json` must be written | `RuntimeError` if file absent |
+| Reconciliation `overall_status` must be `PASS` or `N/A` | `RuntimeError` on `WARN` or other |
+| `cancel_order` is never called | By design |
+
+**Optional close quantity override (`paper_close_quantity_override`):**
+
+When a position holds more than 1 share (e.g. 5 shares), the close candidate
+will have `quantity=5` which exceeds the `<= 1` constraint.  Setting
+`execution.paper_close_quantity_override: 1` in `settings.yaml` overrides the
+submitted quantity to `1.0` only.  The override is logged and recorded in
+`paper_close_intent_audit.csv` with the original position quantity preserved.
+
+Rules for the close override field:
+- Default `None` — no override; candidate with `quantity > 1` raises as normal.
+- Only `1.0` is accepted; values `<= 0` or `> 1` raise `RuntimeError` before submit.
+- Override does **not** bypass symbol, side, order-type, or `client_order_id` checks.
+- Override does **not** allow selling more than the current position qty.
+- `paper_close_intent_audit.csv` records `original_quantity`, `submitted_quantity`,
+  `override_applied`, and `current_position_qty`.
 
 ---
 
@@ -233,6 +296,21 @@ design review and readiness checklist:
 | 15m | Tests prove non-selected unsafe intents do not block submission of selected intent | ✅ Done |
 | 15n | Tests prove selected unsafe intent raises before `submit_order` | ✅ Done |
 | 15o | Tests prove override applies only to selected intent | ✅ Done |
+| 16a | `paper_close_positions_enabled=false` does not create close candidates | ✅ Done |
+| 16b | Close preview writes `paper_close_candidate_intents.csv`, does not call `submit_order` | ✅ Done |
+| 16c | Close preview with no positions writes empty candidate CSV | ✅ Done |
+| 16d | Close preview with SPY position creates one SPY sell market candidate | ✅ Done |
+| 16e | Close preview ignores non-SPY positions | ✅ Done |
+| 16f | Close submit without selected close `client_order_id` raises before `submit_order` | ✅ Done |
+| 16g | Close submit selected ID not found raises | ✅ Done |
+| 16h | Duplicate selected close ID raises | ✅ Done |
+| 16i | Close submit SPY sell calls `submit_order` exactly once | ✅ Done |
+| 16j | Selected close `quantity > current position qty` raises before submit | ✅ Done |
+| 16k | Selected close `quantity > 1` raises unless `paper_close_quantity_override=1` | ✅ Done |
+| 16l | `paper_close_quantity_override=1` applies only to selected close intent | ✅ Done |
+| 16m | No buy close intent can be generated or submitted | ✅ Done |
+| 16n | `cancel_order` is never called in close path | ✅ Done |
+| 16o | No real Alpaca network calls in close tests | ✅ Done |
 | 15 | Paper integration test against live Alpaca paper account (`pytest -m integration`) | ☐ Not yet run |
 | 16 | Market-hours guard tested manually outside RTH | ☐ Not yet done |
 | 17 | Startup account check tested with blocked account | ☐ Not yet done |
