@@ -232,6 +232,7 @@ class AlpacaBrokerAdapter(BrokerAdapter):
         -------
         dict
             Ready-to-submit Alpaca order payload (market orders only).
+            Used for mock/fake test clients.
         """
         self._validate_order_intent(intent)
         return {
@@ -242,6 +243,28 @@ class AlpacaBrokerAdapter(BrokerAdapter):
             "time_in_force":   "day",
             "client_order_id": intent.client_order_id,
         }
+
+    def _build_sdk_order_request(self, intent: OrderIntent) -> Any:
+        """Build a :class:`~alpaca.trading.requests.MarketOrderRequest` for the real SDK.
+
+        Used when submitting to a real ``alpaca-py`` ``TradingClient`` (not mocks).
+
+        Returns
+        -------
+        MarketOrderRequest
+            SDK request object compatible with ``TradingClient.submit_order()``.
+        """
+        from alpaca.trading.requests import MarketOrderRequest  # noqa: PLC0415
+        from alpaca.trading.enums import OrderSide, TimeInForce  # noqa: PLC0415
+
+        side = OrderSide.BUY if intent.side == "buy" else OrderSide.SELL
+        return MarketOrderRequest(
+            symbol=intent.symbol,
+            qty=intent.quantity,
+            side=side,
+            time_in_force=TimeInForce.DAY,
+            client_order_id=intent.client_order_id,
+        )
 
     def _order_response_to_result(self, response: Any, intent: OrderIntent) -> OrderResult:
         """Convert an Alpaca order response to an :class:`OrderResult`.
@@ -468,7 +491,14 @@ class AlpacaBrokerAdapter(BrokerAdapter):
         payload = self._build_order_payload(intent)
 
         client = self._get_client()
-        if hasattr(client, "submit_order"):
+        _is_real_alpaca_sdk = (
+            type(client).__name__ == "TradingClient"
+            and type(client).__module__.startswith("alpaca")
+        )
+        if _is_real_alpaca_sdk:
+            order_obj = self._build_sdk_order_request(intent)
+            response = client.submit_order(order_obj)
+        elif hasattr(client, "submit_order"):
             response = client.submit_order(payload)
         elif hasattr(client, "create_order"):
             response = client.create_order(payload)

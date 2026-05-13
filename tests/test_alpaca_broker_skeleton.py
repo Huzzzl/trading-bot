@@ -543,6 +543,232 @@ class TestBuildOrderPayload:
 
 
 # ---------------------------------------------------------------------------
+# _build_sdk_order_request
+# ---------------------------------------------------------------------------
+
+class TestBuildSdkOrderRequest:
+    """Tests for _build_sdk_order_request — verifies MarketOrderRequest fields."""
+
+    def _adapter(self):
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        return AlpacaBrokerAdapter()
+
+    def _intent(self, **overrides):
+        from src.execution.order_intent import OrderIntent
+        defaults = dict(
+            symbol="SPY",
+            side="buy",
+            quantity=1.0,
+            order_type="market",
+            reason="entry",
+            timestamp=pd.Timestamp("2024-01-15 10:00:00", tz="America/New_York"),
+            client_order_id="BT-000001",
+        )
+        defaults.update(overrides)
+        return OrderIntent(**defaults)
+
+    def _request(self, **overrides):
+        return self._adapter()._build_sdk_order_request(self._intent(**overrides))
+
+    def test_returns_market_order_request(self):
+        from alpaca.trading.requests import MarketOrderRequest
+        assert isinstance(self._request(), MarketOrderRequest)
+
+    def test_symbol_set(self):
+        req = self._request(symbol="SPY")
+        assert req.symbol == "SPY"
+
+    def test_qty_set(self):
+        req = self._request(quantity=1.0)
+        assert float(req.qty) == 1.0
+
+    def test_fractional_qty(self):
+        req = self._request(quantity=0.5)
+        assert float(req.qty) == 0.5
+
+    def test_buy_side(self):
+        from alpaca.trading.enums import OrderSide
+        req = self._request(side="buy")
+        assert req.side == OrderSide.BUY
+
+    def test_sell_side(self):
+        from alpaca.trading.enums import OrderSide
+        req = self._request(side="sell")
+        assert req.side == OrderSide.SELL
+
+    def test_time_in_force_is_day(self):
+        from alpaca.trading.enums import TimeInForce
+        req = self._request()
+        assert req.time_in_force == TimeInForce.DAY
+
+    def test_client_order_id_set(self):
+        req = self._request(client_order_id="BT-000042")
+        assert req.client_order_id == "BT-000042"
+
+    def test_different_symbol(self):
+        req = self._request(symbol="AAPL")
+        assert req.symbol == "AAPL"
+
+    def test_does_not_require_client_or_credentials(self):
+        clean = {k: v for k, v in os.environ.items()
+                 if k not in ("ALPACA_API_KEY", "ALPACA_SECRET_KEY")}
+        with mock.patch.dict(os.environ, clean, clear=True):
+            req = self._request()
+            assert req is not None
+
+
+# ---------------------------------------------------------------------------
+# submit_order: real SDK client vs mock/fake client dispatch
+# ---------------------------------------------------------------------------
+
+def _make_fake_trading_client_instance(submit_return_value):
+    """Create a fake client whose type name is 'TradingClient' and module starts with 'alpaca'.
+
+    type(instance).__name__ == "TradingClient" and
+    type(instance).__module__.startswith("alpaca") → triggers SDK path.
+    submit_order is a regular mock that records the call argument.
+    """
+    FakeType = type("TradingClient", (), {
+        "__module__": "alpaca.trading.client",
+        "submit_order": lambda self, req: submit_return_value,
+    })
+    instance = FakeType()
+    instance.submit_order = mock.MagicMock(return_value=submit_return_value)
+    return instance
+
+
+class TestSubmitOrderSdkDispatch:
+    """Tests that submit_order sends MarketOrderRequest to real TradingClient
+    and a dict to mock/fake clients — no real network calls."""
+
+    def _adapter(self, client):
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        return AlpacaBrokerAdapter(client=client)
+
+    def _intent(self, **overrides):
+        from src.execution.order_intent import OrderIntent
+        defaults = dict(
+            symbol="SPY",
+            side="buy",
+            quantity=1.0,
+            order_type="market",
+            reason="entry",
+            timestamp=pd.Timestamp("2024-01-15 10:00:00", tz="America/New_York"),
+            client_order_id="BT-000001",
+        )
+        defaults.update(overrides)
+        return OrderIntent(**defaults)
+
+    def _fake_response(self):
+        return {
+            "id": "order-123",
+            "symbol": "SPY",
+            "side": "buy",
+            "qty": "1",
+            "status": "accepted",
+            "submitted_at": "2024-01-15T10:00:00Z",
+            "filled_at": None,
+            "filled_avg_price": None,
+            "filled_qty": None,
+            "client_order_id": "BT-000001",
+        }
+
+    def test_mock_client_receives_dict(self):
+        """MagicMock client (type name 'MagicMock') must receive a dict payload."""
+        fake_client = mock.MagicMock()
+        fake_client.submit_order.return_value = self._fake_response()
+        adapter = self._adapter(fake_client)
+        intent = self._intent()
+        with mock.patch.object(adapter, "_ensure_market_hours"):
+            adapter.submit_order(intent)
+        call_arg = fake_client.submit_order.call_args[0][0]
+        assert isinstance(call_arg, dict), "mock client should receive a dict"
+        assert call_arg["symbol"] == "SPY"
+        assert call_arg["client_order_id"] == "BT-000001"
+
+    def test_real_sdk_client_receives_market_order_request(self):
+        """Client with type name 'TradingClient' in alpaca module gets MarketOrderRequest."""
+        from alpaca.trading.requests import MarketOrderRequest
+
+        fake_sdk_client = _make_fake_trading_client_instance(self._fake_response())
+        assert type(fake_sdk_client).__name__ == "TradingClient"
+        assert type(fake_sdk_client).__module__.startswith("alpaca")
+
+        adapter = self._adapter(fake_sdk_client)
+        intent = self._intent()
+        with mock.patch.object(adapter, "_ensure_market_hours"):
+            adapter.submit_order(intent)
+
+        call_arg = fake_sdk_client.submit_order.call_args[0][0]
+        assert isinstance(call_arg, MarketOrderRequest), (
+            "real TradingClient should receive MarketOrderRequest"
+        )
+        assert call_arg.symbol == "SPY"
+        assert call_arg.client_order_id == "BT-000001"
+
+    def test_plain_magic_mock_without_spec_uses_dict_path(self):
+        """MagicMock without spec: type is 'MagicMock', not TradingClient → dict path."""
+        fake_client = mock.MagicMock()
+        fake_client.submit_order.return_value = self._fake_response()
+        adapter = self._adapter(fake_client)
+        intent = self._intent()
+        with mock.patch.object(adapter, "_ensure_market_hours"):
+            adapter.submit_order(intent)
+        call_arg = fake_client.submit_order.call_args[0][0]
+        assert isinstance(call_arg, dict)
+
+    def test_sdk_client_buy_side_in_request(self):
+        from alpaca.trading.enums import OrderSide
+        from alpaca.trading.requests import MarketOrderRequest
+
+        fake_sdk_client = _make_fake_trading_client_instance(self._fake_response())
+        adapter = self._adapter(fake_sdk_client)
+        intent = self._intent(side="buy")
+        with mock.patch.object(adapter, "_ensure_market_hours"):
+            adapter.submit_order(intent)
+        call_arg = fake_sdk_client.submit_order.call_args[0][0]
+        assert isinstance(call_arg, MarketOrderRequest)
+        assert call_arg.side == OrderSide.BUY
+
+    def test_sdk_client_sell_side_in_request(self):
+        from alpaca.trading.enums import OrderSide
+        from alpaca.trading.requests import MarketOrderRequest
+
+        sell_response = {**self._fake_response(), "side": "sell"}
+        fake_sdk_client = _make_fake_trading_client_instance(sell_response)
+        adapter = self._adapter(fake_sdk_client)
+        intent = self._intent(side="sell")
+        with mock.patch.object(adapter, "_ensure_market_hours"):
+            adapter.submit_order(intent)
+        call_arg = fake_sdk_client.submit_order.call_args[0][0]
+        assert isinstance(call_arg, MarketOrderRequest)
+        assert call_arg.side == OrderSide.SELL
+
+    def test_sdk_client_detection_requires_alpaca_module_prefix(self):
+        """A class named 'TradingClient' in a non-alpaca module uses the dict path."""
+        FakeType = type("TradingClient", (), {"__module__": "myapp.trading.client"})
+        instance = FakeType()
+        instance.submit_order = mock.MagicMock(return_value=self._fake_response())
+        adapter = self._adapter(instance)
+        intent = self._intent()
+        with mock.patch.object(adapter, "_ensure_market_hours"):
+            adapter.submit_order(intent)
+        call_arg = instance.submit_order.call_args[0][0]
+        assert isinstance(call_arg, dict)
+
+    def test_no_real_network_calls_on_sdk_path(self):
+        """SDK path calls _build_sdk_order_request then client.submit_order — no HTTP."""
+        fake_sdk_client = _make_fake_trading_client_instance(self._fake_response())
+        adapter = self._adapter(fake_sdk_client)
+        intent = self._intent()
+        with mock.patch.object(adapter, "_ensure_market_hours"):
+            with mock.patch("urllib.request.urlopen",
+                            side_effect=AssertionError("no real HTTP allowed")):
+                adapter.submit_order(intent)
+        # passes → no real network call
+
+
+# ---------------------------------------------------------------------------
 # _normalize_status
 # ---------------------------------------------------------------------------
 
