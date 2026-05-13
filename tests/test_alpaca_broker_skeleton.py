@@ -2756,7 +2756,9 @@ class TestPaperExecutionPath:
     """
 
     def _make_config(self, paper_trading_enabled: bool = True,
-                     paper_order_quantity_override=None):
+                     paper_order_quantity_override=None,
+                     paper_preview_only: bool = False,
+                     paper_selected_client_order_id: str | None = "BT-000001"):
         from src.config.loader import (
             AppConfig, BacktestConfig, DataConfig, ExecutionConfig,
             LoggingConfig, RiskConfig, StrategyConfig,
@@ -2778,6 +2780,8 @@ class TestPaperExecutionPath:
                 mode="paper",
                 paper_trading_enabled=paper_trading_enabled,
                 paper_order_quantity_override=paper_order_quantity_override,
+                paper_preview_only=paper_preview_only,
+                paper_selected_client_order_id=paper_selected_client_order_id,
             ),
         )
 
@@ -2941,10 +2945,10 @@ class TestPaperExecutionPath:
     # --- fail closed: missing client_order_id → RuntimeError ---
 
     def test_missing_client_order_id_raises(self):
-        """Intent with no client_order_id raises RuntimeError."""
+        """Selected client_order_id not present in candidates raises RuntimeError."""
         from src.execution.alpaca_broker import AlpacaBrokerAdapter
-        cfg = self._make_config()
-        intent = self._make_intent(client_order_id=None)
+        cfg = self._make_config()  # selected="BT-000001"
+        intent = self._make_intent(client_order_id=None)  # None never matches "BT-000001"
         mock_submit = mock.MagicMock()
         with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
@@ -2959,10 +2963,10 @@ class TestPaperExecutionPath:
         mock_submit.assert_not_called()
 
     def test_blank_client_order_id_raises(self):
-        """Intent with a whitespace-only client_order_id raises RuntimeError."""
+        """Selected client_order_id with no matching candidate raises RuntimeError."""
         from src.execution.alpaca_broker import AlpacaBrokerAdapter
-        cfg = self._make_config()
-        intent = self._make_intent(client_order_id="   ")
+        cfg = self._make_config()  # selected="BT-000001"
+        intent = self._make_intent(client_order_id="   ")  # "   " never matches "BT-000001"
         mock_submit = mock.MagicMock()
         with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
@@ -2976,43 +2980,42 @@ class TestPaperExecutionPath:
                 _main()
         mock_submit.assert_not_called()
 
-    # --- fail closed: more than 1 safe intent → RuntimeError ---
+    # --- fail closed: non-preview without selected_id → RuntimeError ---
 
-    def test_multiple_safe_intents_raises(self):
-        """More than 1 safe intent raises RuntimeError; submit_order is never called."""
+    def test_non_preview_without_selected_id_raises(self):
+        """paper_preview_only=False with no selected_id raises before submit_order."""
         from src.execution.alpaca_broker import AlpacaBrokerAdapter
-        cfg = self._make_config()
-        intents = [
-            self._make_intent(client_order_id="BT-000001"),
-            self._make_intent(client_order_id="BT-000002"),
-        ]
+        cfg = self._make_config(paper_preview_only=False,
+                                paper_selected_client_order_id=None)
         mock_submit = mock.MagicMock()
         with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine(intents)), \
+             mock.patch("src.main.build_engine",
+                        return_value=self._fake_engine([self._make_intent()])), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog"]):
             from src.main import main as _main
-            with pytest.raises(RuntimeError, match="2 intents"):
+            with pytest.raises(RuntimeError, match="paper_selected_client_order_id"):
                 _main()
         mock_submit.assert_not_called()
 
     # --- zero intents: empty artifacts, no submission ---
 
     def test_no_orders_when_no_intents_generated(self, tmp_path):
-        """submit_order not called when engine produces no intents."""
-        cfg = self._make_config()
+        """submit_order not called when engine produces no intents (preview mode)."""
+        cfg = self._make_config(paper_preview_only=True,
+                                paper_selected_client_order_id=None)
         mock_submit = self._run_paper(cfg, [], tmp_path=tmp_path)
         mock_submit.assert_not_called()
 
     # --- reporter always called (no exception path) ---
 
     def test_reporter_always_called(self, tmp_path):
-        """ReportGenerator.generate_all is called when no intents are generated."""
+        """ReportGenerator.generate_all is called when no intents are generated (preview)."""
         from src.execution.alpaca_broker import AlpacaBrokerAdapter
-        cfg = self._make_config()
+        cfg = self._make_config(paper_preview_only=True, paper_selected_client_order_id=None)
         call_log: list[str] = []
 
         def _gen(rg_self):
@@ -3058,9 +3061,9 @@ class TestPaperExecutionPath:
     # --- reconciliation JSON always written (order_results=[] not None) ---
 
     def test_empty_path_writes_reconciliation_json(self, tmp_path):
-        """Zero intents: order_reconciliation.json is written (order_results=[] not None)."""
+        """Zero intents in preview mode: generate_all runs and may write reconciliation JSON."""
         from src.execution.alpaca_broker import AlpacaBrokerAdapter
-        cfg = self._make_config()
+        cfg = self._make_config(paper_preview_only=True, paper_selected_client_order_id=None)
         with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
@@ -3099,13 +3102,16 @@ class TestPaperExecutionPath:
     # --- fail closed: missing reconciliation JSON → RuntimeError ---
 
     def test_missing_reconciliation_json_raises(self, tmp_path):
-        """If order_reconciliation.json is not written, RuntimeError is raised."""
+        """submit path: if generate_all does not write recon JSON, RuntimeError is raised."""
         from src.execution.alpaca_broker import AlpacaBrokerAdapter
-        cfg = self._make_config()
+        cfg = self._make_config()  # paper_preview_only=False, selected="BT-000001"
+        intent = self._make_intent()  # client_order_id="BT-000001"
+        result = self._make_order_result(intent)
         with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine([])), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order", return_value=result), \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
              mock.patch("src.reporting.report_generator.ReportGenerator.generate_all"), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
@@ -3116,10 +3122,12 @@ class TestPaperExecutionPath:
     # --- fail closed: WARN reconciliation status → RuntimeError ---
 
     def test_reconciliation_warn_raises(self, tmp_path):
-        """overall_status=WARN in reconciliation JSON raises RuntimeError."""
+        """submit path: overall_status=WARN in reconciliation JSON raises RuntimeError."""
         import json
         from src.execution.alpaca_broker import AlpacaBrokerAdapter
-        cfg = self._make_config()
+        cfg = self._make_config()  # paper_preview_only=False, selected="BT-000001"
+        intent = self._make_intent()
+        result = self._make_order_result(intent)
 
         def _write_warn(rg_self):
             rg_self._output_dir.mkdir(parents=True, exist_ok=True)
@@ -3130,7 +3138,8 @@ class TestPaperExecutionPath:
         with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine([])), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order", return_value=result), \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
              mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
                         _write_warn), \
              mock.patch("src.main.load_config", return_value=cfg), \
@@ -3140,9 +3149,9 @@ class TestPaperExecutionPath:
                 _main()
 
     def test_reconciliation_pass_does_not_raise(self, tmp_path):
-        """overall_status=PASS in reconciliation JSON does not raise."""
+        """overall_status=PASS in reconciliation JSON does not raise (preview mode)."""
         from src.execution.alpaca_broker import AlpacaBrokerAdapter
-        cfg = self._make_config()
+        cfg = self._make_config(paper_preview_only=True, paper_selected_client_order_id=None)
         with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
@@ -3178,7 +3187,7 @@ class TestPaperExecutionPath:
 
     def test_cancel_order_never_called(self, tmp_path):
         from src.execution.alpaca_broker import AlpacaBrokerAdapter
-        cfg = self._make_config()
+        cfg = self._make_config(paper_preview_only=True, paper_selected_client_order_id=None)
         mock_cancel = mock.MagicMock()
         with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
@@ -3196,10 +3205,10 @@ class TestPaperExecutionPath:
     # --- preflight called before engine ---
 
     def test_preflight_called_before_engine(self, tmp_path):
-        """preflight_check is invoked before build_engine."""
+        """preflight_check is invoked before build_engine (preview mode)."""
         from src.execution.alpaca_broker import AlpacaBrokerAdapter
         call_log: list[str] = []
-        cfg = self._make_config()
+        cfg = self._make_config(paper_preview_only=True, paper_selected_client_order_id=None)
 
         def fake_preflight(symbols):
             call_log.append("preflight")
@@ -3259,7 +3268,7 @@ class TestPaperExecutionPath:
 
     def test_no_real_network_calls(self, tmp_path):
         from src.execution.alpaca_broker import AlpacaBrokerAdapter
-        cfg = self._make_config()
+        cfg = self._make_config(paper_preview_only=True, paper_selected_client_order_id=None)
         with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
@@ -3286,7 +3295,9 @@ class TestPaperOrderQuantityOverride:
     All tests are fully mocked — no real Alpaca network calls.
     """
 
-    def _make_config(self, override=None):
+    def _make_config(self, override=None,
+                     paper_preview_only: bool = False,
+                     paper_selected_client_order_id: str | None = "BT-000001"):
         from src.config.loader import (
             AppConfig, BacktestConfig, DataConfig, ExecutionConfig,
             LoggingConfig, RiskConfig, StrategyConfig,
@@ -3308,6 +3319,8 @@ class TestPaperOrderQuantityOverride:
                 mode="paper",
                 paper_trading_enabled=True,
                 paper_order_quantity_override=override,
+                paper_preview_only=paper_preview_only,
+                paper_selected_client_order_id=paper_selected_client_order_id,
             ),
         )
 
@@ -3367,8 +3380,9 @@ class TestPaperOrderQuantityOverride:
     # --- default None: fail closed for quantity > 1 ---
 
     def test_override_none_qty_gt1_raises(self):
-        """Without override, quantity > 1 raises RuntimeError (fail closed)."""
+        """Without override, quantity > 1 raises RuntimeError (fail closed, submit mode)."""
         from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        # paper_preview_only=False (default in helper) so validation runs
         cfg = self._make_config(override=None)
         intent = self._make_intent(quantity=139.0)
         mock_submit = mock.MagicMock()
@@ -3411,7 +3425,7 @@ class TestPaperOrderQuantityOverride:
     def test_override_1_preserves_client_order_id(self, tmp_path):
         """override=1 preserves the original client_order_id."""
         from src.execution.alpaca_broker import AlpacaBrokerAdapter
-        cfg = self._make_config(override=1.0)
+        cfg = self._make_config(override=1.0, paper_selected_client_order_id="BT-000042")
         intent = self._make_intent(quantity=139.0, client_order_id="BT-000042")
         result = self._make_result(quantity=1.0, client_order_id="BT-000042")
         mock_submit = mock.MagicMock(return_value=result)
@@ -3545,26 +3559,32 @@ class TestPaperOrderQuantityOverride:
                 _main()
         mock_submit.assert_not_called()
 
-    def test_override_multiple_intents_still_raises(self):
-        """override=1 with 2 intents still raises (count check runs before override)."""
+    def test_override_multiple_intents_submits_only_selected(self, tmp_path):
+        """With 2 intents and override=1, only the selected intent is submitted."""
         from src.execution.alpaca_broker import AlpacaBrokerAdapter
-        cfg = self._make_config(override=1.0)
+        # select BT-000002 from two intents; only that one should reach submit_order
+        cfg = self._make_config(override=1.0, paper_selected_client_order_id="BT-000002")
         intents = [
             self._make_intent(quantity=139.0, client_order_id="BT-000001"),
             self._make_intent(quantity=139.0, client_order_id="BT-000002"),
         ]
-        mock_submit = mock.MagicMock()
+        result = self._make_result(quantity=1.0, client_order_id="BT-000002")
+        mock_submit = mock.MagicMock(return_value=result)
         with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
              mock.patch("src.main.build_engine", return_value=self._fake_engine(intents)), \
+             mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
+                        self._pass_recon_generate), \
              mock.patch("src.main.load_config", return_value=cfg), \
-             mock.patch("sys.argv", ["prog"]):
+             mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
             from src.main import main as _main
-            with pytest.raises(RuntimeError, match="2 intents"):
-                _main()
-        mock_submit.assert_not_called()
+            _main()
+        mock_submit.assert_called_once()
+        submitted = mock_submit.call_args[0][0]
+        assert submitted.client_order_id == "BT-000002"
+        assert submitted.quantity == 1.0
 
     # --- audit CSV ---
 
@@ -3618,11 +3638,13 @@ class TestPaperOrderQuantityOverride:
         assert len(df) == 1
         assert bool(df.iloc[0]["override_applied"]) is False
 
-    def test_empty_intents_audit_csv_header_only(self, tmp_path):
-        """Zero intents: paper_intent_audit.csv is written with header row only."""
+    def test_preview_candidate_csv_header_only_when_zero_intents(self, tmp_path):
+        """Zero intents in preview mode: paper_candidate_intents.csv is written header-only."""
         from src.execution.alpaca_broker import AlpacaBrokerAdapter
         import pandas
-        cfg = self._make_config(override=None)
+        cfg = self._make_config(override=None,
+                                paper_preview_only=True,
+                                paper_selected_client_order_id=None)
         with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
@@ -3633,13 +3655,13 @@ class TestPaperOrderQuantityOverride:
              mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
             from src.main import main as _main
             _main()
-        audit_path = tmp_path / "paper_intent_audit.csv"
-        assert audit_path.exists()
-        df = pandas.read_csv(audit_path)
+        cand_path = tmp_path / "paper_candidate_intents.csv"
+        assert cand_path.exists(), "paper_candidate_intents.csv must be written even with 0 intents"
+        df = pandas.read_csv(cand_path)
         assert len(df) == 0
-        assert "original_quantity" in df.columns
-        assert "submitted_quantity" in df.columns
-        assert "override_applied" in df.columns
+        for col in ("client_order_id", "timestamp", "symbol", "side", "quantity",
+                    "order_type", "reason"):
+            assert col in df.columns
 
     # --- reconciliation uses submitted quantity ---
 
@@ -3692,3 +3714,446 @@ class TestPaperOrderQuantityOverride:
         cfg_bt    = ExecutionConfig(mode="backtest", paper_order_quantity_override=None)
         assert cfg_paper.paper_order_quantity_override == 1.0
         assert cfg_bt.paper_order_quantity_override is None
+
+
+# ---------------------------------------------------------------------------
+# Two-phase paper preview / selection flow tests
+# ---------------------------------------------------------------------------
+
+class TestPaperPreviewFlow:
+    """Tests for the two-phase paper execution flow.
+
+    Phase 1 (paper_preview_only=True, the default):
+      - Always write paper_candidate_intents.csv.
+      - Never call submit_order.
+      - Multiple generated intents are allowed.
+
+    Phase 2 (paper_preview_only=False):
+      - Require paper_selected_client_order_id.
+      - Select exactly one intent by client_order_id.
+      - Apply override, validate, submit exactly that one.
+      - Non-selected unsafe intents do not block submission.
+
+    All tests are fully mocked — no real Alpaca network calls.
+    """
+
+    def _make_config(self, paper_preview_only: bool = True,
+                     paper_selected_client_order_id: str | None = None,
+                     paper_order_quantity_override=None):
+        from src.config.loader import (
+            AppConfig, BacktestConfig, DataConfig, ExecutionConfig,
+            LoggingConfig, RiskConfig, StrategyConfig,
+        )
+        return AppConfig(
+            backtest=BacktestConfig(
+                start_date="2024-01-15", end_date="2024-01-15",
+                initial_capital=100_000, commission_per_share=0.0, slippage_per_share=0.0,
+            ),
+            symbols=["SPY"],
+            data=DataConfig(provider="yahoo", bar_interval="5m", timezone="America/New_York"),
+            strategy=StrategyConfig(name="opening_range_breakout", params={
+                "opening_range_start": "09:30", "opening_range_end": "10:00",
+                "force_exit_time": "15:55", "position_size_pct": 0.95, "long_only": True,
+            }),
+            risk=RiskConfig(),
+            logging=LoggingConfig(level="WARNING", format="%(message)s"),
+            execution=ExecutionConfig(
+                mode="paper",
+                paper_trading_enabled=True,
+                paper_preview_only=paper_preview_only,
+                paper_selected_client_order_id=paper_selected_client_order_id,
+                paper_order_quantity_override=paper_order_quantity_override,
+            ),
+        )
+
+    def _make_intent(self, symbol="SPY", side="buy", quantity=1.0,
+                     order_type="market", client_order_id="BT-000001"):
+        from src.execution.order_intent import OrderIntent
+        return OrderIntent(
+            symbol=symbol, side=side, quantity=quantity,
+            order_type=order_type, reason="entry",
+            timestamp=pd.Timestamp("2024-01-15 10:00:00", tz="America/New_York"),
+            client_order_id=client_order_id,
+        )
+
+    def _make_result(self, client_order_id="BT-000001", quantity=1.0, status="accepted"):
+        from src.execution.broker import OrderResult
+        return OrderResult(
+            order_id=f"ALPACA-{client_order_id}",
+            symbol="SPY", side="buy", quantity=quantity, status=status,
+            submitted_at=pd.Timestamp("2024-01-15 10:00:00", tz="America/New_York"),
+            reason="entry", client_order_id=client_order_id,
+            metadata={"raw_status": status, "partial_fill": False},
+        )
+
+    def _fake_engine(self, intents):
+        eng = mock.MagicMock()
+        eng.run.return_value = {
+            "order_intents": intents,
+            "metrics": {"total_return": 0.0},
+            "trades": [], "equity_curve": [],
+        }
+        eng._portfolio.positions = {}
+        return eng
+
+    def _fake_preflight(self):
+        return {"ok": True, "account": {"status": "ACTIVE"}, "positions": {}, "symbols": ["SPY"]}
+
+    @staticmethod
+    def _pass_recon_generate(rg_self):
+        import json as _j
+        rg_self._output_dir.mkdir(parents=True, exist_ok=True)
+        (rg_self._output_dir / "order_reconciliation.json").write_text(
+            _j.dumps({"overall_status": "PASS"})
+        )
+
+    def _run(self, cfg, intents, submit_return=None, tmp_path=None):
+        import tempfile
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        out = str(tmp_path) if tmp_path is not None else tempfile.mkdtemp()
+        mock_submit = mock.MagicMock(return_value=submit_return)
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=self._fake_preflight()), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine(intents)), \
+             mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
+                        self._pass_recon_generate), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog", "--output-dir", out]):
+            from src.main import main as _main
+            _main()
+        return mock_submit
+
+    # --- config defaults ---
+
+    def test_default_preview_only_is_true(self):
+        from src.config.loader import ExecutionConfig
+        assert ExecutionConfig().paper_preview_only is True
+
+    def test_config_preview_only_false(self):
+        from src.config.loader import ExecutionConfig
+        assert ExecutionConfig(paper_preview_only=False).paper_preview_only is False
+
+    def test_default_selected_client_order_id_is_none(self):
+        from src.config.loader import ExecutionConfig
+        assert ExecutionConfig().paper_selected_client_order_id is None
+
+    # --- phase 1: preview-only writes candidate CSV, no submit ---
+
+    def test_preview_only_writes_candidate_csv(self, tmp_path):
+        """Preview mode always writes paper_candidate_intents.csv."""
+        import pandas
+        cfg = self._make_config()
+        intents = [
+            self._make_intent(client_order_id="BT-000001"),
+            self._make_intent(client_order_id="BT-000002"),
+        ]
+        self._run(cfg, intents, tmp_path=tmp_path)
+        cand_path = tmp_path / "paper_candidate_intents.csv"
+        assert cand_path.exists()
+        df = pandas.read_csv(cand_path)
+        assert len(df) == 2
+        assert set(df["client_order_id"]) == {"BT-000001", "BT-000002"}
+
+    def test_preview_only_does_not_call_submit_order(self, tmp_path):
+        """Preview mode never calls submit_order."""
+        cfg = self._make_config()
+        intents = [self._make_intent()]
+        mock_submit = self._run(cfg, intents, tmp_path=tmp_path)
+        mock_submit.assert_not_called()
+
+    def test_preview_only_allows_multiple_intents(self, tmp_path):
+        """Preview mode does not raise when more than one intent is generated."""
+        cfg = self._make_config()
+        intents = [self._make_intent(client_order_id=f"BT-{i:06d}") for i in range(1, 6)]
+        self._run(cfg, intents, tmp_path=tmp_path)  # must not raise
+
+    def test_preview_only_writes_csv_when_zero_intents(self, tmp_path):
+        """Preview mode writes paper_candidate_intents.csv even with 0 intents."""
+        import pandas
+        cfg = self._make_config()
+        self._run(cfg, [], tmp_path=tmp_path)
+        cand_path = tmp_path / "paper_candidate_intents.csv"
+        assert cand_path.exists()
+        df = pandas.read_csv(cand_path)
+        assert len(df) == 0
+        for col in ("client_order_id", "timestamp", "symbol", "side",
+                    "quantity", "order_type", "reason"):
+            assert col in df.columns
+
+    def test_preview_candidate_csv_columns(self, tmp_path):
+        """paper_candidate_intents.csv includes required columns."""
+        import pandas
+        cfg = self._make_config()
+        intent = self._make_intent(quantity=139.0)
+        self._run(cfg, [intent], tmp_path=tmp_path)
+        df = pandas.read_csv(tmp_path / "paper_candidate_intents.csv")
+        assert len(df) == 1
+        row = df.iloc[0]
+        assert row["client_order_id"] == "BT-000001"
+        assert row["symbol"] == "SPY"
+        assert row["side"] == "buy"
+        assert float(row["quantity"]) == 139.0
+        assert row["order_type"] == "market"
+
+    # --- phase 2: non-preview fail-closed cases ---
+
+    def test_non_preview_without_selected_id_raises(self):
+        """paper_preview_only=False with no selected ID raises before submit_order."""
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_config(paper_preview_only=False,
+                                paper_selected_client_order_id=None)
+        mock_submit = mock.MagicMock()
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=self._fake_preflight()), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
+             mock.patch("src.main.build_engine",
+                        return_value=self._fake_engine([self._make_intent()])), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog"]):
+            from src.main import main as _main
+            with pytest.raises(RuntimeError, match="paper_selected_client_order_id"):
+                _main()
+        mock_submit.assert_not_called()
+
+    def test_non_preview_empty_selected_id_raises(self):
+        """paper_selected_client_order_id='' (blank) raises before submit_order."""
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_config(paper_preview_only=False,
+                                paper_selected_client_order_id="   ")
+        mock_submit = mock.MagicMock()
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=self._fake_preflight()), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
+             mock.patch("src.main.build_engine",
+                        return_value=self._fake_engine([self._make_intent()])), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog"]):
+            from src.main import main as _main
+            with pytest.raises(RuntimeError, match="paper_selected_client_order_id"):
+                _main()
+        mock_submit.assert_not_called()
+
+    def test_non_preview_selected_id_not_found_raises(self):
+        """Selected client_order_id not matching any candidate raises before submit_order."""
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_config(paper_preview_only=False,
+                                paper_selected_client_order_id="BT-999999")
+        intents = [self._make_intent(client_order_id="BT-000001")]
+        mock_submit = mock.MagicMock()
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=self._fake_preflight()), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine(intents)), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog"]):
+            from src.main import main as _main
+            with pytest.raises(RuntimeError, match="no intent found"):
+                _main()
+        mock_submit.assert_not_called()
+
+    def test_non_preview_duplicate_selected_id_raises(self):
+        """Two intents sharing the same client_order_id raises before submit_order."""
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_config(paper_preview_only=False,
+                                paper_selected_client_order_id="BT-000001")
+        # Same client_order_id on two intents is abnormal but must be caught
+        intents = [
+            self._make_intent(client_order_id="BT-000001"),
+            self._make_intent(client_order_id="BT-000001"),
+        ]
+        mock_submit = mock.MagicMock()
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=self._fake_preflight()), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine(intents)), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog"]):
+            from src.main import main as _main
+            with pytest.raises(RuntimeError, match="2 intents found"):
+                _main()
+        mock_submit.assert_not_called()
+
+    # --- phase 2: happy path — only selected intent submitted ---
+
+    def test_non_preview_submits_only_selected_intent(self, tmp_path):
+        """From 3 candidates, only the selected client_order_id is submitted."""
+        cfg = self._make_config(paper_preview_only=False,
+                                paper_selected_client_order_id="BT-000002")
+        intents = [
+            self._make_intent(client_order_id="BT-000001"),
+            self._make_intent(client_order_id="BT-000002"),
+            self._make_intent(client_order_id="BT-000003"),
+        ]
+        result = self._make_result(client_order_id="BT-000002")
+        mock_submit = self._run(cfg, intents, submit_return=result, tmp_path=tmp_path)
+        mock_submit.assert_called_once()
+        assert mock_submit.call_args[0][0].client_order_id == "BT-000002"
+
+    def test_non_preview_unsafe_non_selected_intents_do_not_block(self, tmp_path):
+        """Non-selected intents (even non-SPY) do not block submission of selected intent."""
+        cfg = self._make_config(paper_preview_only=False,
+                                paper_selected_client_order_id="BT-000003")
+        intents = [
+            self._make_intent(symbol="QQQ", client_order_id="BT-000001"),  # non-SPY
+            self._make_intent(order_type="limit", client_order_id="BT-000002"),  # non-market
+            self._make_intent(symbol="SPY", order_type="market",
+                              quantity=1.0, client_order_id="BT-000003"),  # safe
+        ]
+        result = self._make_result(client_order_id="BT-000003")
+        mock_submit = self._run(cfg, intents, submit_return=result, tmp_path=tmp_path)
+        mock_submit.assert_called_once()
+        assert mock_submit.call_args[0][0].client_order_id == "BT-000003"
+
+    def test_non_preview_selected_unsafe_intent_raises(self):
+        """Selecting a non-SPY intent raises RuntimeError before submit_order."""
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_config(paper_preview_only=False,
+                                paper_selected_client_order_id="BT-000001")
+        intents = [
+            self._make_intent(symbol="QQQ", client_order_id="BT-000001"),
+            self._make_intent(symbol="SPY",  client_order_id="BT-000002"),
+        ]
+        mock_submit = mock.MagicMock()
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=self._fake_preflight()), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine(intents)), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog"]):
+            from src.main import main as _main
+            with pytest.raises(RuntimeError, match="symbol="):
+                _main()
+        mock_submit.assert_not_called()
+
+    # --- override applies only to selected intent ---
+
+    def test_override_applies_only_to_selected_intent(self, tmp_path):
+        """paper_order_quantity_override is applied only to the selected intent, not others."""
+        cfg = self._make_config(paper_preview_only=False,
+                                paper_selected_client_order_id="BT-000002",
+                                paper_order_quantity_override=1.0)
+        intents = [
+            self._make_intent(quantity=139.0, client_order_id="BT-000001"),
+            self._make_intent(quantity=139.0, client_order_id="BT-000002"),
+        ]
+        result = self._make_result(client_order_id="BT-000002", quantity=1.0)
+        mock_submit = self._run(cfg, intents, submit_return=result, tmp_path=tmp_path)
+        mock_submit.assert_called_once()
+        submitted = mock_submit.call_args[0][0]
+        assert submitted.client_order_id == "BT-000002"
+        assert submitted.quantity == 1.0
+
+    # --- reconciliation compares selected/submitted intent only ---
+
+    def test_reconciliation_compares_only_selected_intent(self, tmp_path):
+        """Reporter receives only the selected intent; reconciliation is 1 intent vs 1 result."""
+        import json
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_config(paper_preview_only=False,
+                                paper_selected_client_order_id="BT-000002")
+        intents = [
+            self._make_intent(client_order_id="BT-000001"),
+            self._make_intent(client_order_id="BT-000002"),
+            self._make_intent(client_order_id="BT-000003"),
+        ]
+        result = self._make_result(client_order_id="BT-000002")
+        captured: list = []
+
+        def _gen(rg_self):
+            captured.append(list(rg_self._order_intents))
+            self._pass_recon_generate(rg_self)
+
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=self._fake_preflight()), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order", return_value=result), \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine(intents)), \
+             mock.patch("src.reporting.report_generator.ReportGenerator.generate_all", _gen), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            from src.main import main as _main
+            _main()
+        assert len(captured) == 1
+        assert len(captured[0]) == 1
+        assert captured[0][0].client_order_id == "BT-000002"
+
+    # --- candidate CSV is always written first ---
+
+    def test_candidate_csv_written_before_submission(self, tmp_path):
+        """paper_candidate_intents.csv is written before submit_order is called."""
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        call_log: list[str] = []
+        cfg = self._make_config(paper_preview_only=False,
+                                paper_selected_client_order_id="BT-000001")
+        intent = self._make_intent(client_order_id="BT-000001")
+        result = self._make_result(client_order_id="BT-000001")
+
+        original_to_csv = None
+
+        def tracking_submit(self_inner, i):
+            # CSV must already exist when submit_order is called
+            cand = tmp_path / "paper_candidate_intents.csv"
+            if cand.exists():
+                call_log.append("csv_exists_at_submit")
+            call_log.append("submit")
+            return result
+
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=self._fake_preflight()), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order", tracking_submit), \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
+                        self._pass_recon_generate), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            from src.main import main as _main
+            _main()
+        assert "csv_exists_at_submit" in call_log
+
+    # --- no real network calls ---
+
+    def test_no_real_network_calls_preview(self, tmp_path):
+        """Preview mode: TradingClient is never instantiated."""
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_config()
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=self._fake_preflight()), \
+             mock.patch("alpaca.trading.client.TradingClient") as MockTC, \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine([])), \
+             mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
+                        self._pass_recon_generate), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            from src.main import main as _main
+            _main()
+        MockTC.assert_not_called()
+
+    def test_no_real_network_calls_submit(self, tmp_path):
+        """Submit mode: TradingClient is never instantiated (broker is fully mocked)."""
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_config(paper_preview_only=False,
+                                paper_selected_client_order_id="BT-000001")
+        intent = self._make_intent()
+        result = self._make_result()
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=self._fake_preflight()), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order", return_value=result), \
+             mock.patch("alpaca.trading.client.TradingClient") as MockTC, \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
+                        self._pass_recon_generate), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            from src.main import main as _main
+            _main()
+        MockTC.assert_not_called()
