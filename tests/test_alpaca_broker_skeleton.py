@@ -2145,3 +2145,174 @@ class TestCancelOrder:
 
         with pytest.raises(RuntimeError, match="broker exploded"):
             self._adapter(client=FakeClient()).cancel_order("order-001")
+
+
+# ---------------------------------------------------------------------------
+# preflight_check
+# ---------------------------------------------------------------------------
+
+class TestPreflightCheck:
+    """Tests for AlpacaBrokerAdapter.preflight_check().
+
+    All broker calls are mocked — no real network or credentials required.
+    """
+
+    def _adapter(self, **kwargs):
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        return AlpacaBrokerAdapter(**kwargs)
+
+    def _active_account(self, **overrides):
+        base = {
+            "id": "acc-001", "status": "ACTIVE", "currency": "USD",
+            "cash": 50000.0, "equity": 100000.0, "buying_power": 100000.0,
+            "trading_blocked": False, "account_blocked": False,
+        }
+        base.update(overrides)
+        return base
+
+    def _patch_broker(self, adapter, account=None, positions=None):
+        """Patch get_account and get_positions on adapter."""
+        if account is None:
+            account = self._active_account()
+        if positions is None:
+            positions = {}
+        adapter.get_account   = mock.Mock(return_value=account)
+        adapter.get_positions = mock.Mock(return_value=positions)
+        return adapter
+
+    # --- happy path ---
+
+    def test_returns_ok_true_on_happy_path(self):
+        adapter = self._patch_broker(self._adapter())
+        result = adapter.preflight_check(["SPY", "QQQ"])
+        assert result["ok"] is True
+
+    def test_returns_account(self):
+        account = self._active_account()
+        adapter = self._patch_broker(self._adapter(), account=account)
+        assert adapter.preflight_check(["SPY"])["account"] is account
+
+    def test_returns_positions(self):
+        positions = {"MSFT": {"symbol": "MSFT", "qty": 1.0}}
+        adapter   = self._patch_broker(self._adapter(), positions=positions)
+        assert adapter.preflight_check(["SPY"])["positions"] is positions
+
+    def test_returns_normalised_symbols(self):
+        adapter = self._patch_broker(self._adapter())
+        result  = adapter.preflight_check(["spy", "qqq"])
+        assert result["symbols"] == ["SPY", "QQQ"]
+
+    def test_symbols_normalised_to_uppercase(self):
+        adapter = self._patch_broker(self._adapter())
+        result  = adapter.preflight_check(["spy", "Qqq", "MSFT"])
+        assert result["symbols"] == ["SPY", "QQQ", "MSFT"]
+
+    # --- symbol validation ---
+
+    def test_empty_symbols_list_raises_value_error(self):
+        adapter = self._patch_broker(self._adapter())
+        with pytest.raises(ValueError, match="symbols must not be empty"):
+            adapter.preflight_check([])
+
+    def test_whitespace_symbol_raises_value_error(self):
+        adapter = self._patch_broker(self._adapter())
+        with pytest.raises(ValueError, match="empty or whitespace"):
+            adapter.preflight_check(["SPY", "  "])
+
+    def test_empty_string_symbol_raises_value_error(self):
+        adapter = self._patch_broker(self._adapter())
+        with pytest.raises(ValueError, match="empty or whitespace"):
+            adapter.preflight_check([""])
+
+    # --- method call counts ---
+
+    def test_get_account_called_exactly_once(self):
+        adapter = self._patch_broker(self._adapter())
+        adapter.preflight_check(["SPY"])
+        adapter.get_account.assert_called_once()
+
+    def test_get_positions_called_exactly_once(self):
+        adapter = self._patch_broker(self._adapter())
+        adapter.preflight_check(["SPY"])
+        adapter.get_positions.assert_called_once()
+
+    def test_validate_startup_state_receives_positions_values(self):
+        positions = {
+            "MSFT": {"symbol": "MSFT", "qty": 2.0},
+            "AAPL": {"symbol": "AAPL", "qty": 3.0},
+        }
+        adapter = self._patch_broker(self._adapter(), positions=positions)
+        with mock.patch.object(adapter, "_validate_startup_state") as mock_vss:
+            adapter.preflight_check(["SPY"])
+        # Second argument must be list(positions.values()), not the dict itself
+        call_args = mock_vss.call_args
+        pos_arg = call_args[0][1]
+        assert isinstance(pos_arg, list)
+        assert set(p["symbol"] for p in pos_arg) == {"MSFT", "AAPL"}
+
+    # --- account state validation ---
+
+    def test_inactive_account_raises_runtime_error(self):
+        account = self._active_account(status="INACTIVE")
+        adapter = self._patch_broker(self._adapter(), account=account)
+        with pytest.raises(RuntimeError, match="not active"):
+            adapter.preflight_check(["SPY"])
+
+    def test_trading_blocked_raises_runtime_error(self):
+        account = self._active_account(trading_blocked=True)
+        adapter = self._patch_broker(self._adapter(), account=account)
+        with pytest.raises(RuntimeError, match="trading is blocked"):
+            adapter.preflight_check(["SPY"])
+
+    def test_account_blocked_raises_runtime_error(self):
+        account = self._active_account(account_blocked=True)
+        adapter = self._patch_broker(self._adapter(), account=account)
+        with pytest.raises(RuntimeError, match="account is blocked"):
+            adapter.preflight_check(["SPY"])
+
+    def test_existing_position_in_target_symbol_raises(self):
+        positions = {"SPY": {"symbol": "SPY", "qty": 10.0}}
+        adapter   = self._patch_broker(self._adapter(), positions=positions)
+        with pytest.raises(RuntimeError, match="Unexpected open positions"):
+            adapter.preflight_check(["SPY"])
+
+    def test_non_target_existing_position_is_allowed(self):
+        positions = {"MSFT": {"symbol": "MSFT", "qty": 5.0}}
+        adapter   = self._patch_broker(self._adapter(), positions=positions)
+        result    = adapter.preflight_check(["SPY"])
+        assert result["ok"] is True
+
+    # --- safety: no order or cancellation side-effects ---
+
+    def test_does_not_call_submit_order(self):
+        adapter = self._patch_broker(self._adapter())
+        with mock.patch.object(adapter, "submit_order",
+                               side_effect=AssertionError("submit_order must not be called")):
+            adapter.preflight_check(["SPY"])  # must not raise
+
+    def test_does_not_call_cancel_order(self):
+        adapter = self._patch_broker(self._adapter())
+        with mock.patch.object(adapter, "cancel_order",
+                               side_effect=AssertionError("cancel_order must not be called")):
+            adapter.preflight_check(["SPY"])  # must not raise
+
+    def test_does_not_call_ensure_market_hours(self):
+        adapter = self._patch_broker(self._adapter())
+        with mock.patch.object(adapter, "_ensure_market_hours",
+                               side_effect=AssertionError("_ensure_market_hours must not be called")):
+            adapter.preflight_check(["SPY"])  # must not raise
+
+    # --- infrastructure ---
+
+    def test_no_real_network_calls(self, monkeypatch):
+        monkeypatch.setenv("ALPACA_API_KEY", "k")
+        monkeypatch.setenv("ALPACA_SECRET_KEY", "s")
+        adapter = self._adapter()
+        with mock.patch("alpaca.trading.client.TradingClient") as MockTC:
+            fake_client = mock.MagicMock()
+            fake_client.get_account.return_value = self._active_account()
+            fake_client.get_all_positions.return_value = []
+            MockTC.return_value = fake_client
+            result = adapter.preflight_check(["SPY"])
+        assert result["ok"] is True
+        MockTC.assert_called_once()  # mocked — no real HTTP

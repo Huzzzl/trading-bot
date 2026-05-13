@@ -400,6 +400,52 @@ class AlpacaBrokerAdapter(BrokerAdapter):
             if sym and sym.upper() in target:
                 raise RuntimeError("Unexpected open positions for target symbols")
 
+    def preflight_check(self, symbols: list[str]) -> dict[str, Any]:
+        """Validate account and position state before paper trading begins.
+
+        Parameters
+        ----------
+        symbols:
+            Target trading symbols.  Must be non-empty; each entry must be
+            non-blank after stripping whitespace.  All symbols are normalised
+            to upper-case before validation.
+
+        Returns
+        -------
+        dict
+            ``{"ok": True, "account": account_dict, "positions": positions_dict,
+            "symbols": normalised_symbols}``
+
+        Raises
+        ------
+        ValueError
+            If *symbols* is empty or any symbol is blank.
+        RuntimeError
+            If the account is inactive, trading is blocked, or an open
+            position exists for one of the target symbols.
+        """
+        if not symbols:
+            raise ValueError("symbols must not be empty")
+
+        normalised: list[str] = []
+        for sym in symbols:
+            stripped = sym.strip().upper()
+            if not stripped:
+                raise ValueError("symbols must not contain empty or whitespace entries")
+            normalised.append(stripped)
+
+        account   = self.get_account()
+        positions = self.get_positions()
+
+        self._validate_startup_state(account, list(positions.values()), normalised)
+
+        return {
+            "ok":        True,
+            "account":   account,
+            "positions": positions,
+            "symbols":   normalised,
+        }
+
     # ------------------------------------------------------------------
     # BrokerAdapter interface
     # ------------------------------------------------------------------
