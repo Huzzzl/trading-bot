@@ -231,6 +231,18 @@ class AlpacaBrokerAdapter(BrokerAdapter):
             raw = raw.rsplit(".", 1)[-1]
         return raw.lower() == "partially_filled"
 
+    @staticmethod
+    def _normalize_side(side: Any) -> str:
+        """Normalize an Alpaca order side (str or SDK enum) to ``"buy"`` or ``"sell"``.
+
+        Handles plain strings and SDK enum values such as ``OrderSide.BUY``
+        whose ``str()`` is ``"OrderSide.BUY"``.
+        """
+        raw = str(side).strip()
+        if "." in raw:
+            raw = raw.rsplit(".", 1)[-1]
+        return raw.lower()
+
     def _build_order_payload(self, intent: OrderIntent) -> dict[str, Any]:
         """Convert an :class:`OrderIntent` into an Alpaca market order request dict.
 
@@ -328,7 +340,7 @@ class AlpacaBrokerAdapter(BrokerAdapter):
         return OrderResult(
             order_id        = str(_get("id", "")),
             symbol          = str(_get("symbol", "")),
-            side            = str(_get("side", "")),
+            side            = self._normalize_side(_get("side", "")),
             quantity        = float(raw_qty) if raw_qty is not None else intent.quantity,
             status          = status,
             submitted_at    = submitted_at or intent.timestamp,
