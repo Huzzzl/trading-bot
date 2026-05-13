@@ -1,11 +1,16 @@
 # Alpaca Adapter Design
 
-This document specifies how `AlpacaBrokerAdapter` will be implemented for
-paper trading.  **No implementation exists yet.**  `execution.mode = "paper"`
-raises `NotImplementedError` until every item in the go/no-go checklist at
-the bottom of this file is satisfied.
+This document specifies how `AlpacaBrokerAdapter` is designed and implemented
+for paper trading.  `execution.mode = "paper"` with
+`execution.paper_trading_enabled = false` (the default) raises
+`NotImplementedError` before any adapter is created.
+`execution.paper_trading_enabled = true` runs preflight checks only; order
+execution is still blocked until every item in the go/no-go checklist at the
+bottom of this file is satisfied.
 
-See also: [Paper Trading Readiness Checklist](paper_trading_readiness.md)
+See also:
+- [Paper Trading Readiness Checklist](paper_trading_readiness.md)
+- [Paper Execution Readiness](paper_execution_readiness.md) — safety gates and final wiring checklist
 
 ---
 
@@ -13,10 +18,12 @@ See also: [Paper Trading Readiness Checklist](paper_trading_readiness.md)
 
 | Item | Status |
 |------|--------|
-| `AlpacaBrokerAdapter` class | Skeleton only — all methods raise `NotImplementedError` |
-| Alpaca SDK dependency | **Not added** |
-| API keys | **Not present** |
-| `execution.mode = "paper"` | Raises `NotImplementedError` |
+| `AlpacaBrokerAdapter` class | Implemented (all five public methods + helpers); mocked tests only |
+| `alpaca-py` SDK dependency | Added to `requirements.txt` |
+| API keys | **Not present** — resolved lazily from env vars at first broker call |
+| `execution.paper_trading_enabled` | `False` by default (fail-closed); `True` runs preflight only |
+| `execution.mode = "paper"` + flag disabled | Raises `NotImplementedError` before adapter creation |
+| `execution.mode = "paper"` + flag enabled | Runs `preflight_check`; raises before order execution |
 | Live trading | **Out of scope — permanently blocked** |
 
 ---
