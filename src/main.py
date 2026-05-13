@@ -187,18 +187,19 @@ def main() -> None:
         #
         # Signal generation uses BacktestEngine over the configured historical
         # data provider (Yahoo Finance + disk cache).  This is a dry pipeline,
-        # NOT a live market data feed.  A real-time Alpaca data provider will
-        # replace this in a future PR.
+        # NOT a live market data feed.
         #
         # Hard safety constraints (fail closed — any violation raises before
         # submit_order is called):
         #   - symbol must be "SPY"
         #   - order_type must be "market"
-        #   - quantity must be <= 1
+        #   - quantity must be <= 1 (or use paper_order_quantity_override=1)
         #   - client_order_id must be non-empty
         #   - at most ONE intent generated per run (more than one → RuntimeError)
         # ------------------------------------------------------------------
         import json as _json
+        import pandas as _pd
+        from dataclasses import replace as _dc_replace
         from src.execution.alpaca_broker import AlpacaBrokerAdapter
 
         broker = AlpacaBrokerAdapter()
@@ -214,6 +215,52 @@ def main() -> None:
         results = engine.run()
         open_positions_count = len(engine._portfolio.positions)
         candidate_intents = results.get("order_intents", [])
+
+        # Fail closed if more than one intent generated — at most 1 per run.
+        if len(candidate_intents) > 1:
+            raise RuntimeError(
+                f"Paper execution: {len(candidate_intents)} intents generated; "
+                "at most 1 is allowed per run. Aborting without submitting any order."
+            )
+
+        # Track original intent before any quantity override is applied.
+        _original_intent = candidate_intents[0] if candidate_intents else None
+
+        # --- Quantity override (execution.paper_order_quantity_override). ---
+        # Allows the first manual paper run to submit exactly 1 share when the
+        # strategy generates a larger position size.  Default None = fail closed
+        # (quantity > 1 still raises).  Only 1.0 is supported.
+        _qty_override = cfg.execution.paper_order_quantity_override
+        if _qty_override is not None:
+            if _qty_override <= 0:
+                raise RuntimeError(
+                    f"execution.paper_order_quantity_override must be > 0, "
+                    f"got {_qty_override}."
+                )
+            if _qty_override > 1:
+                raise RuntimeError(
+                    f"execution.paper_order_quantity_override must be <= 1, "
+                    f"got {_qty_override}. Only 1.0 is supported in this implementation."
+                )
+            if _qty_override != 1.0:
+                raise RuntimeError(
+                    f"execution.paper_order_quantity_override must be exactly 1.0, "
+                    f"got {_qty_override}. Only 1.0 is supported in this implementation."
+                )
+            if _original_intent is not None:
+                _new_meta = dict(_original_intent.metadata)
+                _new_meta["paper_quantity_override"] = True
+                _new_meta["original_quantity"] = _original_intent.quantity
+                candidate_intents = [
+                    _dc_replace(_original_intent, quantity=_qty_override, metadata=_new_meta)
+                ]
+                logger.info(
+                    "Paper quantity override: client_order_id=%s "
+                    "original_qty=%s -> submitted_qty=%s",
+                    candidate_intents[0].client_order_id,
+                    _original_intent.quantity,
+                    _qty_override,
+                )
 
         # --- Safety validation: fail closed on ANY constraint violation. ---
         # Do NOT silently filter unsafe intents — any violation aborts before
@@ -243,13 +290,6 @@ def main() -> None:
                     f"Paper safety constraint violated for intent "
                     f"{_intent.client_order_id!r}: " + "; ".join(_violations)
                 )
-
-        # Fail closed if more than one intent generated — at most 1 per run.
-        if len(candidate_intents) > 1:
-            raise RuntimeError(
-                f"Paper execution: {len(candidate_intents)} intents generated; "
-                "at most 1 is allowed per run. Aborting without submitting any order."
-            )
 
         submitted_intent = candidate_intents[0] if candidate_intents else None
 
@@ -281,8 +321,33 @@ def main() -> None:
                 result.client_order_id,
             )
 
+        # Write paper_intent_audit.csv — records original vs submitted quantities.
+        # Always written (empty header row when no intents generated).
+        _audit_cols = [
+            "client_order_id", "symbol", "side",
+            "original_quantity", "submitted_quantity", "override_applied",
+        ]
+        if _original_intent is not None:
+            _audit_df = _pd.DataFrame([{
+                "client_order_id":    (submitted_intent.client_order_id
+                                       if submitted_intent else _original_intent.client_order_id),
+                "symbol":             (submitted_intent.symbol
+                                       if submitted_intent else _original_intent.symbol),
+                "side":               (submitted_intent.side
+                                       if submitted_intent else _original_intent.side),
+                "original_quantity":  _original_intent.quantity,
+                "submitted_quantity": submitted_intent.quantity if submitted_intent else None,
+                "override_applied":   _qty_override is not None,
+            }], columns=_audit_cols)
+        else:
+            _audit_df = _pd.DataFrame(columns=_audit_cols)
+        _audit_path = output_dir / "paper_intent_audit.csv"
+        _audit_df.to_csv(_audit_path, index=False)
+        logger.info("Paper intent audit written to %s", _audit_path)
+
         # Write audit artifacts.
-        # order_intents=candidate_intents records all generated intents for audit.
+        # order_intents=candidate_intents reflects the submitted intent (after
+        # any quantity override) so reconciliation uses the correct quantity.
         # order_results=[] (not None) ensures order_results.csv and
         # order_reconciliation.json are always written.
         reporter = ReportGenerator(

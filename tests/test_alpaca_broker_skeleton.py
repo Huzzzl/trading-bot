@@ -2754,7 +2754,8 @@ class TestPaperExecutionPath:
     All tests are fully mocked — no real Alpaca network calls.
     """
 
-    def _make_config(self, paper_trading_enabled: bool = True):
+    def _make_config(self, paper_trading_enabled: bool = True,
+                     paper_order_quantity_override=None):
         from src.config.loader import (
             AppConfig, BacktestConfig, DataConfig, ExecutionConfig,
             LoggingConfig, RiskConfig, StrategyConfig,
@@ -2772,7 +2773,11 @@ class TestPaperExecutionPath:
             }),
             risk=RiskConfig(),
             logging=LoggingConfig(level="WARNING", format="%(message)s"),
-            execution=ExecutionConfig(mode="paper", paper_trading_enabled=paper_trading_enabled),
+            execution=ExecutionConfig(
+                mode="paper",
+                paper_trading_enabled=paper_trading_enabled,
+                paper_order_quantity_override=paper_order_quantity_override,
+            ),
         )
 
     def _make_intent(self, symbol="SPY", side="buy", quantity=1.0,
@@ -3266,3 +3271,423 @@ class TestPaperExecutionPath:
             from src.main import main as _main
             _main()
         MockTC.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# paper_order_quantity_override tests
+# ---------------------------------------------------------------------------
+
+class TestPaperOrderQuantityOverride:
+    """Tests for execution.paper_order_quantity_override in the paper path.
+
+    Default None keeps fail-closed behavior (quantity > 1 → RuntimeError).
+    Override=1 converts any quantity to 1.0 before safety validation.
+    All tests are fully mocked — no real Alpaca network calls.
+    """
+
+    def _make_config(self, override=None):
+        from src.config.loader import (
+            AppConfig, BacktestConfig, DataConfig, ExecutionConfig,
+            LoggingConfig, RiskConfig, StrategyConfig,
+        )
+        return AppConfig(
+            backtest=BacktestConfig(
+                start_date="2024-01-15", end_date="2024-01-15",
+                initial_capital=100_000, commission_per_share=0.0, slippage_per_share=0.0,
+            ),
+            symbols=["SPY"],
+            data=DataConfig(provider="yahoo", bar_interval="5m", timezone="America/New_York"),
+            strategy=StrategyConfig(name="opening_range_breakout", params={
+                "opening_range_start": "09:30", "opening_range_end": "10:00",
+                "force_exit_time": "15:55", "position_size_pct": 0.95, "long_only": True,
+            }),
+            risk=RiskConfig(),
+            logging=LoggingConfig(level="WARNING", format="%(message)s"),
+            execution=ExecutionConfig(
+                mode="paper",
+                paper_trading_enabled=True,
+                paper_order_quantity_override=override,
+            ),
+        )
+
+    def _make_intent(self, symbol="SPY", side="buy", quantity=139.0,
+                     order_type="market", client_order_id="BT-000001"):
+        from src.execution.order_intent import OrderIntent
+        return OrderIntent(
+            symbol=symbol, side=side, quantity=quantity,
+            order_type=order_type, reason="entry",
+            timestamp=pd.Timestamp("2024-01-15 10:00:00", tz="America/New_York"),
+            client_order_id=client_order_id,
+        )
+
+    def _make_result(self, quantity=1.0, client_order_id="BT-000001", status="accepted"):
+        from src.execution.broker import OrderResult
+        return OrderResult(
+            order_id=f"ALPACA-{client_order_id}",
+            symbol="SPY", side="buy", quantity=quantity,
+            status=status,
+            submitted_at=pd.Timestamp("2024-01-15 10:00:00", tz="America/New_York"),
+            reason="entry", client_order_id=client_order_id,
+            metadata={"raw_status": status, "partial_fill": False},
+        )
+
+    def _fake_engine(self, intents):
+        eng = mock.MagicMock()
+        eng.run.return_value = {
+            "order_intents": intents,
+            "metrics": {"total_return": 0.0},
+            "trades": [], "equity_curve": [],
+        }
+        eng._portfolio.positions = {}
+        return eng
+
+    def _fake_preflight(self):
+        return {"ok": True, "account": {"status": "ACTIVE"}, "positions": {}, "symbols": ["SPY"]}
+
+    @staticmethod
+    def _pass_recon_generate(rg_self):
+        import json as _j
+        rg_self._output_dir.mkdir(parents=True, exist_ok=True)
+        (rg_self._output_dir / "order_reconciliation.json").write_text(
+            _j.dumps({"overall_status": "PASS"})
+        )
+
+    # --- config defaults ---
+
+    def test_default_is_none(self):
+        from src.config.loader import ExecutionConfig
+        assert ExecutionConfig().paper_order_quantity_override is None
+
+    def test_config_override_field_set(self):
+        from src.config.loader import ExecutionConfig
+        cfg = ExecutionConfig(mode="paper", paper_order_quantity_override=1.0)
+        assert cfg.paper_order_quantity_override == 1.0
+
+    # --- default None: fail closed for quantity > 1 ---
+
+    def test_override_none_qty_gt1_raises(self):
+        """Without override, quantity > 1 raises RuntimeError (fail closed)."""
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_config(override=None)
+        intent = self._make_intent(quantity=139.0)
+        mock_submit = mock.MagicMock()
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=self._fake_preflight()), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog"]):
+            from src.main import main as _main
+            with pytest.raises(RuntimeError, match="quantity="):
+                _main()
+        mock_submit.assert_not_called()
+
+    # --- override=1: converts large quantity to 1.0 ---
+
+    def test_override_1_converts_large_qty(self, tmp_path):
+        """override=1 converts quantity 139 → 1.0; submit_order receives qty=1.0."""
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_config(override=1.0)
+        intent = self._make_intent(quantity=139.0)
+        result = self._make_result(quantity=1.0)
+        mock_submit = mock.MagicMock(return_value=result)
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=self._fake_preflight()), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
+                        self._pass_recon_generate), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            from src.main import main as _main
+            _main()
+        mock_submit.assert_called_once()
+        submitted = mock_submit.call_args[0][0]
+        assert submitted.quantity == 1.0
+
+    def test_override_1_preserves_client_order_id(self, tmp_path):
+        """override=1 preserves the original client_order_id."""
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_config(override=1.0)
+        intent = self._make_intent(quantity=139.0, client_order_id="BT-000042")
+        result = self._make_result(quantity=1.0, client_order_id="BT-000042")
+        mock_submit = mock.MagicMock(return_value=result)
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=self._fake_preflight()), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
+                        self._pass_recon_generate), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            from src.main import main as _main
+            _main()
+        submitted = mock_submit.call_args[0][0]
+        assert submitted.client_order_id == "BT-000042"
+
+    def test_override_1_records_original_qty_in_metadata(self, tmp_path):
+        """override=1 adds paper_quantity_override=True and original_quantity to metadata."""
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_config(override=1.0)
+        intent = self._make_intent(quantity=139.0)
+        result = self._make_result(quantity=1.0)
+        mock_submit = mock.MagicMock(return_value=result)
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=self._fake_preflight()), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
+                        self._pass_recon_generate), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            from src.main import main as _main
+            _main()
+        submitted = mock_submit.call_args[0][0]
+        assert submitted.metadata.get("paper_quantity_override") is True
+        assert submitted.metadata.get("original_quantity") == 139.0
+
+    # --- override value validation ---
+
+    def test_override_gt1_raises_before_submit(self):
+        """override > 1 raises RuntimeError; submit_order is never called."""
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_config(override=2.0)
+        intent = self._make_intent(quantity=1.0)  # even a safe intent is blocked
+        mock_submit = mock.MagicMock()
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=self._fake_preflight()), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog"]):
+            from src.main import main as _main
+            with pytest.raises(RuntimeError, match="must be <= 1"):
+                _main()
+        mock_submit.assert_not_called()
+
+    def test_override_zero_raises_before_submit(self):
+        """override=0 raises RuntimeError; submit_order is never called."""
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_config(override=0.0)
+        intent = self._make_intent(quantity=1.0)
+        mock_submit = mock.MagicMock()
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=self._fake_preflight()), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog"]):
+            from src.main import main as _main
+            with pytest.raises(RuntimeError, match="must be > 0"):
+                _main()
+        mock_submit.assert_not_called()
+
+    def test_override_negative_raises_before_submit(self):
+        """override < 0 raises RuntimeError; submit_order is never called."""
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_config(override=-1.0)
+        intent = self._make_intent(quantity=1.0)
+        mock_submit = mock.MagicMock()
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=self._fake_preflight()), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog"]):
+            from src.main import main as _main
+            with pytest.raises(RuntimeError, match="must be > 0"):
+                _main()
+        mock_submit.assert_not_called()
+
+    # --- override does not bypass other safety constraints ---
+
+    def test_override_1_non_spy_still_raises(self):
+        """override=1 on a non-SPY intent still raises (symbol check runs after override)."""
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_config(override=1.0)
+        intent = self._make_intent(symbol="QQQ", quantity=139.0)
+        mock_submit = mock.MagicMock()
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=self._fake_preflight()), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog"]):
+            from src.main import main as _main
+            with pytest.raises(RuntimeError, match="symbol="):
+                _main()
+        mock_submit.assert_not_called()
+
+    def test_override_1_non_market_still_raises(self):
+        """override=1 on a limit order still raises (order_type check runs after override)."""
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_config(override=1.0)
+        intent = self._make_intent(order_type="limit", quantity=139.0)
+        mock_submit = mock.MagicMock()
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=self._fake_preflight()), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog"]):
+            from src.main import main as _main
+            with pytest.raises(RuntimeError, match="order_type="):
+                _main()
+        mock_submit.assert_not_called()
+
+    def test_override_multiple_intents_still_raises(self):
+        """override=1 with 2 intents still raises (count check runs before override)."""
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_config(override=1.0)
+        intents = [
+            self._make_intent(quantity=139.0, client_order_id="BT-000001"),
+            self._make_intent(quantity=139.0, client_order_id="BT-000002"),
+        ]
+        mock_submit = mock.MagicMock()
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=self._fake_preflight()), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine(intents)), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog"]):
+            from src.main import main as _main
+            with pytest.raises(RuntimeError, match="2 intents"):
+                _main()
+        mock_submit.assert_not_called()
+
+    # --- audit CSV ---
+
+    def test_override_writes_audit_csv(self, tmp_path):
+        """paper_intent_audit.csv records original_quantity=139, submitted_quantity=1."""
+        import pandas
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_config(override=1.0)
+        intent = self._make_intent(quantity=139.0)
+        result = self._make_result(quantity=1.0)
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=self._fake_preflight()), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order", return_value=result), \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
+                        self._pass_recon_generate), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            from src.main import main as _main
+            _main()
+        audit_path = tmp_path / "paper_intent_audit.csv"
+        assert audit_path.exists(), "paper_intent_audit.csv must be written"
+        df = pandas.read_csv(audit_path)
+        assert len(df) == 1
+        row = df.iloc[0]
+        assert row["client_order_id"] == "BT-000001"
+        assert float(row["original_quantity"]) == 139.0
+        assert float(row["submitted_quantity"]) == 1.0
+        assert bool(row["override_applied"]) is True
+
+    def test_no_override_audit_csv_no_override_flag(self, tmp_path):
+        """Without override: audit CSV has override_applied=False."""
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        import pandas
+        cfg = self._make_config(override=None)
+        intent = self._make_intent(quantity=1.0)  # already valid
+        result = self._make_result(quantity=1.0)
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=self._fake_preflight()), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order", return_value=result), \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
+                        self._pass_recon_generate), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            from src.main import main as _main
+            _main()
+        df = pandas.read_csv(tmp_path / "paper_intent_audit.csv")
+        assert len(df) == 1
+        assert bool(df.iloc[0]["override_applied"]) is False
+
+    def test_empty_intents_audit_csv_header_only(self, tmp_path):
+        """Zero intents: paper_intent_audit.csv is written with header row only."""
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        import pandas
+        cfg = self._make_config(override=None)
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=self._fake_preflight()), \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine([])), \
+             mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
+                        self._pass_recon_generate), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            from src.main import main as _main
+            _main()
+        audit_path = tmp_path / "paper_intent_audit.csv"
+        assert audit_path.exists()
+        df = pandas.read_csv(audit_path)
+        assert len(df) == 0
+        assert "original_quantity" in df.columns
+        assert "submitted_quantity" in df.columns
+        assert "override_applied" in df.columns
+
+    # --- reconciliation uses submitted quantity ---
+
+    def test_reconciliation_uses_submitted_qty(self, tmp_path):
+        """After override, reconciliation compares qty=1.0 intent to qty=1.0 result → PASS."""
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        import json
+        cfg = self._make_config(override=1.0)
+        intent = self._make_intent(quantity=139.0)
+        result = self._make_result(quantity=1.0)
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=self._fake_preflight()), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order", return_value=result), \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            from src.main import main as _main
+            _main()  # must not raise
+        recon = json.loads((tmp_path / "order_reconciliation.json").read_text())
+        assert recon["overall_status"] == "PASS"
+
+    # --- no real network calls ---
+
+    def test_no_real_network_calls_with_override(self, tmp_path):
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        cfg = self._make_config(override=1.0)
+        intent = self._make_intent(quantity=139.0)
+        result = self._make_result(quantity=1.0)
+        with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=self._fake_preflight()), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order", return_value=result), \
+             mock.patch("alpaca.trading.client.TradingClient") as MockTC, \
+             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
+                        self._pass_recon_generate), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            from src.main import main as _main
+            _main()
+        MockTC.assert_not_called()
+
+    # --- backtest and other modes unaffected ---
+
+    def test_override_field_ignored_in_backtest_mode(self):
+        """paper_order_quantity_override is only read in paper mode; backtest is unaffected."""
+        from src.config.loader import ExecutionConfig
+        cfg_paper = ExecutionConfig(mode="paper", paper_order_quantity_override=1.0)
+        cfg_bt    = ExecutionConfig(mode="backtest", paper_order_quantity_override=None)
+        assert cfg_paper.paper_order_quantity_override == 1.0
+        assert cfg_bt.paper_order_quantity_override is None

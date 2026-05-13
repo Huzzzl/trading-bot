@@ -57,7 +57,28 @@ Add or confirm these fields under `execution:`:
 execution:
   mode: paper
   paper_trading_enabled: true
+  paper_order_quantity_override: 1
 ```
+
+**Why `paper_order_quantity_override: 1` is needed for the first manual run:**
+
+The strategy's position-sizing logic calculates a full position (e.g. 139 shares of SPY based on
+allocated capital).  The paper safety gate rejects any intent with `quantity > 1`.  Without the
+override, the run fails immediately with:
+
+```
+RuntimeError: Paper safety constraint violated for intent 'BT-000001': quantity=139.0 (must be <= 1)
+```
+
+Setting `paper_order_quantity_override: 1` tells `main.py` to replace the intent's quantity with
+`1.0` *before* the safety validation runs.  The original quantity is preserved in
+`paper_intent_audit.csv` and in the intent's metadata so the override is fully auditable.
+
+**Important:**
+- Default (`null` / not set) is fail-closed — any intent with `quantity > 1` raises immediately.
+- Only `1.0` is accepted; values `<= 0` or `> 1` raise `RuntimeError` before any order is sent.
+- The override does **not** bypass symbol, order-type, or `client_order_id` checks.
+- Remove or unset this field once position sizing is adjusted to produce `quantity <= 1` natively.
 
 All other config fields (symbols, strategy params, risk limits) follow the same
 schema as for backtest mode.  Review them carefully before any run.
@@ -75,7 +96,7 @@ Complete every item before proceeding:
 | 3 | The paper account has **no open positions** in any target symbol | ☐ |
 | 4 | Current time is within regular market hours (09:30–16:00 ET, Mon–Fri) | ☐ |
 | 5 | `symbols:` in `settings.yaml` is `["SPY"]` only (constraint: SPY only) | ☐ |
-| 6 | Position sizing will produce `quantity <= 1` share (constraint: max 1 share) | ☐ |
+| 6 | Position sizing will produce `quantity <= 1` share, **OR** `paper_order_quantity_override: 1` is set (see § 3) | ☐ |
 | 7 | Strategy will produce at most 1 intent per run (constraint: max 1 order) | ☐ |
 | 8 | Daily loss limit is confirmed (`daily_loss_limit_pct`, `daily_loss_action`) | ☐ |
 | 9 | Full test suite passes without credentials: `pytest` | ☐ |
@@ -189,7 +210,8 @@ The following are explicitly **not** supported and will raise immediately:
 | `submit_order` without `client_order_id` | `ValueError` from `_validate_order_intent` |
 | Intent with symbol other than `SPY` | `RuntimeError` in `main.py` before `submit_order` |
 | Intent with `order_type` other than `market` | `RuntimeError` in `main.py` before `submit_order` |
-| Intent with `quantity > 1` | `RuntimeError` in `main.py` before `submit_order` |
+| Intent with `quantity > 1` (no override set) | `RuntimeError` in `main.py` before `submit_order` |
+| `paper_order_quantity_override` set to `> 1` or `<= 0` | `RuntimeError` in `main.py` — only 1.0 accepted |
 | More than 1 intent generated in one run | `RuntimeError` in `main.py` — no order submitted |
 | `OrderResult` returned without `client_order_id` | `RuntimeError` in `main.py` after `submit_order` |
 | `order_reconciliation.json` not written | `RuntimeError` in `main.py` — internal error |
