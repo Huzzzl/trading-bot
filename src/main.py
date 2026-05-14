@@ -174,6 +174,7 @@ def _run_paper_close(cfg: AppConfig, output_dir: Path) -> None:
     import pandas as _pd
     from dataclasses import replace as _dc_replace
     from zoneinfo import ZoneInfo as _ZoneInfo
+    from src.execution.paper_ledger import assert_client_order_id_unused, append_ledger_row
 
     from src.execution.alpaca_broker import AlpacaBrokerAdapter
     from src.execution.order_intent import OrderIntent
@@ -344,6 +345,9 @@ def _run_paper_close(cfg: AppConfig, output_dir: Path) -> None:
             f"{selected_intent.client_order_id!r}: " + "; ".join(_violations)
         )
 
+    _ledger_path = Path(cfg.execution.paper_ledger_path)
+    assert_client_order_id_unused(_ledger_path, selected_intent.client_order_id)
+
     logger.info(
         "Paper close: submitting intent client_order_id=%s symbol=%s side=%s qty=%s",
         selected_intent.client_order_id,
@@ -364,6 +368,20 @@ def _run_paper_close(cfg: AppConfig, output_dir: Path) -> None:
         result.status,
         result.client_order_id,
     )
+    append_ledger_row(_ledger_path, {
+        "run_id":          output_dir.name,
+        "flow":            "close_submit",
+        "client_order_id": result.client_order_id,
+        "alpaca_order_id": result.order_id,
+        "symbol":          result.symbol,
+        "side":            result.side,
+        "quantity":        result.quantity,
+        "status":          result.status,
+        "submitted_at":    str(result.submitted_at),
+        "output_dir":      str(output_dir),
+        "notes":           "",
+    })
+    logger.info("Paper close: ledger row appended to %s", _ledger_path)
 
     # Write paper_close_intent_audit.csv.
     _audit_cols = [
@@ -640,6 +658,10 @@ def main() -> None:
                     f"No order was submitted."
                 )
 
+        from src.execution.paper_ledger import assert_client_order_id_unused, append_ledger_row as _append_ledger_row
+        _ledger_path = Path(cfg.execution.paper_ledger_path)
+        assert_client_order_id_unused(_ledger_path, selected_intent.client_order_id)
+
         logger.info(
             "Paper execution: submitting intent client_order_id=%s symbol=%s side=%s qty=%s",
             selected_intent.client_order_id,
@@ -660,6 +682,20 @@ def main() -> None:
             result.status,
             result.client_order_id,
         )
+        _append_ledger_row(_ledger_path, {
+            "run_id":          output_dir.name,
+            "flow":            "buy_submit",
+            "client_order_id": result.client_order_id,
+            "alpaca_order_id": result.order_id,
+            "symbol":          result.symbol,
+            "side":            result.side,
+            "quantity":        result.quantity,
+            "status":          result.status,
+            "submitted_at":    str(result.submitted_at),
+            "output_dir":      str(output_dir),
+            "notes":           "",
+        })
+        logger.info("Paper execution: ledger row appended to %s", _ledger_path)
 
         # Write paper_intent_audit.csv for the selected/submitted intent.
         _audit_cols = [

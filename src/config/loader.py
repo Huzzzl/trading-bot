@@ -66,6 +66,7 @@ class ExecutionConfig:
     paper_close_preview_only:                bool         = True
     paper_selected_close_client_order_id:    str | None   = None
     paper_close_quantity_override:           float | None = None
+    paper_ledger_path:                       str          = "output/paper_execution_ledger.csv"
 
 
 @dataclass
@@ -260,6 +261,7 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
         paper_close_preview_only=bool(ex.get("paper_close_preview_only", True)),
         paper_selected_close_client_order_id=str(_selected_close_coid_raw) if _selected_close_coid_raw is not None else None,
         paper_close_quantity_override=float(_close_qty_override_raw) if _close_qty_override_raw is not None else None,
+        paper_ledger_path=str(ex.get("paper_ledger_path", "output/paper_execution_ledger.csv")),
     )
 
     app_cfg = AppConfig(
