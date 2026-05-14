@@ -309,7 +309,54 @@ Complete every item before proceeding:
 
 ---
 
-## 6. Safe Manual Flow
+## 6. Offline Smoke Check (no credentials, no network)
+
+Before running against a real paper account, validate the entire paper execution
+infrastructure offline using the built-in smoke check utility.
+
+```bash
+python -m src.tools.paper_smoke_check \
+    --config config/settings.paper.local.yaml \
+    --output-dir output/paper_smoke_check
+```
+
+The utility:
+1. Loads and validates `config/settings.paper.local.yaml` via `validate_paper_config`.
+2. Simulates the buy preview path with a fake broker (no credentials) and a fake
+   engine (no market data download), writing `paper_candidate_intents.csv`.
+3. Simulates the close preview path with a fake broker holding 1 SPY share,
+   writing `paper_close_candidate_intents.csv`.
+4. *(Optional)* Replays reconciliation on existing artifacts:
+
+```bash
+python -m src.tools.paper_smoke_check \
+    --config config/settings.paper.local.yaml \
+    --output-dir output/paper_smoke_check \
+    --replay-dir output/paper_submit_BT000035
+```
+
+Expected output on success:
+
+```
+=== Paper Smoke Check ===
+  [PASS] config_load_and_validate  (mode=paper paper_trading_enabled=True)
+  [PASS] buy_preview  (1 candidate(s) written → paper_candidate_intents.csv)
+  [PASS] close_preview  (1 candidate(s) written → paper_close_candidate_intents.csv)
+
+  RESULT: PASS
+=========================
+```
+
+Exit code is `0` on full pass, `1` on any failure.
+
+**Safety guarantees:**
+- `submit_order` and `cancel_order` are never called (raise immediately if reached).
+- No Alpaca credentials are read from the environment.
+- No network access is required.
+
+---
+
+## 7. Safe Manual Flow
 
 Follow these steps in order.  Stop at any step that produces an unexpected result.
 
@@ -389,7 +436,7 @@ Check the output directory for audit artifacts (see section 7).
 
 ---
 
-## 7. Emergency Stop
+## 8. Emergency Stop
 
 If at any point the process behaves unexpectedly:
 
@@ -403,7 +450,7 @@ If at any point the process behaves unexpectedly:
 
 ---
 
-## 8. Expected Output Artifacts
+## 9. Expected Output Artifacts
 
 After a successful paper run the output directory will contain:
 
@@ -419,7 +466,7 @@ orders, investigate before running again.
 
 ---
 
-## 9. What Is Still Blocked or Constrained
+## 10. What Is Still Blocked or Constrained
 
 The following are explicitly **not** supported and will raise immediately:
 
@@ -450,7 +497,7 @@ The following are explicitly **not** supported and will raise immediately:
 
 ---
 
-## 10. References
+## 11. References
 
 - [Alpaca Adapter Design](alpaca_adapter_design.md) — full adapter specification
 - [Paper Execution Readiness](paper_execution_readiness.md) — safety gates and merge checklist
