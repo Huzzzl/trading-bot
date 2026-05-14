@@ -86,6 +86,77 @@ class AppConfig:
 
 
 # ---------------------------------------------------------------------------
+# Paper config validation
+# ---------------------------------------------------------------------------
+
+def validate_paper_config(execution: ExecutionConfig) -> None:
+    """Validate paper-execution config combinations before any broker logic runs.
+
+    Raises
+    ------
+    ValueError
+        On any unsafe or contradictory combination of paper settings.
+
+    Notes
+    -----
+    - Does not validate credentials.
+    - Does not call Alpaca.
+    - Does not change submit behaviour.
+    - Safe to call multiple times (pure function).
+    """
+    if execution.mode != "paper" or not execution.paper_trading_enabled:
+        return  # non-paper or disabled paper — nothing to validate here
+
+    # --- Conflict: buy-submit mode + close path active ---
+    if execution.paper_close_positions_enabled and not execution.paper_preview_only:
+        raise ValueError(
+            "Invalid paper config: paper_close_positions_enabled=true and "
+            "paper_preview_only=false are mutually exclusive. "
+            "The close/flatten path and the buy-submit path cannot both be active. "
+            "Set paper_preview_only=true (its default) when "
+            "paper_close_positions_enabled=true."
+        )
+
+    # --- Buy-submit path: selected ID required ---
+    if not execution.paper_close_positions_enabled and not execution.paper_preview_only:
+        coid = execution.paper_selected_client_order_id
+        if not coid or not str(coid).strip():
+            raise ValueError(
+                "Invalid paper config: execution.paper_preview_only=false requires "
+                "execution.paper_selected_client_order_id to be set to a non-empty value. "
+                "Run in preview mode first (paper_preview_only=true) to generate candidates."
+            )
+
+    # --- Close-submit path: selected close ID required ---
+    if execution.paper_close_positions_enabled and not execution.paper_close_preview_only:
+        close_coid = execution.paper_selected_close_client_order_id
+        if not close_coid or not str(close_coid).strip():
+            raise ValueError(
+                "Invalid paper config: execution.paper_close_preview_only=false requires "
+                "execution.paper_selected_close_client_order_id to be set to a non-empty "
+                "value. Run in close preview mode first (paper_close_preview_only=true) "
+                "to generate candidates."
+            )
+
+    # --- Quantity overrides must be exactly 1.0 when set ---
+    _ov = execution.paper_order_quantity_override
+    if _ov is not None:
+        if _ov <= 0 or _ov > 1 or _ov != 1.0:
+            raise ValueError(
+                f"Invalid paper config: execution.paper_order_quantity_override must be "
+                f"exactly 1.0, got {_ov}. Only 1.0 is supported."
+            )
+
+    _cov = execution.paper_close_quantity_override
+    if _cov is not None:
+        if _cov <= 0 or _cov > 1 or _cov != 1.0:
+            raise ValueError(
+                f"Invalid paper config: execution.paper_close_quantity_override must be "
+                f"exactly 1.0, got {_cov}. Only 1.0 is supported."
+            )
+
+
+# ---------------------------------------------------------------------------
 # Loader
 # ---------------------------------------------------------------------------
 
@@ -191,7 +262,7 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
         paper_close_quantity_override=float(_close_qty_override_raw) if _close_qty_override_raw is not None else None,
     )
 
-    return AppConfig(
+    app_cfg = AppConfig(
         backtest=backtest_cfg,
         symbols=list(raw["symbols"]),
         data=data_cfg,
@@ -200,3 +271,5 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
         logging=logging_cfg,
         execution=execution_cfg,
     )
+    validate_paper_config(app_cfg.execution)
+    return app_cfg

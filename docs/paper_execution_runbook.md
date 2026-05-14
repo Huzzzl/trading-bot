@@ -190,20 +190,40 @@ Credentials must come from your Alpaca **paper trading** account dashboard at
 
 ## 4. Required Config (`config/settings.yaml`)
 
-### Phase 1 — Preview run (inspect candidates, no order sent)
+### Valid Config Combinations
+
+`load_config()` runs `validate_paper_config()` immediately after parsing.
+Invalid or contradictory combinations raise `ValueError` before any broker
+or execution logic runs.
+
+| Combination | paper_preview_only | paper_close_positions_enabled | paper_close_preview_only | Valid? |
+|-------------|-------------------|-------------------------------|--------------------------|--------|
+| **A. Buy preview** (default) | `true` | `false` | `true` | ✅ |
+| **B. Buy submit** | `false` + selected ID set | `false` | `true` | ✅ |
+| **C. Close preview** | `true` | `true` | `true` | ✅ |
+| **D. Close submit** | `true` | `true` | `false` + close selected ID set | ✅ |
+| Buy submit + close enabled | `false` | `true` | any | ❌ `ValueError` |
+| Buy submit without selected ID | `false` | `false` | any | ❌ `ValueError` |
+| Close submit without close selected ID | `true` | `true` | `false` | ❌ `ValueError` |
+| `paper_order_quantity_override` ≠ 1.0 | any | any | any | ❌ `ValueError` |
+| `paper_close_quantity_override` ≠ 1.0 | any | any | any | ❌ `ValueError` |
+
+---
+
+### Combination A — Buy preview (inspect candidates, no order sent)
 
 ```yaml
 execution:
   mode: paper
   paper_trading_enabled: true
-  paper_preview_only: true          # default; omitting this field also defaults to true
+  paper_preview_only: true          # default; omitting also defaults to true
 ```
 
 Run `python -m src.main`.  The process exits cleanly after writing
 `output/paper_candidate_intents.csv`.  Open that file and note the
 `client_order_id` of the intent you want to submit.
 
-### Phase 2 — Submit selected intent
+### Combination B — Buy submit (selected intent)
 
 ```yaml
 execution:
@@ -231,6 +251,41 @@ quantity with `1.0` *before* the safety validation runs.  The original quantity 
 
 All other config fields (symbols, strategy params, risk limits) follow the same
 schema as for backtest mode.  Review them carefully before any run.
+
+### Combination C — Close preview (inspect existing positions, no order sent)
+
+> **First implementation: SPY only, sell market, max 1 share.**
+
+```yaml
+execution:
+  mode: paper
+  paper_trading_enabled: true
+  paper_close_positions_enabled: true
+  paper_close_preview_only: true    # default; omitting also defaults to true
+```
+
+Run `python -m src.main`.  The process exits cleanly after writing
+`output/paper_close_candidate_intents.csv`.  Open that file and note the
+`client_order_id` of the close candidate you want to submit.
+
+### Combination D — Close submit (selected close intent)
+
+```yaml
+execution:
+  mode: paper
+  paper_trading_enabled: true
+  paper_close_positions_enabled: true
+  paper_close_preview_only: false
+  paper_selected_close_client_order_id: "BC-20260513154235-SPY"  # replace with your ID
+  paper_close_quantity_override: 1   # required if position qty > 1
+```
+
+**Config validation (`validate_paper_config`) raises `ValueError` immediately for:**
+- `paper_preview_only: false` while `paper_close_positions_enabled: true`
+  (buy-submit and close are mutually exclusive)
+- `paper_preview_only: false` without `paper_selected_client_order_id` set
+- `paper_close_preview_only: false` without `paper_selected_close_client_order_id` set
+- `paper_order_quantity_override` or `paper_close_quantity_override` set to any value other than `1.0`
 
 ---
 
