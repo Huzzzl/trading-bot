@@ -1,0 +1,53 @@
+# Paper trading local config — for offline smoke checks and manual paper runs.
+#
+# NO credentials stored here.  The Alpaca client reads keys from:
+#   ALPACA_API_KEY / ALPACA_SECRET_KEY environment variables.
+#
+# Safe to commit: paper_preview_only defaults to true — no orders will be
+# submitted unless you explicitly set paper_preview_only: false AND supply
+# paper_selected_client_order_id after reviewing the candidates CSV.
+
+backtest:
+  start_date: "2026-04-10"
+  end_date:   "2026-05-09"
+  initial_capital: 100000.0
+  commission_per_share: 0.005
+  slippage_per_share: 0.01
+
+symbols:
+  - SPY
+
+data:
+  provider: yahoo
+  bar_interval: "5m"
+  timezone: "America/New_York"
+  cache_enabled: true
+  cache_dir: "data/cache"
+
+strategy:
+  name: opening_range_breakout
+  params:
+    opening_range_start: "09:30"
+    opening_range_end:   "10:00"
+    force_exit_time:     "15:55"
+    position_size_pct:   0.95
+    long_only: true
+    breakout_trigger: "close"
+    stop_execution: "bar_close"
+    entry_cutoff_time: null
+
+risk:
+  max_open_positions: 1
+  daily_loss_limit_pct: null
+  daily_loss_action: "block_new_entries"
+
+logging:
+  level: WARNING
+  format: "%(message)s"
+
+execution:
+  mode: "paper"
+  paper_trading_enabled: true
+  paper_preview_only: true          # Phase 1: generate candidates only — no orders submitted
+  # paper_selected_client_order_id: "BT-YYYYMMDDHHMMSS-SPY"  # uncomment for Phase 2
+  # paper_order_quantity_override: 1  # must be exactly 1 when set
