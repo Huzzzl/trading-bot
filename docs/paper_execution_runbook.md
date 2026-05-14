@@ -356,7 +356,72 @@ Exit code is `0` on full pass, `1` on any failure.
 
 ---
 
-## 7. Safe Manual Flow
+## 7. Paper Execution Ledger
+
+Every real paper order submission (buy submit **and** close submit) appends one
+row to a local CSV ledger.  This prevents the same `client_order_id` from being
+submitted twice accidentally across multiple runs.
+
+### Default path
+
+```
+output/paper_execution_ledger.csv
+```
+
+Override via config:
+
+```yaml
+execution:
+  paper_ledger_path: "/path/to/my_ledger.csv"
+```
+
+### Ledger columns
+
+| Column | Description |
+|--------|-------------|
+| `run_id` | Output directory name for the run |
+| `flow` | `buy_submit` or `close_submit` |
+| `client_order_id` | ID that was submitted |
+| `alpaca_order_id` | UUID returned by Alpaca |
+| `symbol` | Ticker |
+| `side` | `buy` or `sell` |
+| `quantity` | Shares submitted |
+| `status` | Alpaca order status at submission time |
+| `submitted_at` | Timestamp from `OrderResult` |
+| `output_dir` | Full path to the run's output directory |
+| `created_at_utc` | Wall-clock time the row was appended (UTC ISO-8601) |
+| `notes` | Free-text (empty by default) |
+
+### Duplicate protection
+
+Before calling `submit_order`, `main.py` checks the ledger for the selected
+`client_order_id`.  If found, it raises `RuntimeError` immediately and **no
+order is submitted**.
+
+Preview-only flows (both buy preview and close preview) never append ledger
+rows.  The offline smoke check and replay tool also never touch the ledger.
+
+### Reset / backup guidance
+
+The ledger is append-only and never auto-deleted.  If you need to re-submit
+with the same `client_order_id` (e.g., after a failed test run that left a
+stale entry):
+
+1. Open `output/paper_execution_ledger.csv`.
+2. Remove or archive the row with the duplicate ID.
+3. Re-run the submit phase.
+
+To archive rather than delete, copy the file to a timestamped backup before
+editing:
+
+```bash
+cp output/paper_execution_ledger.csv \
+   output/paper_execution_ledger.$(date +%Y%m%d%H%M%S).bak.csv
+```
+
+---
+
+## 8. Safe Manual Flow
 
 Follow these steps in order.  Stop at any step that produces an unexpected result.
 
@@ -436,7 +501,7 @@ Check the output directory for audit artifacts (see section 7).
 
 ---
 
-## 8. Emergency Stop
+## 9. Emergency Stop
 
 If at any point the process behaves unexpectedly:
 
@@ -450,7 +515,7 @@ If at any point the process behaves unexpectedly:
 
 ---
 
-## 9. Expected Output Artifacts
+## 10. Expected Output Artifacts
 
 After a successful paper run the output directory will contain:
 
@@ -466,7 +531,7 @@ orders, investigate before running again.
 
 ---
 
-## 10. What Is Still Blocked or Constrained
+## 11. What Is Still Blocked or Constrained
 
 The following are explicitly **not** supported and will raise immediately:
 
@@ -497,7 +562,7 @@ The following are explicitly **not** supported and will raise immediately:
 
 ---
 
-## 11. References
+## 12. References
 
 - [Alpaca Adapter Design](alpaca_adapter_design.md) — full adapter specification
 - [Paper Execution Readiness](paper_execution_readiness.md) — safety gates and merge checklist

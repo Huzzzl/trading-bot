@@ -116,6 +116,8 @@ def _run(
          mock.patch.object(AlpacaBrokerAdapter, "cancel_order", mock_cancel), \
          mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
                     _pass_recon_generate), \
+         mock.patch("src.execution.paper_ledger.assert_client_order_id_unused"), \
+         mock.patch("src.execution.paper_ledger.append_ledger_row"), \
          mock.patch("src.main.load_config", return_value=cfg), \
          mock.patch("sys.argv", ["prog", "--output-dir", out]):
         src.main.main()
@@ -210,6 +212,8 @@ class TestPaperClosePathNotTriggered:
              mock.patch("src.main.build_engine", return_value=fake_engine), \
              mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
                         _pass_recon_generate), \
+             mock.patch("src.execution.paper_ledger.assert_client_order_id_unused"), \
+             mock.patch("src.execution.paper_ledger.append_ledger_row"), \
              mock.patch("src.main.load_config", return_value=cfg2), \
              mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
             src.main.main()
