@@ -9,6 +9,7 @@ no order submission.
 
 from __future__ import annotations
 
+import json
 import sys
 import textwrap
 import tempfile
@@ -23,6 +24,16 @@ import pytest
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _yaml_str(value) -> str:
+    """Return *value* as a safely JSON-encoded YAML scalar.
+
+    json.dumps() produces a double-quoted string with all special characters
+    (backslashes, control chars) properly escaped, which is valid YAML.
+    This prevents ScannerError on Windows paths like C:\\Users\\...
+    """
+    return json.dumps(str(value))
+
 
 def _make_result(
     client_order_id: str = "BT-20240115100000-SPY",
@@ -358,7 +369,7 @@ def _run_buy_submit(tmp_path, ledger_path=None, extra_execution_yaml=""):
           paper_preview_only: false
           paper_selected_client_order_id: "BT-{_FIXED_TS_STR}-SPY"
           paper_order_quantity_override: 1
-          paper_ledger_path: "{ledger_path or (tmp_path / 'ledger.csv')}"
+          paper_ledger_path: {_yaml_str(ledger_path or (tmp_path / 'ledger.csv'))}
     """) + extra_execution_yaml
 
     cfg_path = tmp_path / "settings.yaml"
@@ -423,7 +434,7 @@ def _run_close_submit(tmp_path, ledger_path=None):
           paper_close_positions_enabled: true
           paper_close_preview_only: false
           paper_selected_close_client_order_id: "BC-{_FIXED_TS_STR}-SPY"
-          paper_ledger_path: "{ledger_path or (tmp_path / 'ledger.csv')}"
+          paper_ledger_path: {_yaml_str(ledger_path or (tmp_path / 'ledger.csv'))}
     """)
 
     cfg_path = tmp_path / "settings.yaml"
@@ -502,7 +513,7 @@ class TestBuySubmitLedgerIntegration:
               mode: paper
               paper_trading_enabled: true
               paper_preview_only: true
-              paper_ledger_path: "{ledger}"
+              paper_ledger_path: {_yaml_str(ledger)}
         """)
         cfg_path = tmp_path / "settings.yaml"
         cfg_path.write_text(cfg_yaml, encoding="utf-8")
@@ -651,7 +662,7 @@ class TestCloseSubmitLedgerIntegration:
               paper_trading_enabled: true
               paper_close_positions_enabled: true
               paper_close_preview_only: true
-              paper_ledger_path: "{ledger}"
+              paper_ledger_path: {_yaml_str(ledger)}
         """)
         cfg_path = tmp_path / "settings.yaml"
         cfg_path.write_text(cfg_yaml, encoding="utf-8")
