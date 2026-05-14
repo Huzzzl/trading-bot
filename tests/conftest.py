@@ -20,8 +20,8 @@ import pytest
 @pytest.fixture(autouse=True)
 def _auto_patch_paper_ledger(request):
     """No-op the ledger functions for all tests outside test_paper_ledger.py."""
-    if "test_paper_ledger" in request.fspath.basename:
-        yield  # ledger tests use the real implementation
+    if request.fspath.basename in ("test_paper_ledger.py", "test_paper_status.py"):
+        yield  # these tests use the real implementation
         return
 
     with (

@@ -421,7 +421,97 @@ cp output/paper_execution_ledger.csv \
 
 ---
 
-## 8. Safe Manual Flow
+## 8. Paper Status / Doctor (read-only, no credentials)
+
+`src/tools/paper_status.py` is a read-only diagnostic CLI that inspects your
+local config, ledger, and artifact files without ever instantiating
+`AlpacaBrokerAdapter`, reading Alpaca credentials, or submitting any order.
+
+### Basic usage
+
+```bash
+python -m src.tools.paper_status \
+    --config config/settings.paper.local.yaml \
+    --output-dir output/paper_smoke_check \
+    --ledger output/paper_execution_ledger.csv
+```
+
+Include `--replay-dir` to also run offline reconciliation replay:
+
+```bash
+python -m src.tools.paper_status \
+    --config config/settings.paper.local.yaml \
+    --output-dir output/paper_smoke_check \
+    --ledger output/paper_execution_ledger.csv \
+    --replay-dir output/paper_submit_BT000035
+```
+
+Show more ledger rows (default is 5):
+
+```bash
+python -m src.tools.paper_status \
+    --config config/settings.paper.local.yaml \
+    --output-dir output/paper_smoke_check \
+    --last 10
+```
+
+### What it checks
+
+| Check | PASS condition | WARN/FAIL condition |
+|-------|---------------|---------------------|
+| **config** | `load_config` + `validate_paper_config` succeed | Any `ValueError` or missing field → FAIL |
+| **ledger** | File exists and is loadable | Missing file → WARN; parse error → FAIL |
+| **artifacts** | Reports count of present/missing artifact files | Always PASS (informational) |
+| **replay** *(optional)* | `overall_status` is `PASS` or `N/A` | `overall_status` is `WARN`/`FAIL` → WARN; CSV missing → WARN |
+
+### Example output
+
+```
+=== Paper Status ===
+  [PASS] config  (mode=paper paper_trading_enabled=True classification=buy_preview)
+  [PASS] ledger  (3 row(s) total; showing last 3)
+  [PASS] artifacts  (3 present, 2 missing: ['order_intents.csv', 'order_results.csv'])
+        ✓ paper_candidate_intents.csv
+        ✓ paper_close_candidate_intents.csv
+        ✗ order_intents.csv
+        ✗ order_results.csv
+        ✓ order_reconciliation.json
+
+  RESULT: PASS
+======================
+```
+
+### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | All checks PASS |
+| `1` | Any check is WARN or FAIL |
+
+### Mode classification labels
+
+`classify_mode` maps the execution config to one of:
+
+| Label | Condition |
+|-------|-----------|
+| `backtest` | `execution.mode != "paper"` |
+| `disabled` | `paper_trading_enabled=false` |
+| `buy_preview` | `paper_trading_enabled=true`, `paper_preview_only=true`, close disabled |
+| `buy_submit` | `paper_trading_enabled=true`, `paper_preview_only=false`, close disabled |
+| `close_preview` | `paper_trading_enabled=true`, close enabled, `paper_close_preview_only=true` |
+| `close_submit` | `paper_trading_enabled=true`, close enabled, `paper_close_preview_only=false` |
+
+### Safety guarantees
+
+- Never instantiates `AlpacaBrokerAdapter`.
+- Never reads Alpaca credentials from the environment.
+- Never calls `submit_order` or `cancel_order`.
+- Never writes any file.
+- Network access: none.
+
+---
+
+## 9. Safe Manual Flow
 
 Follow these steps in order.  Stop at any step that produces an unexpected result.
 
@@ -497,11 +587,11 @@ Monitor the process output.  Watch for:
 - `OrderResult` status log line.
 - Reconciliation result in the log.
 
-Check the output directory for audit artifacts (see section 7).
+Check the output directory for audit artifacts (see section 11).
 
 ---
 
-## 9. Emergency Stop
+## 10. Emergency Stop
 
 If at any point the process behaves unexpectedly:
 
@@ -515,7 +605,7 @@ If at any point the process behaves unexpectedly:
 
 ---
 
-## 10. Expected Output Artifacts
+## 11. Expected Output Artifacts
 
 After a successful paper run the output directory will contain:
 
@@ -531,7 +621,7 @@ orders, investigate before running again.
 
 ---
 
-## 11. What Is Still Blocked or Constrained
+## 12. What Is Still Blocked or Constrained
 
 The following are explicitly **not** supported and will raise immediately:
 
@@ -562,7 +652,7 @@ The following are explicitly **not** supported and will raise immediately:
 
 ---
 
-## 12. References
+## 13. References
 
 - [Alpaca Adapter Design](alpaca_adapter_design.md) — full adapter specification
 - [Paper Execution Readiness](paper_execution_readiness.md) — safety gates and merge checklist
