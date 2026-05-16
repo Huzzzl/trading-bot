@@ -181,7 +181,7 @@ class TestReconciliationDisabled:
 
     def test_report_has_no_order_reconciliation_section(self):
         _, _, out_dir = _run_full(dry_run=False)
-        text = (out_dir / "backtest_report.md").read_text()
+        text = (out_dir / "backtest_report.md").read_text(encoding="utf-8")
         assert "## Order Reconciliation" not in text
 
     def test_reporter_none_results_no_json(self):
@@ -201,7 +201,7 @@ class TestReconciliationJSON:
 
     def test_json_has_all_required_fields(self):
         _, _, out_dir = _run_full(dry_run=True)
-        data = json.loads((out_dir / "order_reconciliation.json").read_text())
+        data = json.loads((out_dir / "order_reconciliation.json").read_text(encoding="utf-8"))
         required = {
             "intent_count", "result_count", "unmatched_count",
             "rejected_count", "accepted_count", "filled_count",
@@ -211,19 +211,19 @@ class TestReconciliationJSON:
 
     def test_json_counts_are_integers(self):
         _, _, out_dir = _run_full(dry_run=True)
-        data = json.loads((out_dir / "order_reconciliation.json").read_text())
+        data = json.loads((out_dir / "order_reconciliation.json").read_text(encoding="utf-8"))
         for field in ("intent_count", "result_count", "unmatched_count",
                       "rejected_count", "accepted_count", "filled_count", "mismatch_count"):
             assert isinstance(data[field], int), f"{field} is not int"
 
     def test_json_overall_status_is_string(self):
         _, _, out_dir = _run_full(dry_run=True)
-        data = json.loads((out_dir / "order_reconciliation.json").read_text())
+        data = json.loads((out_dir / "order_reconciliation.json").read_text(encoding="utf-8"))
         assert isinstance(data["overall_status"], str)
 
     def test_json_overall_status_valid_values(self):
         _, _, out_dir = _run_full(dry_run=True)
-        data = json.loads((out_dir / "order_reconciliation.json").read_text())
+        data = json.loads((out_dir / "order_reconciliation.json").read_text(encoding="utf-8"))
         assert data["overall_status"] in {"PASS", "WARN"}
 
     def test_empty_results_list_writes_json(self):
@@ -240,40 +240,40 @@ class TestReconciliationJSON:
 class TestReconciliationPass:
     def test_clean_dry_run_is_pass(self):
         _, _, out_dir = _run_full(dry_run=True)
-        data = json.loads((out_dir / "order_reconciliation.json").read_text())
+        data = json.loads((out_dir / "order_reconciliation.json").read_text(encoding="utf-8"))
         assert data["overall_status"] == "PASS"
 
     def test_intent_count_equals_result_count(self):
         intents, results, out_dir = _run_full(dry_run=True)
-        data = json.loads((out_dir / "order_reconciliation.json").read_text())
+        data = json.loads((out_dir / "order_reconciliation.json").read_text(encoding="utf-8"))
         assert data["intent_count"] == len(intents)
         assert data["result_count"] == len(results)
         assert data["intent_count"] == data["result_count"]
 
     def test_unmatched_count_zero(self):
         _, _, out_dir = _run_full(dry_run=True)
-        data = json.loads((out_dir / "order_reconciliation.json").read_text())
+        data = json.loads((out_dir / "order_reconciliation.json").read_text(encoding="utf-8"))
         assert data["unmatched_count"] == 0
 
     def test_mismatch_count_zero(self):
         _, _, out_dir = _run_full(dry_run=True)
-        data = json.loads((out_dir / "order_reconciliation.json").read_text())
+        data = json.loads((out_dir / "order_reconciliation.json").read_text(encoding="utf-8"))
         assert data["mismatch_count"] == 0
 
     def test_status_counts_sum_to_result_count(self):
         _, results, out_dir = _run_full(dry_run=True)
-        data = json.loads((out_dir / "order_reconciliation.json").read_text())
+        data = json.loads((out_dir / "order_reconciliation.json").read_text(encoding="utf-8"))
         total = data["filled_count"] + data["accepted_count"] + data["rejected_count"]
         assert total == data["result_count"]
 
     def test_report_contains_order_reconciliation_section(self):
         _, _, out_dir = _run_full(dry_run=True)
-        text = (out_dir / "backtest_report.md").read_text()
+        text = (out_dir / "backtest_report.md").read_text(encoding="utf-8")
         assert "## Order Reconciliation" in text
 
     def test_report_shows_pass_badge(self):
         _, _, out_dir = _run_full(dry_run=True)
-        text = (out_dir / "backtest_report.md").read_text()
+        text = (out_dir / "backtest_report.md").read_text(encoding="utf-8")
         assert "PASS" in text
 
 
@@ -285,7 +285,7 @@ class TestReconciliationWarn:
     def _reconcile(self, intents, results) -> dict:
         reporter, out_dir = _reporter_with(intents, results)
         reporter.generate_all()
-        return json.loads((out_dir / "order_reconciliation.json").read_text())
+        return json.loads((out_dir / "order_reconciliation.json").read_text(encoding="utf-8"))
 
     def test_mismatched_count_produces_warn(self):
         intent = _make_intent()
@@ -335,7 +335,7 @@ class TestReconciliationWarn:
         result = _make_result(symbol="QQQ")
         reporter, out_dir = _reporter_with([intent], [result])
         reporter.generate_all()
-        text = (out_dir / "backtest_report.md").read_text()
+        text = (out_dir / "backtest_report.md").read_text(encoding="utf-8")
         assert "WARN" in text
 
     def test_multiple_mismatches_counted_correctly(self):
@@ -354,7 +354,7 @@ class TestRejectedCount:
     def _reconcile(self, intents, results) -> dict:
         reporter, out_dir = _reporter_with(intents, results)
         reporter.generate_all()
-        return json.loads((out_dir / "order_reconciliation.json").read_text())
+        return json.loads((out_dir / "order_reconciliation.json").read_text(encoding="utf-8"))
 
     def test_rejected_count_zero_when_all_filled(self):
         intent = _make_intent()

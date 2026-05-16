@@ -170,7 +170,7 @@ class TestMetricsJson:
     def test_json_valid_and_complete(self):
         reporter, out = _make_reporter()
         reporter._write_metrics_json()
-        data = json.loads((out / "metrics.json").read_text())
+        data = json.loads((out / "metrics.json").read_text(encoding="utf-8"))
         assert data["num_trades"] == 1
         assert data["initial_capital"] == 100_000.0
         assert "total_return_pct" in data
@@ -178,7 +178,7 @@ class TestMetricsJson:
     def test_zero_trades_still_writes(self):
         reporter, out = _make_reporter(trades=[])
         reporter._write_metrics_json()
-        data = json.loads((out / "metrics.json").read_text())
+        data = json.loads((out / "metrics.json").read_text(encoding="utf-8"))
         assert data["num_trades"] == 0
 
 
@@ -427,7 +427,7 @@ class TestMarkdownReport:
     def test_sections_present(self):
         reporter, out = _make_reporter()
         reporter._write_markdown_report(reporter._run_validation_checks())
-        content = (out / "backtest_report.md").read_text()
+        content = (out / "backtest_report.md").read_text(encoding="utf-8")
         for section in ["## Configuration", "## Performance Metrics",
                          "## Trade Summary", "## Daily Summary",
                          "## Validation Checks"]:
@@ -436,27 +436,27 @@ class TestMarkdownReport:
     def test_config_values_rendered(self):
         reporter, out = _make_reporter()
         reporter._write_markdown_report(reporter._run_validation_checks())
-        content = (out / "backtest_report.md").read_text()
+        content = (out / "backtest_report.md").read_text(encoding="utf-8")
         assert "opening_range_breakout" in content
         assert "100,000.00" in content
 
     def test_pass_status_present(self):
         reporter, out = _make_reporter()
         reporter._write_markdown_report(reporter._run_validation_checks())
-        content = (out / "backtest_report.md").read_text()
+        content = (out / "backtest_report.md").read_text(encoding="utf-8")
         assert "PASS" in content
 
     def test_warn_status_present_when_bad_trade(self):
         bad = _make_trade(entry_price=0.0)
         reporter, out = _make_reporter(trades=[bad])
         reporter._write_markdown_report(reporter._run_validation_checks())
-        content = (out / "backtest_report.md").read_text()
+        content = (out / "backtest_report.md").read_text(encoding="utf-8")
         assert "WARN" in content
 
     def test_no_trades_message(self):
         reporter, out = _make_reporter(trades=[])
         reporter._write_markdown_report([])
-        content = (out / "backtest_report.md").read_text()
+        content = (out / "backtest_report.md").read_text(encoding="utf-8")
         assert "No trades" in content
 
     def test_trade_summary_stats_present(self):
@@ -470,7 +470,7 @@ class TestMarkdownReport:
         )
         reporter, out = _make_reporter(trades=[t1, t2])
         reporter._write_markdown_report(reporter._run_validation_checks())
-        content = (out / "backtest_report.md").read_text()
+        content = (out / "backtest_report.md").read_text(encoding="utf-8")
         assert "Total trades" in content
         assert "Trades by symbol" in content
         assert "Trades by exit reason" in content
@@ -483,7 +483,7 @@ class TestMarkdownReport:
         # Report must be created even if only a subset of known metrics are present.
         reporter, out = _make_reporter(metrics={"num_trades": 0, "initial_capital": 50_000.0})
         reporter._write_markdown_report([])
-        content = (out / "backtest_report.md").read_text()
+        content = (out / "backtest_report.md").read_text(encoding="utf-8")
         assert "## Performance Metrics" in content
         assert "N/A" in content  # missing keys rendered as N/A
 
@@ -551,7 +551,7 @@ class TestMarkdownTradeDetail:
         trade = _make_trade(meta=meta)
         reporter, out = _make_reporter(trades=[trade])
         reporter._write_markdown_report(reporter._run_validation_checks())
-        return (out / "backtest_report.md").read_text()
+        return (out / "backtest_report.md").read_text(encoding="utf-8")
 
     def test_trade_detail_section_present(self):
         assert "Trade Detail" in self._report_text()
@@ -579,7 +579,7 @@ class TestMarkdownTradeDetail:
         })
         reporter, out = _make_reporter(trades=[trade])
         reporter._write_markdown_report(reporter._run_validation_checks())
-        content = (out / "backtest_report.md").read_text()
+        content = (out / "backtest_report.md").read_text(encoding="utf-8")
         assert "stop_price" in content
 
     def test_stop_execution_blank_when_meta_missing(self):
@@ -587,7 +587,7 @@ class TestMarkdownTradeDetail:
         trade = _make_trade(meta={})
         reporter, out = _make_reporter(trades=[trade])
         reporter._write_markdown_report(reporter._run_validation_checks())
-        content = (out / "backtest_report.md").read_text()
+        content = (out / "backtest_report.md").read_text(encoding="utf-8")
         assert "Trade Detail" in content  # report still generated
 
     def test_or_high_value_rendered(self):
@@ -614,7 +614,7 @@ class TestMarkdownTradeDetail:
     def test_no_trades_does_not_crash(self):
         reporter, out = _make_reporter(trades=[])
         reporter._write_markdown_report([])
-        content = (out / "backtest_report.md").read_text()
+        content = (out / "backtest_report.md").read_text(encoding="utf-8")
         assert "backtest" in content.lower()
 
 

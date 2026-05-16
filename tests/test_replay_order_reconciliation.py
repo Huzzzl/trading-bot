@@ -288,7 +288,7 @@ class TestWriteFlag:
     def test_write_json_content_is_valid(self, tmp_path):
         _write_bt000035_fixture(tmp_path)
         replay(tmp_path, write=True)
-        content = json.loads((tmp_path / "order_reconciliation_replay.json").read_text())
+        content = json.loads((tmp_path / "order_reconciliation_replay.json").read_text(encoding="utf-8"))
         assert content["overall_status"] == "PASS"
 
     def test_no_write_does_not_create_file(self, tmp_path):
