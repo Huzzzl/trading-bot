@@ -254,13 +254,13 @@ class TestCandidateBEndToEnd:
     def test_backtest_report_mentions_qqq(self, tmp_path):
         cfg = apply_candidate_b(_make_base_config(symbols=["SPY"]))
         self._run_pipeline(cfg, tmp_path)
-        report = (tmp_path / "backtest_report.md").read_text()
+        report = (tmp_path / "backtest_report.md").read_text(encoding="utf-8")
         assert "QQQ" in report
 
     def test_metrics_json_is_valid_json(self, tmp_path):
         cfg = apply_candidate_b(_make_base_config())
         self._run_pipeline(cfg, tmp_path)
-        metrics = json.loads((tmp_path / "metrics.json").read_text())
+        metrics = json.loads((tmp_path / "metrics.json").read_text(encoding="utf-8"))
         assert isinstance(metrics, dict)
 
     def test_trade_log_csv_has_expected_columns(self, tmp_path):

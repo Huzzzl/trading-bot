@@ -3490,7 +3490,7 @@ class TestPaperExecutionPath:
         recon = tmp_path / "order_reconciliation.json"
         assert recon.exists(), "order_reconciliation.json must be written even with 0 intents"
         import json
-        data = json.loads(recon.read_text())
+        data = json.loads(recon.read_text(encoding="utf-8"))
         assert data.get("overall_status") in ("PASS", "N/A")
 
     def test_submitted_order_writes_reconciliation_json(self, tmp_path):
@@ -3511,7 +3511,7 @@ class TestPaperExecutionPath:
         recon = tmp_path / "order_reconciliation.json"
         assert recon.exists()
         import json
-        data = json.loads(recon.read_text())
+        data = json.loads(recon.read_text(encoding="utf-8"))
         assert data.get("overall_status") in ("PASS", "N/A")
 
     # --- fail closed: missing reconciliation JSON → RuntimeError ---
@@ -4096,7 +4096,7 @@ class TestPaperOrderQuantityOverride:
              mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
             from src.main import main as _main
             _main()  # must not raise
-        recon = json.loads((tmp_path / "order_reconciliation.json").read_text())
+        recon = json.loads((tmp_path / "order_reconciliation.json").read_text(encoding="utf-8"))
         assert recon["overall_status"] == "PASS"
 
     # --- no real network calls ---
