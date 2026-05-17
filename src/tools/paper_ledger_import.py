@@ -61,6 +61,19 @@ import pandas as pd
 _SIDE_TO_FLOW = {"buy": "buy_submit", "sell": "close_submit"}
 
 
+def _normalize_side(value: str) -> str:
+    """Strip SDK enum prefix and lowercase the side value.
+
+    Converts strings like ``"OrderSide.BUY"`` or ``"orderside.buy"`` to
+    ``"buy"``, and ``"OrderSide.SELL"`` to ``"sell"``.  Plain values such as
+    ``"buy"`` or ``"sell"`` pass through unchanged.
+    """
+    raw = str(value).strip()
+    if "." in raw:
+        raw = raw.rsplit(".", 1)[-1]
+    return raw.lower()
+
+
 def _rows_from_artifacts(artifact_dir: Path) -> list[dict[str, Any]]:
     """Build ledger rows from an artifact directory.
 
@@ -109,7 +122,7 @@ def _rows_from_artifacts(artifact_dir: Path) -> list[dict[str, Any]]:
             str(res.get("alpaca_order_id", "")).strip()
             or str(res.get("order_id", "")).strip()
         )
-        side = str(res.get("side", "")).strip().lower()
+        side = _normalize_side(res.get("side", ""))
         quantity = str(res.get("quantity", "")).strip()
         status = str(res.get("status", "")).strip()
         submitted_at = str(res.get("submitted_at", "")).strip()
@@ -182,10 +195,12 @@ def _rows_from_manual_csv(manual_path: Path) -> list[dict[str, Any]]:
         for col in _LEDGER_COLUMNS_REF():
             row[col] = str(r.get(col, "")).strip()
 
+        # Normalise side (strips SDK enum prefix e.g. "OrderSide.BUY" → "buy")
+        row["side"] = _normalize_side(row.get("side", ""))
+
         # Infer flow from side when flow is absent
         if not row.get("flow"):
-            side = row.get("side", "").lower()
-            row["flow"] = _SIDE_TO_FLOW.get(side, "buy_submit")
+            row["flow"] = _SIDE_TO_FLOW.get(row["side"], "buy_submit")
 
         # Tag as manual if notes is empty
         if not row.get("notes"):

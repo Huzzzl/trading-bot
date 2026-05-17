@@ -211,6 +211,36 @@ class TestRowsFromArtifacts:
         rows = _rows_from_artifacts(tmp_path)
         assert rows[0]["alpaca_order_id"] == "alp-legacy-999"
 
+    def test_enum_side_buy_normalised(self, tmp_path):
+        from src.tools.paper_ledger_import import _rows_from_artifacts
+        pd.DataFrame([{
+            "client_order_id": "BT-000035",
+            "alpaca_order_id": "alp-aaa-111",
+            "symbol": "SPY",
+            "side": "OrderSide.BUY",
+            "quantity": "1.0",
+            "status": "filled",
+            "submitted_at": "2024-01-15 10:05:00-05:00",
+        }]).to_csv(tmp_path / "order_results.csv", index=False, encoding="utf-8")
+        rows = _rows_from_artifacts(tmp_path)
+        assert rows[0]["side"] == "buy"
+        assert rows[0]["flow"] == "buy_submit"
+
+    def test_enum_side_sell_normalised(self, tmp_path):
+        from src.tools.paper_ledger_import import _rows_from_artifacts
+        pd.DataFrame([{
+            "client_order_id": "BC-001",
+            "alpaca_order_id": "alp-bbb-222",
+            "symbol": "SPY",
+            "side": "OrderSide.SELL",
+            "quantity": "1.0",
+            "status": "filled",
+            "submitted_at": "2024-01-16 14:00:00-05:00",
+        }]).to_csv(tmp_path / "order_results.csv", index=False, encoding="utf-8")
+        rows = _rows_from_artifacts(tmp_path)
+        assert rows[0]["side"] == "sell"
+        assert rows[0]["flow"] == "close_submit"
+
 
 # ---------------------------------------------------------------------------
 # _rows_from_manual_csv
@@ -259,6 +289,18 @@ class TestRowsFromManualCsv:
         path = tmp_path / "manual.csv"
         _write_manual_csv(path)
         rows = _rows_from_manual_csv(path)
+        assert rows[0]["flow"] == "buy_submit"
+
+    def test_enum_side_buy_normalised(self, tmp_path):
+        from src.tools.paper_ledger_import import _rows_from_manual_csv
+        path = tmp_path / "manual.csv"
+        pd.DataFrame([{
+            "client_order_id": "BT-X",
+            "side": "OrderSide.BUY",
+            "symbol": "SPY",
+        }]).to_csv(path, index=False, encoding="utf-8")
+        rows = _rows_from_manual_csv(path)
+        assert rows[0]["side"] == "buy"
         assert rows[0]["flow"] == "buy_submit"
 
     def test_notes_set_to_manual_import_when_absent(self, tmp_path):
