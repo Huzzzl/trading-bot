@@ -361,13 +361,29 @@ def _run_paper_close(cfg: AppConfig, output_dir: Path) -> None:
             f"Paper close: OrderResult for intent "
             f"{selected_intent.client_order_id!r} has no client_order_id. Aborting."
         )
-    order_results: list = [result]
     logger.info(
         "Paper close: order_id=%s status=%s client_order_id=%s",
         result.order_id,
         result.status,
         result.client_order_id,
     )
+
+    # Optional: poll until terminal status (read-only, never cancels).
+    if cfg.execution.paper_poll_order_status:
+        from src.execution.paper_order_poller import poll_order_status as _poll_close
+        _poll_result = _poll_close(
+            client=broker._get_client(),
+            alpaca_order_id=result.order_id,
+            client_order_id=result.client_order_id or selected_intent.client_order_id,
+            initial_status=result.status,
+            timeout_seconds=cfg.execution.paper_poll_timeout_seconds,
+            interval_seconds=cfg.execution.paper_poll_interval_seconds,
+            output_dir=output_dir,
+        )
+        if _poll_result["final_status"] != result.status:
+            result = _dc_replace(result, status=_poll_result["final_status"])
+
+    order_results: list = [result]
     append_ledger_row(_ledger_path, {
         "run_id":          output_dir.name,
         "flow":            "close_submit",
@@ -675,13 +691,29 @@ def main() -> None:
                 f"Paper execution: OrderResult for intent "
                 f"{selected_intent.client_order_id!r} has no client_order_id. Aborting."
             )
-        order_results: list = [result]
         logger.info(
             "Paper execution: order_id=%s status=%s client_order_id=%s",
             result.order_id,
             result.status,
             result.client_order_id,
         )
+
+        # Optional: poll until terminal status (read-only, never cancels).
+        if cfg.execution.paper_poll_order_status:
+            from src.execution.paper_order_poller import poll_order_status as _poll_buy
+            _poll_result = _poll_buy(
+                client=broker._get_client(),
+                alpaca_order_id=result.order_id,
+                client_order_id=result.client_order_id or selected_intent.client_order_id,
+                initial_status=result.status,
+                timeout_seconds=cfg.execution.paper_poll_timeout_seconds,
+                interval_seconds=cfg.execution.paper_poll_interval_seconds,
+                output_dir=output_dir,
+            )
+            if _poll_result["final_status"] != result.status:
+                result = _dc_replace(result, status=_poll_result["final_status"])
+
+        order_results: list = [result]
         _append_ledger_row(_ledger_path, {
             "run_id":          output_dir.name,
             "flow":            "buy_submit",

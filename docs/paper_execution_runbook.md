@@ -642,7 +642,91 @@ python -m src.tools.paper_status \
 
 ---
 
-## 10. Safe Manual Flow
+## 10. Post-Submit Order Status Polling
+
+After `submit_order` returns an `accepted` status, the order may still be
+processing at Alpaca.  Enabling `paper_poll_order_status` tells `main.py`
+to poll `get_order_by_id` in a read-only loop until the order reaches a
+definitive terminal state (or a timeout expires).
+
+### Config fields
+
+```yaml
+execution:
+  paper_poll_order_status: false       # default: disabled
+  paper_poll_timeout_seconds: 30       # default: 30 s
+  paper_poll_interval_seconds: 1.0     # default: 1 s between polls
+```
+
+`paper_poll_order_status` defaults to `false` to preserve existing behavior.
+Enable it only when you want to wait for a fill confirmation before artifacts
+are finalised.
+
+### Example config with polling enabled
+
+```yaml
+execution:
+  mode: paper
+  paper_trading_enabled: true
+  paper_preview_only: false
+  paper_selected_client_order_id: "BT-000035"
+  paper_order_quantity_override: 1
+  paper_poll_order_status: true
+  paper_poll_timeout_seconds: 60
+  paper_poll_interval_seconds: 2.0
+```
+
+### What happens when polling is enabled
+
+1. `submit_order` is called **exactly once** (as always).
+2. After the initial `OrderResult` is received, `main.py` calls
+   `poll_order_status()` which loops over read-only `get_order_by_id` calls.
+3. Polling stops when a terminal status is reached or the timeout expires.
+4. The final observed status is written to the ledger and used by
+   `ReportGenerator` / reconciliation — not the initial `accepted` status.
+5. The artifact `paper_order_status_poll.json` is always written, even on error.
+
+### Terminal statuses
+
+| Status | Normalized to | Is terminal | Action |
+|--------|---------------|-------------|--------|
+| `filled`, `partially_filled` | `filled` | Yes | PASS — no error |
+| `canceled`, `cancelled`, `expired`, `replaced` | `cancelled` | Yes | FAIL → `RuntimeError` |
+| `rejected`, `stopped`, `suspended` | `rejected` | Yes | FAIL → `RuntimeError` |
+| `new`, `pending_new`, `accepted` | `accepted` | No | keep polling |
+
+### Timeout behavior
+
+| Timeout + final status | Behavior |
+|------------------------|----------|
+| `filled` | Normal success |
+| `accepted` / `accepted`-like | Warning logged, no error, ledger written with `accepted` |
+| `cancelled` / `rejected` | `RuntimeError` raised |
+
+### `paper_order_status_poll.json` artifact fields
+
+| Field | Description |
+|-------|-------------|
+| `client_order_id` | Local order ID |
+| `alpaca_order_id` | Alpaca-assigned UUID |
+| `initial_status` | Status from `submit_order` result |
+| `final_status` | Last observed status when polling stopped |
+| `poll_count` | Number of `get_order_by_id` calls made |
+| `timeout_seconds` | Configured timeout |
+| `timed_out` | `true` if timeout triggered the stop |
+| `checked_at_utc` | Wall-clock time polling started (UTC ISO-8601) |
+| `raw_statuses` | List of every status observed (normalized) |
+
+### Safety guarantees
+
+- `submit_order` is called exactly once — never called again during polling.
+- `cancel_order` is **never** called by the poller, even on timeout.
+- Applies to both the buy-submit flow and the close-submit flow.
+- If `paper_poll_order_status=false` (the default), behavior is unchanged.
+
+---
+
+## 11. Safe Manual Flow
 
 Follow these steps in order.  Stop at any step that produces an unexpected result.
 
@@ -718,11 +802,11 @@ Monitor the process output.  Watch for:
 - `OrderResult` status log line.
 - Reconciliation result in the log.
 
-Check the output directory for audit artifacts (see section 12).
+Check the output directory for audit artifacts (see section 13).
 
 ---
 
-## 11. Emergency Stop
+## 12. Emergency Stop
 
 If at any point the process behaves unexpectedly:
 
@@ -736,7 +820,7 @@ If at any point the process behaves unexpectedly:
 
 ---
 
-## 12. Expected Output Artifacts
+## 13. Expected Output Artifacts
 
 After a successful paper run the output directory will contain:
 
@@ -752,7 +836,7 @@ orders, investigate before running again.
 
 ---
 
-## 13. What Is Still Blocked or Constrained
+## 14. What Is Still Blocked or Constrained
 
 The following are explicitly **not** supported and will raise immediately:
 
@@ -783,7 +867,7 @@ The following are explicitly **not** supported and will raise immediately:
 
 ---
 
-## 14. References
+## 15. References
 
 - [Alpaca Adapter Design](alpaca_adapter_design.md) — full adapter specification
 - [Paper Execution Readiness](paper_execution_readiness.md) — safety gates and merge checklist
