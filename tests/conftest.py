@@ -24,6 +24,7 @@ def _auto_patch_paper_ledger(request):
         "test_paper_ledger.py",
         "test_paper_status.py",
         "test_paper_ledger_import.py",
+        "test_paper_ledger_verify.py",
     ):
         yield  # these tests use the real implementation
         return

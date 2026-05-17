@@ -481,7 +481,78 @@ python -m src.tools.paper_ledger_import \
 
 ---
 
-## 8. Paper Status / Doctor (read-only, no credentials)
+## 8. Paper Ledger Verification (read-only, requires credentials)
+
+`src/tools/paper_ledger_verify` reads the local ledger and checks each
+`alpaca_order_id` against your Alpaca paper account.  It never submits or
+cancels orders and never modifies positions.
+
+### Requirements
+
+Alpaca paper credentials must be set before running:
+
+```bash
+export ALPACA_API_KEY="your-paper-api-key"
+export ALPACA_SECRET_KEY="your-paper-secret-key"
+```
+
+If either variable is absent or empty the tool exits with code 1 **before**
+making any network call.
+
+### Basic usage
+
+```bash
+python -m src.tools.paper_ledger_verify \
+    --ledger output/paper_execution_ledger.csv \
+    --output output/paper_ledger_verification.csv
+```
+
+### Update ledger status in-place
+
+```bash
+python -m src.tools.paper_ledger_verify \
+    --ledger output/paper_execution_ledger.csv \
+    --output output/paper_ledger_verification.csv \
+    --update-ledger-status
+```
+
+With `--update-ledger-status` the ledger `status` column is rewritten for
+any row where Alpaca returned a definitive status without error.  All other
+columns are unchanged.  The default (without the flag) is fully read-only.
+
+### Verification CSV columns
+
+| Column | Description |
+|--------|-------------|
+| `client_order_id` | From ledger |
+| `alpaca_order_id` | From ledger |
+| `ledger_status` | Status stored in the ledger |
+| `alpaca_status` | Status returned by Alpaca (empty on error) |
+| `symbol` | Ticker |
+| `side` | `buy` or `sell` |
+| `quantity` | Shares |
+| `status_match` | `True` if `ledger_status == alpaca_status` |
+| `checked_at_utc` | Wall-clock time of the check (UTC ISO-8601) |
+| `error` | Error message on lookup failure; `"no alpaca_order_id"` when the ledger row has no ID |
+
+### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | All rows matched (or were skipped due to no `alpaca_order_id`) |
+| `1` | Any mismatch, lookup error, missing credentials, or missing ledger |
+
+### Safety guarantees
+
+- Never calls `submit_order` or `cancel_order`.
+- Never modifies positions.
+- Fails before any network call if credentials are missing.
+- On lookup error, records the error in the CSV and continues to the next row.
+- Default mode (no `--update-ledger-status`) writes only the verification CSV.
+
+---
+
+## 9. Paper Status / Doctor (read-only, no credentials)
 
 `src/tools/paper_status.py` is a read-only diagnostic CLI that inspects your
 local config, ledger, and artifact files without ever instantiating
@@ -571,7 +642,7 @@ python -m src.tools.paper_status \
 
 ---
 
-## 9. Safe Manual Flow
+## 10. Safe Manual Flow
 
 Follow these steps in order.  Stop at any step that produces an unexpected result.
 
@@ -647,11 +718,11 @@ Monitor the process output.  Watch for:
 - `OrderResult` status log line.
 - Reconciliation result in the log.
 
-Check the output directory for audit artifacts (see section 11).
+Check the output directory for audit artifacts (see section 12).
 
 ---
 
-## 10. Emergency Stop
+## 11. Emergency Stop
 
 If at any point the process behaves unexpectedly:
 
@@ -665,7 +736,7 @@ If at any point the process behaves unexpectedly:
 
 ---
 
-## 11. Expected Output Artifacts
+## 12. Expected Output Artifacts
 
 After a successful paper run the output directory will contain:
 
@@ -681,7 +752,7 @@ orders, investigate before running again.
 
 ---
 
-## 12. What Is Still Blocked or Constrained
+## 13. What Is Still Blocked or Constrained
 
 The following are explicitly **not** supported and will raise immediately:
 
@@ -712,7 +783,7 @@ The following are explicitly **not** supported and will raise immediately:
 
 ---
 
-## 13. References
+## 14. References
 
 - [Alpaca Adapter Design](alpaca_adapter_design.md) — full adapter specification
 - [Paper Execution Readiness](paper_execution_readiness.md) — safety gates and merge checklist
