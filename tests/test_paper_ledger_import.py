@@ -167,6 +167,50 @@ class TestRowsFromArtifacts:
         rows = _rows_from_artifacts(tmp_path)
         assert len(rows) == 2
 
+    def test_order_id_column_used_as_fallback_for_alpaca_order_id(self, tmp_path):
+        from src.tools.paper_ledger_import import _rows_from_artifacts
+        pd.DataFrame([{
+            "client_order_id": "BT-000035",
+            "order_id": "alp-legacy-999",
+            "symbol": "SPY",
+            "side": "buy",
+            "quantity": "1.0",
+            "status": "filled",
+            "submitted_at": "2024-01-15 10:05:00-05:00",
+        }]).to_csv(tmp_path / "order_results.csv", index=False, encoding="utf-8")
+        rows = _rows_from_artifacts(tmp_path)
+        assert rows[0]["alpaca_order_id"] == "alp-legacy-999"
+
+    def test_alpaca_order_id_preferred_over_order_id(self, tmp_path):
+        from src.tools.paper_ledger_import import _rows_from_artifacts
+        pd.DataFrame([{
+            "client_order_id": "BT-000035",
+            "alpaca_order_id": "alp-new-111",
+            "order_id": "alp-old-999",
+            "symbol": "SPY",
+            "side": "buy",
+            "quantity": "1.0",
+            "status": "filled",
+            "submitted_at": "2024-01-15 10:05:00-05:00",
+        }]).to_csv(tmp_path / "order_results.csv", index=False, encoding="utf-8")
+        rows = _rows_from_artifacts(tmp_path)
+        assert rows[0]["alpaca_order_id"] == "alp-new-111"
+
+    def test_empty_alpaca_order_id_falls_back_to_order_id(self, tmp_path):
+        from src.tools.paper_ledger_import import _rows_from_artifacts
+        pd.DataFrame([{
+            "client_order_id": "BT-000035",
+            "alpaca_order_id": "",
+            "order_id": "alp-legacy-999",
+            "symbol": "SPY",
+            "side": "buy",
+            "quantity": "1.0",
+            "status": "filled",
+            "submitted_at": "2024-01-15 10:05:00-05:00",
+        }]).to_csv(tmp_path / "order_results.csv", index=False, encoding="utf-8")
+        rows = _rows_from_artifacts(tmp_path)
+        assert rows[0]["alpaca_order_id"] == "alp-legacy-999"
+
 
 # ---------------------------------------------------------------------------
 # _rows_from_manual_csv

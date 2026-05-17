@@ -105,7 +105,10 @@ def _rows_from_artifacts(artifact_dir: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for _, res in results.iterrows():
         client_order_id = str(res.get("client_order_id", "")).strip()
-        alpaca_order_id = str(res.get("alpaca_order_id", "")).strip()
+        alpaca_order_id = (
+            str(res.get("alpaca_order_id", "")).strip()
+            or str(res.get("order_id", "")).strip()
+        )
         side = str(res.get("side", "")).strip().lower()
         quantity = str(res.get("quantity", "")).strip()
         status = str(res.get("status", "")).strip()
