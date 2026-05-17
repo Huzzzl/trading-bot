@@ -419,6 +419,66 @@ cp output/paper_execution_ledger.csv \
    output/paper_execution_ledger.$(date +%Y%m%d%H%M%S).bak.csv
 ```
 
+### Backfill / import historical orders
+
+Use `src/tools/paper_ledger_import` to register old paper orders in the ledger
+so they are protected from accidental re-submission.  The tool never touches
+Alpaca, reads no credentials, and makes no network calls.
+
+**From an artifact directory** (reads `order_results.csv`, optionally `order_intents.csv`):
+
+```bash
+python -m src.tools.paper_ledger_import \
+    --ledger output/paper_execution_ledger.csv \
+    --from-artifacts output/paper_submit_BT000035
+
+python -m src.tools.paper_ledger_import \
+    --ledger output/paper_execution_ledger.csv \
+    --from-artifacts output/paper_submit_BT000039
+```
+
+**From a manual CSV** (minimum required column: `client_order_id`):
+
+```bash
+python -m src.tools.paper_ledger_import \
+    --ledger output/paper_execution_ledger.csv \
+    --manual-row manual_orders.csv
+```
+
+Minimal manual CSV format:
+
+```csv
+client_order_id,alpaca_order_id,symbol,side,quantity,status,submitted_at,flow
+BT-000035,alp-aaa-111,SPY,buy,1.0,filled,2024-01-15 10:05:00-05:00,buy_submit
+```
+
+**Preview without writing** (`--dry-run`):
+
+```bash
+python -m src.tools.paper_ledger_import \
+    --ledger output/paper_execution_ledger.csv \
+    --from-artifacts output/paper_submit_BT000035 \
+    --dry-run
+```
+
+**Skip already-imported entries** (default is fail-closed):
+
+```bash
+python -m src.tools.paper_ledger_import \
+    --ledger output/paper_execution_ledger.csv \
+    --from-artifacts output/paper_submit_BT000035 \
+    --skip-duplicates
+```
+
+**Exit codes:** `0` on success, `1` on any error (missing file, duplicate, parse failure).
+
+**`flow` assignment from `order_results.csv`:**
+
+| `side` in results | `flow` in ledger |
+|-------------------|-----------------|
+| `buy` | `buy_submit` |
+| `sell` | `close_submit` |
+
 ---
 
 ## 8. Paper Status / Doctor (read-only, no credentials)
