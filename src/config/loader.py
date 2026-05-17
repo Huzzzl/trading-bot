@@ -67,6 +67,9 @@ class ExecutionConfig:
     paper_selected_close_client_order_id:    str | None   = None
     paper_close_quantity_override:           float | None = None
     paper_ledger_path:                       str          = "output/paper_execution_ledger.csv"
+    paper_poll_order_status:                 bool         = False
+    paper_poll_timeout_seconds:              int          = 30
+    paper_poll_interval_seconds:             float        = 1.0
 
 
 @dataclass
@@ -262,6 +265,9 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
         paper_selected_close_client_order_id=str(_selected_close_coid_raw) if _selected_close_coid_raw is not None else None,
         paper_close_quantity_override=float(_close_qty_override_raw) if _close_qty_override_raw is not None else None,
         paper_ledger_path=str(ex.get("paper_ledger_path", "output/paper_execution_ledger.csv")),
+        paper_poll_order_status=bool(ex.get("paper_poll_order_status", False)),
+        paper_poll_timeout_seconds=int(ex.get("paper_poll_timeout_seconds", 30)),
+        paper_poll_interval_seconds=float(ex.get("paper_poll_interval_seconds", 1.0)),
     )
 
     app_cfg = AppConfig(
