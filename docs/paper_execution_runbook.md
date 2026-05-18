@@ -957,7 +957,70 @@ execution:
 
 ---
 
-## 15. Safe Manual Flow
+## 15. Paper Pre-Submit Checklist (read-only)
+
+`src/tools/paper_pre_submit_check.py` is a focused read-only CLI that answers
+one question before any real paper submit: **is it safe to proceed right now?**
+
+It reuses all check functions from `paper_status` and adds a mode summary banner.
+No broker, no credentials, no network (unless `--verify-ledger` is passed).
+
+### Usage
+
+```bash
+python -m src.tools.paper_pre_submit_check \
+    --config config/settings.paper.local.yaml \
+    --output-dir output/paper_smoke_check \
+    --ledger output/paper_execution_ledger.csv
+```
+
+Also verify ledger rows against Alpaca (requires credentials):
+
+```bash
+python -m src.tools.paper_pre_submit_check \
+    --config config/settings.paper.local.yaml \
+    --output-dir output/paper_smoke_check \
+    --ledger output/paper_execution_ledger.csv \
+    --verify-ledger
+```
+
+### Checks performed (in order)
+
+| # | Check | PASS | WARN | FAIL |
+|---|-------|------|------|------|
+| 1 | **config** | loads + validates | — | any error |
+| 2 | **safety_config** | always | — | — |
+| 3 | **daily_usage** | always | — | — |
+| 4 | **submit_readiness** | preview mode | submit mode; limit reached; outside hours | kill switch + submit |
+| 5 | **mode_summary** | preview | submit mode | — |
+| 6 | **ledger** | present + parseable | missing | parse error |
+| 7 | **verify_ledger** *(opt)* | all rows match | mismatch/error | credentials missing |
+
+### Mode summary messages
+
+| Mode | Output |
+|------|--------|
+| `buy_preview` / `close_preview` | `PREVIEW MODE — no order will be submitted by src.main` |
+| `buy_submit` / `close_submit` | `SUBMIT MODE DETECTED — review selected client_order_id before running src.main` |
+
+### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | All checks PASS |
+| `1` | Any check WARN or FAIL |
+
+### What it never does (by default)
+
+- Never instantiates `AlpacaBrokerAdapter`.
+- Never reads Alpaca credentials (unless `--verify-ledger`).
+- Never calls any network endpoint (unless `--verify-ledger`).
+- Never submits or cancels orders.
+- Never writes files.
+
+---
+
+## 16. Safe Manual Flow
 
 Follow these steps in order.  Stop at any step that produces an unexpected result.
 
@@ -1037,7 +1100,7 @@ Check the output directory for audit artifacts (see section 13).
 
 ---
 
-## 16. Emergency Stop
+## 17. Emergency Stop
 
 If at any point the process behaves unexpectedly:
 
@@ -1051,7 +1114,7 @@ If at any point the process behaves unexpectedly:
 
 ---
 
-## 17. Expected Output Artifacts
+## 18. Expected Output Artifacts
 
 After a successful paper run the output directory will contain:
 
@@ -1067,7 +1130,7 @@ orders, investigate before running again.
 
 ---
 
-## 18. What Is Still Blocked or Constrained
+## 19. What Is Still Blocked or Constrained
 
 The following are explicitly **not** supported and will raise immediately:
 
@@ -1098,7 +1161,7 @@ The following are explicitly **not** supported and will raise immediately:
 
 ---
 
-## 19. References
+## 20. References
 
 - [Alpaca Adapter Design](alpaca_adapter_design.md) — full adapter specification
 - [Paper Execution Readiness](paper_execution_readiness.md) — safety gates and merge checklist
