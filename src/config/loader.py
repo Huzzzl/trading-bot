@@ -70,6 +70,10 @@ class ExecutionConfig:
     paper_poll_order_status:                 bool         = False
     paper_poll_timeout_seconds:              int          = 30
     paper_poll_interval_seconds:             float        = 1.0
+    paper_daily_max_orders:                  int          = 3
+    paper_daily_max_buy_orders:              int          = 2
+    paper_daily_max_close_orders:            int          = 2
+    paper_daily_max_notional:                float | None = None
 
 
 @dataclass
@@ -268,6 +272,10 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
         paper_poll_order_status=bool(ex.get("paper_poll_order_status", False)),
         paper_poll_timeout_seconds=int(ex.get("paper_poll_timeout_seconds", 30)),
         paper_poll_interval_seconds=float(ex.get("paper_poll_interval_seconds", 1.0)),
+        paper_daily_max_orders=int(ex.get("paper_daily_max_orders", 3)),
+        paper_daily_max_buy_orders=int(ex.get("paper_daily_max_buy_orders", 2)),
+        paper_daily_max_close_orders=int(ex.get("paper_daily_max_close_orders", 2)),
+        paper_daily_max_notional=float(ex["paper_daily_max_notional"]) if ex.get("paper_daily_max_notional") is not None else None,
     )
 
     app_cfg = AppConfig(

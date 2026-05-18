@@ -118,6 +118,7 @@ def _run(
                     _pass_recon_generate), \
          mock.patch("src.execution.paper_ledger.assert_client_order_id_unused"), \
          mock.patch("src.execution.paper_ledger.append_ledger_row"), \
+         mock.patch("src.execution.paper_daily_limits.assert_within_daily_limits"), \
          mock.patch("src.main.load_config", return_value=cfg), \
          mock.patch("sys.argv", ["prog", "--output-dir", out]):
         src.main.main()
@@ -770,6 +771,7 @@ def _run_extended(
                    _pass_recon_generate),
         mock.patch("src.execution.paper_ledger.assert_client_order_id_unused"),
         mock.patch("src.execution.paper_ledger.append_ledger_row", mock_ledger),
+        mock.patch("src.execution.paper_daily_limits.assert_within_daily_limits"),
         mock.patch("src.main.load_config", return_value=cfg),
         mock.patch("sys.argv", ["prog", "--output-dir", out]),
     ]
@@ -1002,6 +1004,7 @@ class TestCloseCandidateIdStability:
                         _pass_recon_generate), \
              mock.patch("src.execution.paper_ledger.assert_client_order_id_unused"), \
              mock.patch("src.execution.paper_ledger.append_ledger_row"), \
+             mock.patch("src.execution.paper_daily_limits.assert_within_daily_limits"), \
              mock.patch("src.main.load_config", return_value=submit_cfg), \
              mock.patch("sys.argv", ["prog", "--output-dir", str(submit_dir)]):
             src.main.main()
@@ -1063,6 +1066,7 @@ class TestCloseCandidateIdStability:
                         _pass_recon_generate), \
              mock.patch("src.execution.paper_ledger.assert_client_order_id_unused"), \
              mock.patch("src.execution.paper_ledger.append_ledger_row"), \
+             mock.patch("src.execution.paper_daily_limits.assert_within_daily_limits"), \
              mock.patch("src.main.load_config", return_value=submit_cfg), \
              mock.patch("sys.argv", ["prog", "--output-dir", str(submit_dir)]):
             src.main.main()  # must not raise
@@ -1098,6 +1102,7 @@ class TestCloseCandidateIdStability:
              mock.patch("src.execution.paper_ledger.assert_client_order_id_unused",
                         side_effect=_raise_duplicate), \
              mock.patch("src.execution.paper_ledger.append_ledger_row"), \
+             mock.patch("src.execution.paper_daily_limits.assert_within_daily_limits"), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
             with pytest.raises(Exception, match=_FIXED_CID):
