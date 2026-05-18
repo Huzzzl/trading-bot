@@ -74,6 +74,7 @@ class ExecutionConfig:
     paper_daily_max_buy_orders:              int          = 2
     paper_daily_max_close_orders:            int          = 2
     paper_daily_max_notional:                float | None = None
+    paper_block_if_open_orders:              bool         = True
 
 
 @dataclass
@@ -276,6 +277,7 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
         paper_daily_max_buy_orders=int(ex.get("paper_daily_max_buy_orders", 2)),
         paper_daily_max_close_orders=int(ex.get("paper_daily_max_close_orders", 2)),
         paper_daily_max_notional=float(ex["paper_daily_max_notional"]) if ex.get("paper_daily_max_notional") is not None else None,
+        paper_block_if_open_orders=bool(ex.get("paper_block_if_open_orders", True)),
     )
 
     app_cfg = AppConfig(

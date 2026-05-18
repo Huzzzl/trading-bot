@@ -29,6 +29,10 @@ _DAILY_LIMITS_TEST_FILES = {
     "test_paper_daily_limits.py",
 }
 
+_OPEN_ORDER_GUARD_TEST_FILES = {
+    "test_paper_open_order_guard.py",
+}
+
 
 @pytest.fixture(autouse=True)
 def _auto_patch_paper_ledger(request):
@@ -52,4 +56,15 @@ def _auto_patch_paper_daily_limits(request):
         return
 
     with patch("src.execution.paper_daily_limits.assert_within_daily_limits"):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _auto_patch_paper_open_order_guard(request):
+    """No-op assert_no_open_orders_for_symbol for all tests outside test_paper_open_order_guard.py."""
+    if request.fspath.basename in _OPEN_ORDER_GUARD_TEST_FILES:
+        yield  # these tests use the real implementation
+        return
+
+    with patch("src.execution.paper_open_order_guard.assert_no_open_orders_for_symbol"):
         yield
