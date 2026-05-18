@@ -37,6 +37,10 @@ _MARKET_HOURS_GUARD_TEST_FILES = {
     "test_paper_market_hours_guard.py",
 }
 
+_KILL_SWITCH_TEST_FILES = {
+    "test_paper_kill_switch.py",
+}
+
 
 @pytest.fixture(autouse=True)
 def _auto_patch_paper_ledger(request):
@@ -82,4 +86,15 @@ def _auto_patch_paper_market_hours_guard(request):
         return
 
     with patch("src.execution.paper_market_hours_guard.assert_regular_market_hours"):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _auto_patch_paper_kill_switch(request):
+    """No-op assert_kill_switch_disabled for all tests outside test_paper_kill_switch.py."""
+    if request.fspath.basename in _KILL_SWITCH_TEST_FILES:
+        yield  # these tests use the real implementation
+        return
+
+    with patch("src.execution.paper_kill_switch.assert_kill_switch_disabled"):
         yield

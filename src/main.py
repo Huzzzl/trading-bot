@@ -368,6 +368,9 @@ def _run_paper_close(cfg: AppConfig, output_dir: Path) -> None:
         intent_price=selected_intent.metadata.get("entry_price") if cfg.execution.paper_daily_max_notional is not None else None,
     )
 
+    from src.execution.paper_kill_switch import assert_kill_switch_disabled as _assert_ks_close
+    _assert_ks_close(cfg.execution.paper_kill_switch_enabled)
+
     if cfg.execution.paper_block_if_open_orders:
         from src.execution.paper_open_order_guard import assert_no_open_orders_for_symbol as _assert_no_open_close
         _assert_no_open_close(broker._get_client, selected_intent.symbol)
@@ -722,6 +725,9 @@ def main() -> None:
             max_notional=cfg.execution.paper_daily_max_notional,
             intent_price=selected_intent.metadata.get("entry_price") if cfg.execution.paper_daily_max_notional is not None else None,
         )
+
+        from src.execution.paper_kill_switch import assert_kill_switch_disabled as _assert_ks_buy
+        _assert_ks_buy(cfg.execution.paper_kill_switch_enabled)
 
         if cfg.execution.paper_block_if_open_orders:
             from src.execution.paper_open_order_guard import assert_no_open_orders_for_symbol as _assert_no_open

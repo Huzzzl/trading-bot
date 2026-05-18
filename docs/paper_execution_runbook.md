@@ -879,7 +879,64 @@ execution:
 
 ---
 
-## 14. Safe Manual Flow
+## 14. Paper Kill Switch
+
+An emergency kill switch that immediately halts all real paper order submissions
+without changing any other configuration.
+
+Before any real paper buy-submit or close-submit, `main.py` calls
+`assert_kill_switch_disabled()` from `src/execution/paper_kill_switch.py`.
+If the flag is `true`, the guard raises before `submit_order` is ever called.
+
+**The guard is a pure boolean check — no I/O, no network, no broker calls.**
+
+### Config field
+
+| Field | Default | Meaning |
+|---|---|---|
+| `paper_kill_switch_enabled` | `false` | When `true`, all paper order submissions are blocked immediately. Set to `false` (the default) for normal operation. |
+
+### Guard ordering
+
+In Phase 2 of both buy and close paths, guards fire in this order:
+
+1. Market-hours guard
+2. Ledger duplicate check
+3. Daily limits
+4. **Kill switch** ← fires here
+5. Open-order guard
+6. `submit_order`
+
+### When the kill switch fires
+
+The kill switch fires in Phase 2 (actual submit) only — preview runs are never
+affected.
+
+### Error format
+
+```
+RuntimeError: paper kill switch enabled — no order was submitted.
+Set execution.paper_kill_switch_enabled=false to re-enable submissions.
+```
+
+### Emergency usage
+
+To immediately stop all paper submissions without restarting:
+
+1. Set `execution.paper_kill_switch_enabled: true` in `config/settings.yaml`.
+2. Any subsequent Phase 2 run will abort before `submit_order`.
+3. To re-enable, set it back to `false`.
+
+### Example config
+
+```yaml
+execution:
+  paper_kill_switch_enabled: false   # default — set to true to halt all submissions
+```
+
+---
+
+## 15. Safe Manual Flow
 
 Follow these steps in order.  Stop at any step that produces an unexpected result.
 
@@ -959,7 +1016,7 @@ Check the output directory for audit artifacts (see section 13).
 
 ---
 
-## 15. Emergency Stop
+## 16. Emergency Stop
 
 If at any point the process behaves unexpectedly:
 
@@ -973,7 +1030,7 @@ If at any point the process behaves unexpectedly:
 
 ---
 
-## 16. Expected Output Artifacts
+## 17. Expected Output Artifacts
 
 After a successful paper run the output directory will contain:
 
@@ -989,7 +1046,7 @@ orders, investigate before running again.
 
 ---
 
-## 17. What Is Still Blocked or Constrained
+## 18. What Is Still Blocked or Constrained
 
 The following are explicitly **not** supported and will raise immediately:
 
@@ -1020,7 +1077,7 @@ The following are explicitly **not** supported and will raise immediately:
 
 ---
 
-## 18. References
+## 19. References
 
 - [Alpaca Adapter Design](alpaca_adapter_design.md) — full adapter specification
 - [Paper Execution Readiness](paper_execution_readiness.md) — safety gates and merge checklist
