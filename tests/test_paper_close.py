@@ -22,9 +22,9 @@ import pytest
 # ---------------------------------------------------------------------------
 
 # A fixed Timestamp used to make candidate IDs predictable.
-_FIXED_TS       = pd.Timestamp("2024-01-15 10:00:00", tz="America/New_York")
-_FIXED_TS_LABEL = "20240115100000"
-_FIXED_CID      = f"BC-{_FIXED_TS_LABEL}-SPY"
+_FIXED_TS         = pd.Timestamp("2024-01-15 10:00:00", tz="America/New_York")
+_FIXED_DATE_LABEL = "20240115"
+_FIXED_CID        = f"BC-{_FIXED_DATE_LABEL}-SPY-CLOSE"
 
 
 def _make_config(
@@ -925,6 +925,205 @@ class TestCloseSubmitAuditHardening:
     def test_cancel_order_never_called(self, tmp_path):
         cfg = _make_config_with_poll()
         _, mock_cancel, _ = _run_extended(
+            cfg,
+            positions={"SPY": _spy_pos(1.0)},
+            submit_return=_make_submit_return(),
+            tmp_path=tmp_path,
+        )
+        mock_cancel.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# 10. Close candidate ID stability
+# ---------------------------------------------------------------------------
+
+class TestCloseCandidateIdStability:
+    """Close candidate IDs must be stable (date-only) so the ID chosen during
+    preview is still valid when the submit run regenerates candidates seconds
+    or minutes later on the same trading day."""
+
+    def test_candidate_id_has_no_seconds_component(self, tmp_path):
+        """The generated candidate ID must not contain HHMMSS — only YYYYMMDD."""
+        cfg = _make_config(paper_close_preview_only=True)
+        _run(cfg, positions={"SPY": _spy_pos(1.0)}, tmp_path=tmp_path)
+        df = pd.read_csv(tmp_path / "paper_close_candidate_intents.csv")
+        cid = df["client_order_id"].iloc[0]
+        # Must match BC-YYYYMMDD-SPY-CLOSE exactly (8-digit date, no time).
+        import re
+        assert re.fullmatch(r"BC-\d{8}-SPY-CLOSE", cid), (
+            f"candidate ID {cid!r} does not match BC-YYYYMMDD-SPY-CLOSE"
+        )
+
+    def test_preview_and_submit_generate_same_candidate_id_on_same_date(self, tmp_path):
+        """Preview run and submit run on the same date produce the same candidate ID."""
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        import src.main
+
+        # Two Timestamps on the same date but different times.
+        ts_morning = pd.Timestamp("2024-01-15 09:45:00", tz="America/New_York")
+        ts_later   = pd.Timestamp("2024-01-15 10:32:17", tz="America/New_York")
+
+        preview_cfg = _make_config(paper_close_preview_only=True)
+        submit_cfg  = _make_config(
+            paper_close_preview_only=False,
+            paper_selected_close_client_order_id=_FIXED_CID,
+        )
+
+        fake_preflight = {
+            "ok": True, "account": {"status": "ACTIVE"},
+            "positions": {"SPY": _spy_pos(1.0)}, "symbols": ["SPY"],
+        }
+
+        # --- Phase A: preview (morning timestamp) ---
+        preview_dir = tmp_path / "preview"
+        preview_dir.mkdir()
+        with mock.patch.object(pd.Timestamp, "now", return_value=ts_morning), \
+             mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=fake_preflight), \
+             mock.patch("src.main.load_config", return_value=preview_cfg), \
+             mock.patch("sys.argv", ["prog", "--output-dir", str(preview_dir)]):
+            src.main.main()
+
+        preview_id = pd.read_csv(
+            preview_dir / "paper_close_candidate_intents.csv"
+        )["client_order_id"].iloc[0]
+
+        # --- Phase B: submit (later timestamp, same date) ---
+        submit_dir = tmp_path / "submit"
+        submit_dir.mkdir()
+        mock_submit = mock.MagicMock(return_value=_make_submit_return(client_order_id=preview_id))
+        with mock.patch.object(pd.Timestamp, "now", return_value=ts_later), \
+             mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=fake_preflight), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
+             mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
+                        _pass_recon_generate), \
+             mock.patch("src.execution.paper_ledger.assert_client_order_id_unused"), \
+             mock.patch("src.execution.paper_ledger.append_ledger_row"), \
+             mock.patch("src.main.load_config", return_value=submit_cfg), \
+             mock.patch("sys.argv", ["prog", "--output-dir", str(submit_dir)]):
+            src.main.main()
+
+        submit_id = pd.read_csv(
+            submit_dir / "paper_close_candidate_intents.csv"
+        )["client_order_id"].iloc[0]
+
+        assert preview_id == submit_id, (
+            f"preview ID {preview_id!r} != submit ID {submit_id!r}"
+        )
+        assert mock_submit.call_count == 1
+
+    def test_preview_selected_id_accepted_by_submit_run(self, tmp_path):
+        """The ID written to paper_close_candidate_intents.csv during preview
+        can be used as paper_selected_close_client_order_id in the submit run."""
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        import src.main
+
+        ts_a = pd.Timestamp("2024-01-15 09:31:00", tz="America/New_York")
+        ts_b = pd.Timestamp("2024-01-15 09:45:53", tz="America/New_York")
+
+        preview_cfg = _make_config(paper_close_preview_only=True)
+        fake_preflight = {
+            "ok": True, "account": {"status": "ACTIVE"},
+            "positions": {"SPY": _spy_pos(1.0)}, "symbols": ["SPY"],
+        }
+
+        preview_dir = tmp_path / "preview"
+        preview_dir.mkdir()
+        with mock.patch.object(pd.Timestamp, "now", return_value=ts_a), \
+             mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=fake_preflight), \
+             mock.patch("src.main.load_config", return_value=preview_cfg), \
+             mock.patch("sys.argv", ["prog", "--output-dir", str(preview_dir)]):
+            src.main.main()
+
+        selected_id = pd.read_csv(
+            preview_dir / "paper_close_candidate_intents.csv"
+        )["client_order_id"].iloc[0]
+
+        # Now submit using that ID.
+        submit_cfg = _make_config(
+            paper_close_preview_only=False,
+            paper_selected_close_client_order_id=selected_id,
+        )
+        submit_dir = tmp_path / "submit"
+        submit_dir.mkdir()
+        mock_submit = mock.MagicMock(
+            return_value=_make_submit_return(client_order_id=selected_id)
+        )
+        with mock.patch.object(pd.Timestamp, "now", return_value=ts_b), \
+             mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=fake_preflight), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
+             mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
+                        _pass_recon_generate), \
+             mock.patch("src.execution.paper_ledger.assert_client_order_id_unused"), \
+             mock.patch("src.execution.paper_ledger.append_ledger_row"), \
+             mock.patch("src.main.load_config", return_value=submit_cfg), \
+             mock.patch("sys.argv", ["prog", "--output-dir", str(submit_dir)]):
+            src.main.main()  # must not raise
+
+        mock_submit.assert_called_once()
+
+    def test_repeated_close_submit_blocked_by_ledger_before_submit_order(self, tmp_path):
+        """A second submit with the same client_order_id is blocked by the ledger
+        duplicate guard before submit_order is called."""
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        import src.main
+
+        cfg = _make_config(
+            paper_close_preview_only=False,
+            paper_selected_close_client_order_id=_FIXED_CID,
+        )
+        fake_preflight = {
+            "ok": True, "account": {"status": "ACTIVE"},
+            "positions": {"SPY": _spy_pos(1.0)}, "symbols": ["SPY"],
+        }
+        mock_submit = mock.MagicMock(return_value=_make_submit_return())
+
+        def _raise_duplicate(_path, _coid):
+            raise RuntimeError(
+                f"client_order_id {_FIXED_CID!r} already in ledger"
+            )
+
+        with mock.patch.object(pd.Timestamp, "now", return_value=_FIXED_TS), \
+             mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=fake_preflight), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
+             mock.patch("src.execution.paper_ledger.assert_client_order_id_unused",
+                        side_effect=_raise_duplicate), \
+             mock.patch("src.execution.paper_ledger.append_ledger_row"), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            with pytest.raises(Exception, match=_FIXED_CID):
+                src.main.main()
+
+        mock_submit.assert_not_called()
+
+    def test_submit_order_called_exactly_once_on_valid_selection(self, tmp_path):
+        cfg = _make_config(
+            paper_close_preview_only=False,
+            paper_selected_close_client_order_id=_FIXED_CID,
+        )
+        mock_submit, _ = _run(
+            cfg,
+            positions={"SPY": _spy_pos(1.0)},
+            submit_return=_make_submit_return(),
+            tmp_path=tmp_path,
+        )
+        assert mock_submit.call_count == 1
+
+    def test_cancel_order_never_called_on_valid_selection(self, tmp_path):
+        cfg = _make_config(
+            paper_close_preview_only=False,
+            paper_selected_close_client_order_id=_FIXED_CID,
+        )
+        _, mock_cancel = _run(
             cfg,
             positions={"SPY": _spy_pos(1.0)},
             submit_return=_make_submit_return(),

@@ -200,7 +200,9 @@ def _run_paper_close(cfg: AppConfig, output_dir: Path) -> None:
 
     positions = preflight["positions"]
     now_ts    = _pd.Timestamp.now(tz=_EASTERN)
-    ts_label  = now_ts.strftime("%Y%m%d%H%M%S")
+    # Close candidate IDs use date-only so the same ID is produced on preview
+    # and submit runs within the same trading day, making selection stable.
+    date_label = now_ts.strftime("%Y%m%d")
 
     # --- Generate close candidates (SPY only, sell market) ---
     close_candidates: list[OrderIntent] = []
@@ -217,7 +219,7 @@ def _run_paper_close(cfg: AppConfig, output_dir: Path) -> None:
             order_type=_CLOSE_ORDER_TYPE,
             reason=_CLOSE_REASON,
             timestamp=now_ts,
-            client_order_id=f"BC-{ts_label}-{_CLOSE_SYMBOL}",
+            client_order_id=f"BC-{date_label}-{_CLOSE_SYMBOL}-CLOSE",
             metadata={"current_position_qty": qty},
         )
         close_candidates.append(intent)

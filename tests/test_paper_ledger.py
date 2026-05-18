@@ -314,6 +314,7 @@ class TestExecutionConfigDefault:
 
 _FIXED_TS = pd.Timestamp("2024-01-15 10:00:00", tz="America/New_York")
 _FIXED_TS_STR = "20240115100000"
+_FIXED_DATE_STR = "20240115"
 
 
 def _make_order_result(coid: str = "BT-20240115100000-SPY") -> MagicMock:
@@ -328,7 +329,7 @@ def _make_order_result(coid: str = "BT-20240115100000-SPY") -> MagicMock:
     return r
 
 
-def _make_close_result(coid: str = "BC-20240115100000-SPY") -> MagicMock:
+def _make_close_result(coid: str = "BC-20240115-SPY-CLOSE") -> MagicMock:
     r = MagicMock()
     r.client_order_id = coid
     r.order_id        = "alpaca-uuid-close-001"
@@ -433,7 +434,7 @@ def _run_close_submit(tmp_path, ledger_path=None):
           paper_trading_enabled: true
           paper_close_positions_enabled: true
           paper_close_preview_only: false
-          paper_selected_close_client_order_id: "BC-{_FIXED_TS_STR}-SPY"
+          paper_selected_close_client_order_id: "BC-{_FIXED_DATE_STR}-SPY-CLOSE"
           paper_ledger_path: {_yaml_str(ledger_path or (tmp_path / 'ledger.csv'))}
     """)
 
@@ -695,7 +696,7 @@ class TestCloseSubmitLedgerIntegration:
         """Duplicate close client_order_id must be blocked before submit_order."""
         from src.execution.paper_ledger import append_ledger_row
         ledger = tmp_path / "ledger.csv"
-        coid = f"BC-{_FIXED_TS_STR}-SPY"
+        coid = f"BC-{_FIXED_DATE_STR}-SPY-CLOSE"
 
         append_ledger_row(ledger, {
             "run_id": "prev_run", "flow": "close_submit",
