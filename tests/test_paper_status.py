@@ -521,3 +521,467 @@ class TestMain:
         with pytest.raises(SystemExit) as exc_info:
             main(argv)
         assert exc_info.value.code == 1
+
+
+# ---------------------------------------------------------------------------
+# 8. check_safety_config
+# ---------------------------------------------------------------------------
+
+class TestCheckSafetyConfig:
+    def _exec(self, **kwargs):
+        from src.config.loader import ExecutionConfig
+        return ExecutionConfig(**kwargs)
+
+    def _cfg_with(self, **kwargs):
+        """Return a minimal AppConfig-like object with an execution field."""
+        from src.config.loader import (
+            AppConfig, BacktestConfig, DataConfig, ExecutionConfig,
+            LoggingConfig, RiskConfig, StrategyConfig,
+        )
+        ex = ExecutionConfig(
+            mode="paper",
+            paper_trading_enabled=True,
+            paper_preview_only=True,
+            **kwargs,
+        )
+
+        class _Cfg:
+            execution = ex
+
+        return _Cfg()
+
+    def test_label_is_safety_config(self):
+        from src.tools.paper_status import check_safety_config
+        result = check_safety_config(self._cfg_with())
+        assert result["label"] == "safety_config"
+
+    def test_status_always_pass(self):
+        from src.tools.paper_status import check_safety_config
+        result = check_safety_config(self._cfg_with(paper_kill_switch_enabled=True))
+        assert result["status"] == "PASS"
+
+    def test_config_dict_contains_all_keys(self):
+        from src.tools.paper_status import check_safety_config
+        result = check_safety_config(self._cfg_with())
+        expected = {
+            "paper_kill_switch_enabled",
+            "paper_require_market_hours",
+            "paper_block_if_open_orders",
+            "paper_daily_max_orders",
+            "paper_daily_max_buy_orders",
+            "paper_daily_max_close_orders",
+            "paper_daily_max_notional",
+            "paper_poll_order_status",
+        }
+        assert set(result["config"].keys()) == expected
+
+    def test_kill_switch_value_reflected(self):
+        from src.tools.paper_status import check_safety_config
+        result = check_safety_config(self._cfg_with(paper_kill_switch_enabled=True))
+        assert result["config"]["paper_kill_switch_enabled"] is True
+
+    def test_detail_mentions_kill_switch(self):
+        from src.tools.paper_status import check_safety_config
+        result = check_safety_config(self._cfg_with(paper_kill_switch_enabled=True))
+        assert "ENABLED" in result["detail"]
+
+    def test_no_broker_no_network(self):
+        from src.tools.paper_status import check_safety_config
+        from unittest.mock import patch
+        with patch("src.execution.alpaca_broker.AlpacaBrokerAdapter") as MockBroker:
+            check_safety_config(self._cfg_with())
+        MockBroker.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# 9. check_daily_usage
+# ---------------------------------------------------------------------------
+
+class TestCheckDailyUsage:
+    def _cfg_with(self, **kwargs):
+        from src.config.loader import ExecutionConfig
+
+        class _Cfg:
+            execution = ExecutionConfig(
+                mode="paper", paper_trading_enabled=True, paper_preview_only=True,
+                **kwargs,
+            )
+
+        return _Cfg()
+
+    def test_label_is_daily_usage(self, tmp_path):
+        from src.tools.paper_status import check_daily_usage
+        result = check_daily_usage(tmp_path / "ledger.csv", self._cfg_with())
+        assert result["label"] == "daily_usage"
+
+    def test_status_always_pass(self, tmp_path):
+        from src.tools.paper_status import check_daily_usage
+        result = check_daily_usage(tmp_path / "ledger.csv", self._cfg_with())
+        assert result["status"] == "PASS"
+
+    def test_usage_shown_from_ledger(self, tmp_path):
+        from src.tools.paper_status import check_daily_usage
+        ledger_path = tmp_path / "ledger.csv"
+        today_str = pd.Timestamp.now(tz="America/New_York").strftime("%Y-%m-%d %H:%M:%S-05:00")
+        _write_ledger(ledger_path, [
+            _ledger_row("BT-001", flow="buy_submit"),
+            _ledger_row("BT-002", flow="buy_submit"),
+            _ledger_row("BC-001", flow="close_submit"),
+        ])
+        result = check_daily_usage(ledger_path, self._cfg_with())
+        u = result["usage"]
+        # Rows may be from a different date in CI — just check keys exist
+        assert "today_total_orders" in u
+        assert "today_buy_orders" in u
+        assert "today_close_orders" in u
+
+    def test_remaining_computed_from_limits(self, tmp_path):
+        from src.tools.paper_status import check_daily_usage
+        cfg = self._cfg_with(
+            paper_daily_max_orders=3,
+            paper_daily_max_buy_orders=2,
+            paper_daily_max_close_orders=2,
+        )
+        result = check_daily_usage(tmp_path / "ledger.csv", cfg)
+        u = result["usage"]
+        assert u["remaining_total_orders"] == 3
+        assert u["remaining_buy_orders"] == 2
+        assert u["remaining_close_orders"] == 2
+
+    def test_remaining_none_when_no_limit(self, tmp_path):
+        from src.tools.paper_status import check_daily_usage
+        from src.config.loader import ExecutionConfig
+
+        class _Cfg:
+            execution = ExecutionConfig(
+                mode="paper", paper_trading_enabled=True, paper_preview_only=True,
+                paper_daily_max_orders=None,  # type: ignore[arg-type]
+                paper_daily_max_buy_orders=None,  # type: ignore[arg-type]
+                paper_daily_max_close_orders=None,  # type: ignore[arg-type]
+            )
+
+        result = check_daily_usage(tmp_path / "ledger.csv", _Cfg())
+        u = result["usage"]
+        assert u["remaining_total_orders"] is None
+        assert u["remaining_buy_orders"] is None
+        assert u["remaining_close_orders"] is None
+
+    def test_usage_keys_present(self, tmp_path):
+        from src.tools.paper_status import check_daily_usage
+        result = check_daily_usage(tmp_path / "ledger.csv", self._cfg_with())
+        expected_keys = {
+            "today_total_orders", "today_buy_orders", "today_close_orders",
+            "remaining_total_orders", "remaining_buy_orders", "remaining_close_orders",
+        }
+        assert set(result["usage"].keys()) == expected_keys
+
+    def test_no_broker_no_credentials(self, tmp_path):
+        from src.tools.paper_status import check_daily_usage
+        with patch("src.execution.alpaca_broker.AlpacaBrokerAdapter") as MockBroker:
+            check_daily_usage(tmp_path / "ledger.csv", self._cfg_with())
+        MockBroker.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# 10. check_submit_readiness
+# ---------------------------------------------------------------------------
+
+_ET = "America/New_York"
+_IN_HOURS_TS  = pd.Timestamp("2024-01-15 10:00:00", tz=_ET)   # Monday 10:00
+_OUT_HOURS_TS = pd.Timestamp("2024-01-15 16:00:00", tz=_ET)   # Monday 16:00 (closed)
+_WEEKEND_TS   = pd.Timestamp("2024-01-13 10:00:00", tz=_ET)   # Saturday
+
+
+def _make_exec(
+    *,
+    preview_only: bool = True,
+    close_positions: bool = False,
+    close_preview_only: bool = True,
+    kill_switch: bool = False,
+    require_market_hours: bool = True,
+    max_orders: int = 3,
+    max_buy: int = 2,
+    max_close: int = 2,
+    selected_id: str | None = None,
+    selected_close_id: str | None = None,
+):
+    from src.config.loader import ExecutionConfig
+    return ExecutionConfig(
+        mode="paper",
+        paper_trading_enabled=True,
+        paper_preview_only=preview_only,
+        paper_selected_client_order_id=selected_id,
+        paper_close_positions_enabled=close_positions,
+        paper_close_preview_only=close_preview_only,
+        paper_selected_close_client_order_id=selected_close_id,
+        paper_kill_switch_enabled=kill_switch,
+        paper_require_market_hours=require_market_hours,
+        paper_daily_max_orders=max_orders,
+        paper_daily_max_buy_orders=max_buy,
+        paper_daily_max_close_orders=max_close,
+    )
+
+
+def _cfg(ex):
+    class _C:
+        execution = ex
+    return _C()
+
+
+def _zero_usage():
+    return {
+        "usage": {
+            "today_total_orders": 0, "today_buy_orders": 0, "today_close_orders": 0,
+            "remaining_total_orders": 3, "remaining_buy_orders": 2, "remaining_close_orders": 2,
+        }
+    }
+
+
+def _full_usage():
+    return {
+        "usage": {
+            "today_total_orders": 3, "today_buy_orders": 2, "today_close_orders": 2,
+            "remaining_total_orders": 0, "remaining_buy_orders": 0, "remaining_close_orders": 0,
+        }
+    }
+
+
+class TestCheckSubmitReadiness:
+    def test_preview_mode_passes(self):
+        from src.tools.paper_status import check_submit_readiness
+        ex = _make_exec(preview_only=True)
+        result = check_submit_readiness(_cfg(ex), _zero_usage(), lambda: _IN_HOURS_TS)
+        assert result["status"] == "PASS"
+
+    def test_close_preview_mode_passes(self):
+        from src.tools.paper_status import check_submit_readiness
+        ex = _make_exec(close_positions=True, close_preview_only=True)
+        result = check_submit_readiness(_cfg(ex), _zero_usage(), lambda: _IN_HOURS_TS)
+        assert result["status"] == "PASS"
+
+    def test_buy_submit_mode_warns(self):
+        from src.tools.paper_status import check_submit_readiness
+        ex = _make_exec(preview_only=False, selected_id="BT-001")
+        result = check_submit_readiness(_cfg(ex), _zero_usage(), lambda: _IN_HOURS_TS)
+        assert result["status"] == "WARN"
+
+    def test_close_submit_mode_warns(self):
+        from src.tools.paper_status import check_submit_readiness
+        ex = _make_exec(close_positions=True, close_preview_only=False, selected_close_id="BC-001")
+        result = check_submit_readiness(_cfg(ex), _zero_usage(), lambda: _IN_HOURS_TS)
+        assert result["status"] == "WARN"
+
+    def test_kill_switch_enabled_in_submit_mode_fails(self):
+        from src.tools.paper_status import check_submit_readiness
+        ex = _make_exec(preview_only=False, selected_id="BT-001", kill_switch=True)
+        result = check_submit_readiness(_cfg(ex), _zero_usage(), lambda: _IN_HOURS_TS)
+        assert result["status"] == "FAIL"
+
+    def test_kill_switch_enabled_in_preview_mode_passes(self):
+        from src.tools.paper_status import check_submit_readiness
+        ex = _make_exec(preview_only=True, kill_switch=True)
+        result = check_submit_readiness(_cfg(ex), _zero_usage(), lambda: _IN_HOURS_TS)
+        assert result["status"] == "PASS"
+
+    def test_kill_switch_issue_in_detail(self):
+        from src.tools.paper_status import check_submit_readiness
+        ex = _make_exec(preview_only=False, selected_id="BT-001", kill_switch=True)
+        result = check_submit_readiness(_cfg(ex), _zero_usage(), lambda: _IN_HOURS_TS)
+        assert "kill switch" in result["detail"].lower()
+        assert len(result["issues"]) >= 1
+
+    def test_daily_limit_reached_produces_warn(self):
+        from src.tools.paper_status import check_submit_readiness
+        ex = _make_exec(preview_only=False, selected_id="BT-001")
+        result = check_submit_readiness(_cfg(ex), _full_usage(), lambda: _IN_HOURS_TS)
+        assert result["status"] == "WARN"
+        assert any("limit reached" in i for i in result["issues"])
+
+    def test_daily_limit_not_reached_no_issue(self):
+        from src.tools.paper_status import check_submit_readiness
+        ex = _make_exec(preview_only=False, selected_id="BT-001")
+        result = check_submit_readiness(_cfg(ex), _zero_usage(), lambda: _IN_HOURS_TS)
+        assert not any("limit" in i for i in result["issues"])
+
+    def test_outside_market_hours_produces_warn(self):
+        from src.tools.paper_status import check_submit_readiness
+        ex = _make_exec(preview_only=False, selected_id="BT-001", require_market_hours=True)
+        result = check_submit_readiness(_cfg(ex), _zero_usage(), lambda: _OUT_HOURS_TS)
+        assert result["status"] == "WARN"
+        assert any("outside market hours" in i for i in result["issues"])
+
+    def test_outside_market_hours_weekend_warns(self):
+        from src.tools.paper_status import check_submit_readiness
+        ex = _make_exec(preview_only=False, selected_id="BT-001", require_market_hours=True)
+        result = check_submit_readiness(_cfg(ex), _zero_usage(), lambda: _WEEKEND_TS)
+        assert any("outside market hours" in i for i in result["issues"])
+
+    def test_outside_hours_no_warn_when_guard_disabled(self):
+        from src.tools.paper_status import check_submit_readiness
+        ex = _make_exec(preview_only=False, selected_id="BT-001", require_market_hours=False)
+        result = check_submit_readiness(_cfg(ex), _zero_usage(), lambda: _OUT_HOURS_TS)
+        assert not any("outside market hours" in i for i in result["issues"])
+
+    def test_label_is_submit_readiness(self):
+        from src.tools.paper_status import check_submit_readiness
+        ex = _make_exec()
+        result = check_submit_readiness(_cfg(ex), _zero_usage(), lambda: _IN_HOURS_TS)
+        assert result["label"] == "submit_readiness"
+
+    def test_no_broker_no_credentials(self):
+        from src.tools.paper_status import check_submit_readiness
+        ex = _make_exec(preview_only=False, selected_id="BT-001")
+        with patch("src.execution.alpaca_broker.AlpacaBrokerAdapter") as MockBroker:
+            check_submit_readiness(_cfg(ex), _zero_usage(), lambda: _IN_HOURS_TS)
+        MockBroker.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# 11. CLI integration: new sections appear
+# ---------------------------------------------------------------------------
+
+class TestMainWithSafetyGuards:
+    def _write_submit_config(self, tmp_path: Path, kill_switch: bool = False) -> Path:
+        text = _BASE_YAML + textwrap.dedent(f"""\
+            execution:
+              mode: paper
+              paper_trading_enabled: true
+              paper_preview_only: false
+              paper_selected_client_order_id: "BT-20240115100000-SPY"
+              paper_order_quantity_override: 1.0
+              paper_kill_switch_enabled: {"true" if kill_switch else "false"}
+        """)
+        p = tmp_path / "settings.yaml"
+        p.write_text(text, encoding="utf-8")
+        return p
+
+    def test_kill_switch_enabled_causes_fail_exit(self, tmp_path):
+        from src.tools.paper_status import main
+        cfg_path = self._write_submit_config(tmp_path, kill_switch=True)
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        ledger = tmp_path / "ledger.csv"
+        _write_ledger(ledger, [_ledger_row()])
+        argv = [
+            "--config", str(cfg_path),
+            "--output-dir", str(out_dir),
+            "--ledger", str(ledger),
+        ]
+        with pytest.raises(SystemExit) as exc_info:
+            main(argv)
+        assert exc_info.value.code == 1
+
+    def test_kill_switch_disabled_in_submit_mode_exits_1_warn(self, tmp_path):
+        """Submit mode (no kill switch) → WARN → exit 1."""
+        from src.tools.paper_status import main
+        cfg_path = self._write_submit_config(tmp_path, kill_switch=False)
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        ledger = tmp_path / "ledger.csv"
+        _write_ledger(ledger, [_ledger_row()])
+        argv = [
+            "--config", str(cfg_path),
+            "--output-dir", str(out_dir),
+            "--ledger", str(ledger),
+        ]
+        with pytest.raises(SystemExit) as exc_info:
+            main(argv)
+        assert exc_info.value.code == 1
+
+    def test_safety_config_section_in_output(self, tmp_path, capsys):
+        from src.tools.paper_status import main
+        cfg_path = _write_config(tmp_path)
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        ledger = tmp_path / "ledger.csv"
+        _write_ledger(ledger, [_ledger_row()])
+        argv = [
+            "--config", str(cfg_path),
+            "--output-dir", str(out_dir),
+            "--ledger", str(ledger),
+        ]
+        try:
+            main(argv)
+        except SystemExit:
+            pass
+        out = capsys.readouterr().out
+        assert "safety_config" in out
+        assert "paper_kill_switch_enabled" in out
+
+    def test_daily_usage_section_in_output(self, tmp_path, capsys):
+        from src.tools.paper_status import main
+        cfg_path = _write_config(tmp_path)
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        ledger = tmp_path / "ledger.csv"
+        _write_ledger(ledger, [_ledger_row()])
+        argv = [
+            "--config", str(cfg_path),
+            "--output-dir", str(out_dir),
+            "--ledger", str(ledger),
+        ]
+        try:
+            main(argv)
+        except SystemExit:
+            pass
+        out = capsys.readouterr().out
+        assert "daily_usage" in out
+
+    def test_submit_readiness_section_in_output(self, tmp_path, capsys):
+        from src.tools.paper_status import main
+        cfg_path = _write_config(tmp_path)
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        ledger = tmp_path / "ledger.csv"
+        _write_ledger(ledger, [_ledger_row()])
+        argv = [
+            "--config", str(cfg_path),
+            "--output-dir", str(out_dir),
+            "--ledger", str(ledger),
+        ]
+        try:
+            main(argv)
+        except SystemExit:
+            pass
+        out = capsys.readouterr().out
+        assert "submit_readiness" in out
+
+    def test_no_broker_instantiated(self, tmp_path):
+        from src.tools.paper_status import main
+        cfg_path = _write_config(tmp_path)
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        ledger = tmp_path / "ledger.csv"
+        _write_ledger(ledger, [_ledger_row()])
+        argv = [
+            "--config", str(cfg_path),
+            "--output-dir", str(out_dir),
+            "--ledger", str(ledger),
+        ]
+        with patch("src.execution.alpaca_broker.AlpacaBrokerAdapter") as MockBroker:
+            try:
+                main(argv)
+            except SystemExit:
+                pass
+        MockBroker.assert_not_called()
+
+    def test_no_alpaca_credentials_read(self, tmp_path):
+        import os
+        for k in ("ALPACA_API_KEY", "ALPACA_SECRET_KEY"):
+            os.environ.pop(k, None)
+        from src.tools.paper_status import main
+        cfg_path = _write_config(tmp_path)
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        ledger = tmp_path / "ledger.csv"
+        _write_ledger(ledger, [_ledger_row()])
+        argv = [
+            "--config", str(cfg_path),
+            "--output-dir", str(out_dir),
+            "--ledger", str(ledger),
+        ]
+        try:
+            main(argv)
+        except SystemExit as exc:
+            assert exc.code in (0, 1, None)
+

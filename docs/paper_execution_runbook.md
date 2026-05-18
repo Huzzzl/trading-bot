@@ -591,6 +591,9 @@ python -m src.tools.paper_status \
 | Check | PASS condition | WARN/FAIL condition |
 |-------|---------------|---------------------|
 | **config** | `load_config` + `validate_paper_config` succeed | Any `ValueError` or missing field → FAIL |
+| **safety_config** | Always PASS (informational) | — |
+| **daily_usage** | Always PASS (informational) | — |
+| **submit_readiness** | Preview/non-submit mode | Submit mode → WARN; kill switch enabled in submit mode → FAIL; daily limit reached → WARN; outside market hours with `paper_require_market_hours=true` → WARN |
 | **ledger** | File exists and is loadable | Missing file → WARN; parse error → FAIL |
 | **artifacts** | Reports count of present/missing artifact files | Always PASS (informational) |
 | **replay** *(optional)* | `overall_status` is `PASS` or `N/A` | `overall_status` is `WARN`/`FAIL` → WARN; CSV missing → WARN |
@@ -600,15 +603,33 @@ python -m src.tools.paper_status \
 ```
 === Paper Status ===
   [PASS] config  (mode=paper paper_trading_enabled=True classification=buy_preview)
+  [PASS] safety_config  (kill_switch=disabled require_market_hours=True block_if_open_orders=True daily_max_orders=3)
+         paper_kill_switch_enabled=False
+         paper_require_market_hours=True
+         paper_block_if_open_orders=True
+         paper_daily_max_orders=3
+         paper_daily_max_buy_orders=2
+         paper_daily_max_close_orders=2
+         paper_daily_max_notional=None
+         paper_poll_order_status=False
+  [PASS] daily_usage  (today: total=0 buy=0 close=0)
+         today  total=0  buy=0  close=0
+         remaining  total=3  buy=2  close=2
+  [PASS] submit_readiness  (preview/non-submit mode (buy_preview))
   [PASS] ledger  (3 row(s) total; showing last 3)
   [PASS] artifacts  (3 present, 2 missing: ['order_intents.csv', 'order_results.csv'])
-        ✓ paper_candidate_intents.csv
-        ✓ paper_close_candidate_intents.csv
-        ✗ order_intents.csv
-        ✗ order_results.csv
-        ✓ order_reconciliation.json
 
   RESULT: PASS
+======================
+```
+
+Example with kill switch enabled in submit mode:
+
+```
+  [FAIL] submit_readiness  (mode=buy_submit; kill switch ENABLED — all submissions blocked)
+         ! kill switch ENABLED — all submissions blocked
+
+  RESULT: FAIL
 ======================
 ```
 
