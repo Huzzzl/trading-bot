@@ -350,6 +350,20 @@ def _run_paper_close(cfg: AppConfig, output_dir: Path) -> None:
     _ledger_path = Path(cfg.execution.paper_ledger_path)
     assert_client_order_id_unused(_ledger_path, selected_intent.client_order_id)
 
+    from src.execution.paper_daily_limits import assert_within_daily_limits as _assert_daily_close
+    _today_close = _pd.Timestamp.now(tz=_EASTERN).date()
+    _assert_daily_close(
+        ledger_path=_ledger_path,
+        trading_date=_today_close,
+        flow="close_submit",
+        intent_quantity=selected_intent.quantity,
+        max_orders=cfg.execution.paper_daily_max_orders,
+        max_buy_orders=cfg.execution.paper_daily_max_buy_orders,
+        max_close_orders=cfg.execution.paper_daily_max_close_orders,
+        max_notional=cfg.execution.paper_daily_max_notional,
+        intent_price=selected_intent.metadata.get("entry_price") if cfg.execution.paper_daily_max_notional is not None else None,
+    )
+
     logger.info(
         "Paper close: submitting intent client_order_id=%s symbol=%s side=%s qty=%s",
         selected_intent.client_order_id,
@@ -517,9 +531,11 @@ def main() -> None:
         import json as _json
         import pandas as _pd
         from dataclasses import replace as _dc_replace
+        from zoneinfo import ZoneInfo as _ZoneInfo
         from src.execution.alpaca_broker import AlpacaBrokerAdapter
 
         _PAPER_SYMBOL     = "SPY"
+        _PAPER_EASTERN    = _ZoneInfo("America/New_York")
         _PAPER_ORDER_TYPE = "market"
         _PAPER_MAX_QTY    = 1
 
@@ -680,6 +696,20 @@ def main() -> None:
         from src.execution.paper_ledger import assert_client_order_id_unused, append_ledger_row as _append_ledger_row
         _ledger_path = Path(cfg.execution.paper_ledger_path)
         assert_client_order_id_unused(_ledger_path, selected_intent.client_order_id)
+
+        from src.execution.paper_daily_limits import assert_within_daily_limits as _assert_daily
+        _today = _pd.Timestamp.now(tz=_PAPER_EASTERN).date()
+        _assert_daily(
+            ledger_path=_ledger_path,
+            trading_date=_today,
+            flow="buy_submit",
+            intent_quantity=selected_intent.quantity,
+            max_orders=cfg.execution.paper_daily_max_orders,
+            max_buy_orders=cfg.execution.paper_daily_max_buy_orders,
+            max_close_orders=cfg.execution.paper_daily_max_close_orders,
+            max_notional=cfg.execution.paper_daily_max_notional,
+            intent_price=selected_intent.metadata.get("entry_price") if cfg.execution.paper_daily_max_notional is not None else None,
+        )
 
         logger.info(
             "Paper execution: submitting intent client_order_id=%s symbol=%s side=%s qty=%s",

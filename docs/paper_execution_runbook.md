@@ -726,7 +726,62 @@ execution:
 
 ---
 
-## 11. Safe Manual Flow
+## 11. Paper Daily Safety Limits
+
+Before each buy-submit or close-submit, `main.py` calls
+`assert_within_daily_limits()` from `src/execution/paper_daily_limits.py`.
+It reads the local ledger (no broker calls) and raises `RuntimeError` before
+`submit_order` if any limit is already reached.
+
+**Preview-only flows are never affected.**
+
+### Config fields
+
+| Field | Default | Meaning |
+|-------|---------|---------|
+| `paper_daily_max_orders` | `3` | Max total paper orders (buy + close) for the trading day |
+| `paper_daily_max_buy_orders` | `2` | Max buy-submit orders for the trading day |
+| `paper_daily_max_close_orders` | `2` | Max close-submit orders for the trading day |
+| `paper_daily_max_notional` | `null` | Max notional (qty × price) for the current order; `null` disables check |
+
+### Counting rules
+
+- Rows in the ledger are assigned to a trading date using `submitted_at` (preferred) or `created_at_utc`, converted to `America/New_York`.
+- Rows with `status` in `{"rejected", "cancelled", "canceled"}` do **not** count.
+- Rows from previous days do **not** count.
+- A missing ledger file counts as zero.
+
+### Notional check
+
+If `paper_daily_max_notional` is set, `main.py` passes `intent.metadata.get("entry_price")` as the price.
+
+- If price is available and `qty × price > max_notional` → `RuntimeError` before submit.
+- If price is unavailable → **fail closed**: `RuntimeError` before submit (no silent skip).
+- If `paper_daily_max_notional: null` (the default) → notional check is skipped entirely.
+
+### Example config
+
+```yaml
+execution:
+  mode: paper
+  paper_trading_enabled: true
+  paper_daily_max_orders: 3        # block 4th order of the day
+  paper_daily_max_buy_orders: 2    # block 3rd buy of the day
+  paper_daily_max_close_orders: 2  # block 3rd close of the day
+  paper_daily_max_notional: 500    # block any single order > $500 notional
+```
+
+### Error format
+
+All limit violations raise:
+
+```
+RuntimeError: daily paper limit exceeded — no order was submitted. Violations: <details>
+```
+
+---
+
+## 12. Safe Manual Flow
 
 Follow these steps in order.  Stop at any step that produces an unexpected result.
 
@@ -806,7 +861,7 @@ Check the output directory for audit artifacts (see section 13).
 
 ---
 
-## 12. Emergency Stop
+## 13. Emergency Stop
 
 If at any point the process behaves unexpectedly:
 
@@ -820,7 +875,7 @@ If at any point the process behaves unexpectedly:
 
 ---
 
-## 13. Expected Output Artifacts
+## 14. Expected Output Artifacts
 
 After a successful paper run the output directory will contain:
 
@@ -836,7 +891,7 @@ orders, investigate before running again.
 
 ---
 
-## 14. What Is Still Blocked or Constrained
+## 15. What Is Still Blocked or Constrained
 
 The following are explicitly **not** supported and will raise immediately:
 
@@ -867,7 +922,7 @@ The following are explicitly **not** supported and will raise immediately:
 
 ---
 
-## 15. References
+## 16. References
 
 - [Alpaca Adapter Design](alpaca_adapter_design.md) — full adapter specification
 - [Paper Execution Readiness](paper_execution_readiness.md) — safety gates and merge checklist

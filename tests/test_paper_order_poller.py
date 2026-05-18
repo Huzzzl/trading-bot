@@ -464,6 +464,7 @@ def _run_buy(cfg, tmp_path, poll_client=None, submit_status: str = "accepted"):
         mock.patch("src.reporting.report_generator.ReportGenerator.generate_all", _pass_recon_generate),
         mock.patch("src.execution.paper_ledger.assert_client_order_id_unused"),
         mock.patch("src.execution.paper_ledger.append_ledger_row") as mock_ledger,
+        mock.patch("src.execution.paper_daily_limits.assert_within_daily_limits"),
         mock.patch("src.main.load_config", return_value=cfg),
         mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]),
     ):
@@ -593,6 +594,7 @@ def _run_close(cfg, tmp_path, poll_client=None, submit_status: str = "accepted")
         mock.patch("src.reporting.report_generator.ReportGenerator.generate_all", _pass_recon_generate),
         mock.patch("src.execution.paper_ledger.assert_client_order_id_unused"),
         mock.patch("src.execution.paper_ledger.append_ledger_row") as mock_ledger,
+        mock.patch("src.execution.paper_daily_limits.assert_within_daily_limits"),
         mock.patch("src.main.load_config", return_value=cfg),
         mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]),
     ):
