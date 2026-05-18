@@ -684,3 +684,250 @@ class TestPaperClosePreflight:
              mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
             src.main.main()
         mock_pf.assert_called_once_with(["SPY"], allow_existing_positions=True)
+
+
+# ---------------------------------------------------------------------------
+# 9. Close submit audit hardening
+# ---------------------------------------------------------------------------
+
+def _make_config_with_poll(
+    *,
+    paper_close_positions_enabled: bool = True,
+    paper_close_preview_only: bool = False,
+    paper_selected_close_client_order_id: str | None = _FIXED_CID,
+    paper_close_quantity_override: float | None = None,
+    paper_poll_order_status: bool = False,
+    paper_poll_timeout_seconds: int = 30,
+    paper_poll_interval_seconds: float = 1.0,
+):
+    from src.config.loader import (
+        AppConfig, BacktestConfig, DataConfig, ExecutionConfig,
+        LoggingConfig, RiskConfig, StrategyConfig,
+    )
+    return AppConfig(
+        backtest=BacktestConfig(
+            start_date="2024-01-15", end_date="2024-01-15",
+            initial_capital=100_000, commission_per_share=0.0, slippage_per_share=0.0,
+        ),
+        symbols=["SPY"],
+        data=DataConfig(provider="yahoo", bar_interval="5m", timezone="America/New_York"),
+        strategy=StrategyConfig(name="opening_range_breakout", params={
+            "opening_range_start": "09:30", "opening_range_end": "10:00",
+            "force_exit_time": "15:55", "position_size_pct": 0.95, "long_only": True,
+        }),
+        risk=RiskConfig(),
+        logging=LoggingConfig(level="WARNING", format="%(message)s"),
+        execution=ExecutionConfig(
+            mode="paper",
+            paper_trading_enabled=True,
+            paper_close_positions_enabled=paper_close_positions_enabled,
+            paper_close_preview_only=paper_close_preview_only,
+            paper_selected_close_client_order_id=paper_selected_close_client_order_id,
+            paper_close_quantity_override=paper_close_quantity_override,
+            paper_poll_order_status=paper_poll_order_status,
+            paper_poll_timeout_seconds=paper_poll_timeout_seconds,
+            paper_poll_interval_seconds=paper_poll_interval_seconds,
+        ),
+    )
+
+
+def _run_extended(
+    cfg,
+    positions: dict | None = None,
+    submit_return=None,
+    tmp_path=None,
+    *,
+    poll_client=None,
+) -> tuple[mock.MagicMock, mock.MagicMock, mock.MagicMock]:
+    """Like _run() but captures append_ledger_row calls and supports a poll client.
+
+    Returns (mock_submit, mock_cancel, mock_ledger).
+    """
+    import tempfile
+    from src.execution.alpaca_broker import AlpacaBrokerAdapter
+
+    out = str(tmp_path) if tmp_path is not None else tempfile.mkdtemp()
+    fake_preflight = {
+        "ok": True,
+        "account": {"status": "ACTIVE"},
+        "positions": positions if positions is not None else {},
+        "symbols": ["SPY"],
+    }
+    mock_submit = mock.MagicMock(return_value=submit_return)
+    mock_cancel = mock.MagicMock()
+    mock_ledger = mock.MagicMock()
+
+    import src.main
+
+    patches = [
+        mock.patch.object(pd.Timestamp, "now", return_value=_FIXED_TS),
+        mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None),
+        mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                          return_value=fake_preflight),
+        mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit),
+        mock.patch.object(AlpacaBrokerAdapter, "cancel_order", mock_cancel),
+        mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
+                   _pass_recon_generate),
+        mock.patch("src.execution.paper_ledger.assert_client_order_id_unused"),
+        mock.patch("src.execution.paper_ledger.append_ledger_row", mock_ledger),
+        mock.patch("src.main.load_config", return_value=cfg),
+        mock.patch("sys.argv", ["prog", "--output-dir", out]),
+    ]
+    if poll_client is not None:
+        patches.append(
+            mock.patch.object(AlpacaBrokerAdapter, "_get_client",
+                              return_value=poll_client)
+        )
+
+    import contextlib
+    with contextlib.ExitStack() as stack:
+        for p in patches:
+            stack.enter_context(p)
+        src.main.main()
+
+    return mock_submit, mock_cancel, mock_ledger
+
+
+class TestCloseSubmitAuditHardening:
+    """Audit hardening: current_position_qty and selected_close_client_order_id
+    are recorded in the close audit CSV and ledger notes."""
+
+    def test_zero_qty_position_raises_before_submit_order(self, tmp_path):
+        """position qty=0 → no close candidate generated → raises before submit_order."""
+        cfg = _make_config_with_poll()
+        mock_submit = mock.MagicMock()
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        import src.main
+        fake_preflight = {
+            "ok": True, "account": {"status": "ACTIVE"},
+            "positions": {"SPY": _spy_pos(0.0)}, "symbols": ["SPY"],
+        }
+        with mock.patch.object(pd.Timestamp, "now", return_value=_FIXED_TS), \
+             mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=fake_preflight), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            with pytest.raises(RuntimeError):
+                src.main.main()
+        mock_submit.assert_not_called()
+
+    def test_qty_exceeds_current_position_raises_before_submit_order(self, tmp_path):
+        """override=1.0 with position qty=0.5 → quantity exceeds current position → raises."""
+        cfg = _make_config_with_poll(paper_close_quantity_override=1.0)
+        mock_submit = mock.MagicMock()
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        import src.main
+        fake_preflight = {
+            "ok": True, "account": {"status": "ACTIVE"},
+            "positions": {"SPY": _spy_pos(0.5)}, "symbols": ["SPY"],
+        }
+        with mock.patch.object(pd.Timestamp, "now", return_value=_FIXED_TS), \
+             mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
+             mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
+                               return_value=fake_preflight), \
+             mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
+             mock.patch("src.main.load_config", return_value=cfg), \
+             mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            with pytest.raises(RuntimeError, match="exceeds current position"):
+                src.main.main()
+        mock_submit.assert_not_called()
+
+    def test_audit_csv_has_selected_close_client_order_id_column(self, tmp_path):
+        cfg = _make_config_with_poll()
+        _run_extended(
+            cfg,
+            positions={"SPY": _spy_pos(1.0)},
+            submit_return=_make_submit_return(),
+            tmp_path=tmp_path,
+        )
+        df = pd.read_csv(tmp_path / "paper_close_intent_audit.csv")
+        assert "selected_close_client_order_id" in df.columns
+
+    def test_audit_csv_selected_close_client_order_id_value(self, tmp_path):
+        cfg = _make_config_with_poll()
+        _run_extended(
+            cfg,
+            positions={"SPY": _spy_pos(1.0)},
+            submit_return=_make_submit_return(),
+            tmp_path=tmp_path,
+        )
+        df = pd.read_csv(tmp_path / "paper_close_intent_audit.csv")
+        assert df["selected_close_client_order_id"].iloc[0] == _FIXED_CID
+
+    def test_audit_csv_current_position_qty_value(self, tmp_path):
+        cfg = _make_config_with_poll()
+        _run_extended(
+            cfg,
+            positions={"SPY": _spy_pos(1.0)},
+            submit_return=_make_submit_return(),
+            tmp_path=tmp_path,
+        )
+        df = pd.read_csv(tmp_path / "paper_close_intent_audit.csv")
+        assert float(df["current_position_qty"].iloc[0]) == pytest.approx(1.0)
+
+    def test_ledger_notes_includes_current_position_qty(self, tmp_path):
+        cfg = _make_config_with_poll()
+        _, _, mock_ledger = _run_extended(
+            cfg,
+            positions={"SPY": _spy_pos(1.0)},
+            submit_return=_make_submit_return(),
+            tmp_path=tmp_path,
+        )
+        assert mock_ledger.call_count == 1
+        row = mock_ledger.call_args[0][1]
+        assert "current_position_qty" in row.get("notes", "")
+        assert "1.0" in row.get("notes", "")
+
+    def test_ledger_flow_is_close_submit(self, tmp_path):
+        cfg = _make_config_with_poll()
+        _, _, mock_ledger = _run_extended(
+            cfg,
+            positions={"SPY": _spy_pos(1.0)},
+            submit_return=_make_submit_return(),
+            tmp_path=tmp_path,
+        )
+        row = mock_ledger.call_args[0][1]
+        assert row.get("flow") == "close_submit"
+
+    def test_polling_enabled_close_submit_writes_final_status_to_ledger(self, tmp_path):
+        """When polling is enabled and final status is 'filled', ledger records 'filled'."""
+        cfg = _make_config_with_poll(paper_poll_order_status=True, paper_poll_timeout_seconds=5)
+
+        poll_client = mock.MagicMock()
+        filled_response = mock.MagicMock()
+        filled_response.status = "filled"
+        poll_client.get_order_by_id.return_value = filled_response
+        poll_client.submit_order.side_effect = AssertionError("must not call")
+        poll_client.cancel_order.side_effect = AssertionError("must not call")
+
+        _, _, mock_ledger = _run_extended(
+            cfg,
+            positions={"SPY": _spy_pos(1.0)},
+            submit_return=_make_submit_return(status="accepted"),
+            tmp_path=tmp_path,
+            poll_client=poll_client,
+        )
+        row = mock_ledger.call_args[0][1]
+        assert row.get("status") == "filled"
+
+    def test_submit_order_called_exactly_once(self, tmp_path):
+        cfg = _make_config_with_poll()
+        mock_submit, _, _ = _run_extended(
+            cfg,
+            positions={"SPY": _spy_pos(1.0)},
+            submit_return=_make_submit_return(),
+            tmp_path=tmp_path,
+        )
+        assert mock_submit.call_count == 1
+
+    def test_cancel_order_never_called(self, tmp_path):
+        cfg = _make_config_with_poll()
+        _, mock_cancel, _ = _run_extended(
+            cfg,
+            positions={"SPY": _spy_pos(1.0)},
+            submit_return=_make_submit_return(),
+            tmp_path=tmp_path,
+        )
+        mock_cancel.assert_not_called()
