@@ -364,9 +364,10 @@ class TestPollConfig:
 
 # Re-use the _make_config / _run pattern from test_paper_close.py
 
-_FIXED_TS       = pd.Timestamp("2024-01-15 10:00:00", tz="America/New_York")
-_FIXED_TS_LABEL = "20240115100000"
-_BUY_CID        = f"BT-{_FIXED_TS_LABEL}-SPY"
+_FIXED_TS         = pd.Timestamp("2024-01-15 10:00:00", tz="America/New_York")
+_FIXED_TS_LABEL   = "20240115100000"
+_FIXED_DATE_LABEL = "20240115"
+_BUY_CID          = f"BT-{_FIXED_TS_LABEL}-SPY"
 
 
 def _make_buy_config(*, poll_enabled: bool = False, timeout: int = 5, interval: float = 0.0):
@@ -519,7 +520,7 @@ class TestBuyFlowPolling:
 # Main.py integration — close flow
 # ---------------------------------------------------------------------------
 
-_CLOSE_CID      = f"BC-{_FIXED_TS_LABEL}-SPY"
+_CLOSE_CID      = f"BC-{_FIXED_DATE_LABEL}-SPY-CLOSE"
 
 
 def _make_close_config(*, poll_enabled: bool = False, timeout: int = 5, interval: float = 0.0):
