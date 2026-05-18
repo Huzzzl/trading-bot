@@ -781,7 +781,51 @@ RuntimeError: daily paper limit exceeded — no order was submitted. Violations:
 
 ---
 
-## 12. Safe Manual Flow
+## 12. Paper Open-Order Guard
+
+Before any real paper buy-submit or close-submit, `main.py` calls
+`assert_no_open_orders_for_symbol()` from `src/execution/paper_open_order_guard.py`.
+
+The guard queries the Alpaca paper account for open orders via `get_orders` (falling
+back to `list_orders`). If any open order exists for the selected symbol, the guard
+raises before `submit_order` is ever called.
+
+**The guard is read-only.** It never calls `submit_order`, `cancel_order`, or any
+mutating endpoint.
+
+### Config field
+
+| Field | Default | Meaning |
+|---|---|---|
+| `paper_block_if_open_orders` | `true` | When `true`, abort before submit if any open order exists for the symbol. Set to `false` only if you want to allow stacking orders (not recommended). |
+
+### When the guard fires
+
+The guard fires only on Phase 2 (actual submit) — never during preview runs.
+
+### Error format
+
+```
+RuntimeError: open paper order detected for 'SPY' — no order was submitted.
+Cancel or wait for the existing open order(s) to complete before submitting
+another order. Open order count: 1.
+```
+
+### Resolution
+
+Cancel the open order in your Alpaca paper dashboard (or wait for it to fill/expire),
+then re-run the Phase 2 submit.
+
+### Example config
+
+```yaml
+execution:
+  paper_block_if_open_orders: true   # default — recommended
+```
+
+---
+
+## 13. Safe Manual Flow
 
 Follow these steps in order.  Stop at any step that produces an unexpected result.
 
@@ -861,7 +905,7 @@ Check the output directory for audit artifacts (see section 13).
 
 ---
 
-## 13. Emergency Stop
+## 14. Emergency Stop
 
 If at any point the process behaves unexpectedly:
 
@@ -875,7 +919,7 @@ If at any point the process behaves unexpectedly:
 
 ---
 
-## 14. Expected Output Artifacts
+## 15. Expected Output Artifacts
 
 After a successful paper run the output directory will contain:
 
@@ -891,7 +935,7 @@ orders, investigate before running again.
 
 ---
 
-## 15. What Is Still Blocked or Constrained
+## 16. What Is Still Blocked or Constrained
 
 The following are explicitly **not** supported and will raise immediately:
 
@@ -922,7 +966,7 @@ The following are explicitly **not** supported and will raise immediately:
 
 ---
 
-## 16. References
+## 17. References
 
 - [Alpaca Adapter Design](alpaca_adapter_design.md) — full adapter specification
 - [Paper Execution Readiness](paper_execution_readiness.md) — safety gates and merge checklist

@@ -364,6 +364,10 @@ def _run_paper_close(cfg: AppConfig, output_dir: Path) -> None:
         intent_price=selected_intent.metadata.get("entry_price") if cfg.execution.paper_daily_max_notional is not None else None,
     )
 
+    if cfg.execution.paper_block_if_open_orders:
+        from src.execution.paper_open_order_guard import assert_no_open_orders_for_symbol as _assert_no_open_close
+        _assert_no_open_close(broker._get_client, selected_intent.symbol)
+
     logger.info(
         "Paper close: submitting intent client_order_id=%s symbol=%s side=%s qty=%s",
         selected_intent.client_order_id,
@@ -710,6 +714,10 @@ def main() -> None:
             max_notional=cfg.execution.paper_daily_max_notional,
             intent_price=selected_intent.metadata.get("entry_price") if cfg.execution.paper_daily_max_notional is not None else None,
         )
+
+        if cfg.execution.paper_block_if_open_orders:
+            from src.execution.paper_open_order_guard import assert_no_open_orders_for_symbol as _assert_no_open
+            _assert_no_open(broker._get_client, selected_intent.symbol)
 
         logger.info(
             "Paper execution: submitting intent client_order_id=%s symbol=%s side=%s qty=%s",
