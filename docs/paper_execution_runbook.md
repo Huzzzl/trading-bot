@@ -825,7 +825,61 @@ execution:
 
 ---
 
-## 13. Safe Manual Flow
+## 13. Paper Market-Hours Guard
+
+Before any real paper buy-submit or close-submit, `main.py` calls
+`assert_regular_market_hours()` from `src/execution/paper_market_hours_guard.py`.
+
+The guard checks that the current New York time is inside regular NYSE trading hours.
+If the check fails, it raises before `submit_order` is ever called.
+
+No holiday or early-close calendar is applied in this implementation.
+
+**The guard is read-only.** It never calls `submit_order`, `cancel_order`, or any
+network endpoint.
+
+### Rules
+
+- Timezone: `America/New_York`
+- Days: Monday–Friday only (day 0–4)
+- Time window: `09:30:00 <= now.time() < 16:00:00`
+
+### Config field
+
+| Field | Default | Meaning |
+|---|---|---|
+| `paper_require_market_hours` | `true` | When `true`, abort before submit if the current ET time is outside regular market hours. Set to `false` only for testing workflows that run outside market hours (not recommended for production). |
+
+### When the guard fires
+
+The guard fires at the very start of Phase 2 (actual submit) — before candidate
+selection, before ledger checks, and before any broker calls. Preview runs are
+never affected.
+
+### Error format
+
+```
+RuntimeError: market is closed — no order was submitted.
+Current time: Monday 16:00:00 EDT.
+Regular market hours are Monday–Friday 09:30–16:00 ET.
+```
+
+### Resolution
+
+Wait until regular market hours (Mon–Fri 09:30–16:00 ET) and re-run the Phase 2
+submit. Alternatively, set `paper_require_market_hours: false` to bypass the check
+during off-hours testing.
+
+### Example config
+
+```yaml
+execution:
+  paper_require_market_hours: true   # default — recommended
+```
+
+---
+
+## 14. Safe Manual Flow
 
 Follow these steps in order.  Stop at any step that produces an unexpected result.
 
@@ -905,7 +959,7 @@ Check the output directory for audit artifacts (see section 13).
 
 ---
 
-## 14. Emergency Stop
+## 15. Emergency Stop
 
 If at any point the process behaves unexpectedly:
 
@@ -919,7 +973,7 @@ If at any point the process behaves unexpectedly:
 
 ---
 
-## 15. Expected Output Artifacts
+## 16. Expected Output Artifacts
 
 After a successful paper run the output directory will contain:
 
@@ -935,7 +989,7 @@ orders, investigate before running again.
 
 ---
 
-## 16. What Is Still Blocked or Constrained
+## 17. What Is Still Blocked or Constrained
 
 The following are explicitly **not** supported and will raise immediately:
 
@@ -966,7 +1020,7 @@ The following are explicitly **not** supported and will raise immediately:
 
 ---
 
-## 17. References
+## 18. References
 
 - [Alpaca Adapter Design](alpaca_adapter_design.md) — full adapter specification
 - [Paper Execution Readiness](paper_execution_readiness.md) — safety gates and merge checklist

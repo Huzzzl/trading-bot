@@ -33,6 +33,10 @@ _OPEN_ORDER_GUARD_TEST_FILES = {
     "test_paper_open_order_guard.py",
 }
 
+_MARKET_HOURS_GUARD_TEST_FILES = {
+    "test_paper_market_hours_guard.py",
+}
+
 
 @pytest.fixture(autouse=True)
 def _auto_patch_paper_ledger(request):
@@ -67,4 +71,15 @@ def _auto_patch_paper_open_order_guard(request):
         return
 
     with patch("src.execution.paper_open_order_guard.assert_no_open_orders_for_symbol"):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _auto_patch_paper_market_hours_guard(request):
+    """No-op assert_regular_market_hours for all tests outside test_paper_market_hours_guard.py."""
+    if request.fspath.basename in _MARKET_HOURS_GUARD_TEST_FILES:
+        yield  # these tests use the real implementation
+        return
+
+    with patch("src.execution.paper_market_hours_guard.assert_regular_market_hours"):
         yield

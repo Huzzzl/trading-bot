@@ -260,6 +260,10 @@ def _run_paper_close(cfg: AppConfig, output_dir: Path) -> None:
         return
 
     # --- Phase B: close submit ---
+    if cfg.execution.paper_require_market_hours:
+        from src.execution.paper_market_hours_guard import assert_regular_market_hours as _assert_mh_close
+        _assert_mh_close()
+
     _selected_coid = cfg.execution.paper_selected_close_client_order_id
     if not _selected_coid or not str(_selected_coid).strip():
         raise RuntimeError(
@@ -606,6 +610,10 @@ def main() -> None:
             return
 
         # ---- Phase 2: submit selected intent --------------------------------
+
+        if cfg.execution.paper_require_market_hours:
+            from src.execution.paper_market_hours_guard import assert_regular_market_hours as _assert_mh_buy
+            _assert_mh_buy()
 
         _selected_coid = cfg.execution.paper_selected_client_order_id
         if not _selected_coid or not str(_selected_coid).strip():
