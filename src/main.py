@@ -395,7 +395,7 @@ def _run_paper_close(cfg: AppConfig, output_dir: Path) -> None:
         "status":          result.status,
         "submitted_at":    str(result.submitted_at),
         "output_dir":      str(output_dir),
-        "notes":           "",
+        "notes":           f"close_submit current_position_qty={current_pos_qty}",
     })
     logger.info("Paper close: ledger row appended to %s", _ledger_path)
 
@@ -403,16 +403,17 @@ def _run_paper_close(cfg: AppConfig, output_dir: Path) -> None:
     _audit_cols = [
         "client_order_id", "symbol", "side",
         "original_quantity", "submitted_quantity", "override_applied",
-        "current_position_qty",
+        "current_position_qty", "selected_close_client_order_id",
     ]
     _audit_df = _pd.DataFrame([{
-        "client_order_id":      selected_intent.client_order_id,
-        "symbol":               selected_intent.symbol,
-        "side":                 selected_intent.side,
-        "original_quantity":    _selected_original.quantity,
-        "submitted_quantity":   selected_intent.quantity,
-        "override_applied":     _qty_override is not None,
-        "current_position_qty": current_pos_qty,
+        "client_order_id":               selected_intent.client_order_id,
+        "symbol":                        selected_intent.symbol,
+        "side":                          selected_intent.side,
+        "original_quantity":             _selected_original.quantity,
+        "submitted_quantity":            selected_intent.quantity,
+        "override_applied":              _qty_override is not None,
+        "current_position_qty":          current_pos_qty,
+        "selected_close_client_order_id": _selected_coid,
     }], columns=_audit_cols)
     _audit_path = output_dir / "paper_close_intent_audit.csv"
     _audit_df.to_csv(_audit_path, index=False)
