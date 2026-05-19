@@ -9,6 +9,8 @@ environment, no orders submitted or cancelled, no real engine/data runs.
 
 from __future__ import annotations
 
+import csv
+import json
 import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -635,3 +637,187 @@ class TestMain:
                     "--symbol", "QQQ",
                 ])
         assert exc_info.value.code == 1
+
+
+# ---------------------------------------------------------------------------
+# 6. Report artifact tests
+# ---------------------------------------------------------------------------
+
+def _run_main_full(
+    tmp_path: Path,
+    intents=None,
+    account=None,
+    positions=None,
+    orders=None,
+    live_max_quantity: float = 1.0,
+    live_max_notional: "float | None" = 500.0,
+    live_quantity_override: "float | None" = 1.0,
+    extra_argv: list[str] | None = None,
+) -> tuple[int, MagicMock]:
+    """Run main() wiring everything through _run_main helper; supports extra argv."""
+    from src.tools.live_shadow_preflight import main
+
+    if intents is None:
+        intents = [_mock_intent(entry_price=450.0)]
+
+    mock_client = _make_client(account=account, positions=positions, orders=orders)
+
+    cfg_mock = MagicMock()
+    cfg_mock.execution = _mock_execution_cfg(
+        live_max_quantity=live_max_quantity,
+        live_max_notional=live_max_notional,
+        live_quantity_override=live_quantity_override,
+    )
+    cfg_result = {"label": "config", "status": "PASS", "detail": ""}
+
+    argv = [
+        "--config", "config/settings.paper.local.yaml",
+        "--output-dir", str(tmp_path),
+        "--symbol", "SPY",
+    ] + (extra_argv or [])
+
+    env = {"ALPACA_LIVE_API_KEY": "live-key", "ALPACA_LIVE_SECRET_KEY": "live-secret"}
+    with patch.dict(os.environ, env, clear=True), \
+         patch("src.tools.live_shadow_preflight.check_config",
+               return_value=(cfg_result, cfg_mock)), \
+         patch("src.tools.live_shadow_preflight._run_strategy_preview",
+               return_value=intents), \
+         patch("src.tools.live_shadow_preflight._make_live_client",
+               return_value=mock_client):
+        try:
+            main(argv)
+            return 0, mock_client
+        except SystemExit as exc:
+            return exc.code, mock_client
+
+
+class TestWriteReport:
+    def test_default_run_writes_no_files(self, tmp_path):
+        _run_main_full(tmp_path=tmp_path)
+        assert not (tmp_path / "live_shadow_preflight_report.json").exists()
+        assert not (tmp_path / "live_shadow_candidates.csv").exists()
+
+    def test_write_report_creates_json(self, tmp_path):
+        _run_main_full(tmp_path=tmp_path, extra_argv=["--write-report"])
+        assert (tmp_path / "live_shadow_preflight_report.json").exists()
+
+    def test_write_report_creates_csv(self, tmp_path):
+        _run_main_full(tmp_path=tmp_path, extra_argv=["--write-report"])
+        assert (tmp_path / "live_shadow_candidates.csv").exists()
+
+    def test_json_contains_final_status(self, tmp_path):
+        _run_main_full(tmp_path=tmp_path, extra_argv=["--write-report"])
+        data = json.loads((tmp_path / "live_shadow_preflight_report.json").read_text())
+        assert "final_status" in data
+        assert data["final_status"] in ("PASS", "WARN", "FAIL")
+
+    def test_json_contains_checks_list(self, tmp_path):
+        _run_main_full(tmp_path=tmp_path, extra_argv=["--write-report"])
+        data = json.loads((tmp_path / "live_shadow_preflight_report.json").read_text())
+        assert isinstance(data["checks"], list)
+        assert len(data["checks"]) > 0
+
+    def test_json_fields_present(self, tmp_path):
+        _run_main_full(tmp_path=tmp_path, extra_argv=["--write-report"])
+        data = json.loads((tmp_path / "live_shadow_preflight_report.json").read_text())
+        for field in (
+            "checked_at_utc", "selected_symbol", "final_status", "config_path",
+            "account_status", "trading_blocked", "account_blocked",
+            "buying_power", "portfolio_value",
+            "position_for_symbol", "open_orders_for_symbol",
+            "candidate_count", "sizing_summary",
+        ):
+            assert field in data, f"missing JSON field: {field}"
+
+    def test_json_sizing_summary_present(self, tmp_path):
+        _run_main_full(tmp_path=tmp_path, extra_argv=["--write-report"])
+        data = json.loads((tmp_path / "live_shadow_preflight_report.json").read_text())
+        assert data["sizing_summary"] is not None
+        assert "status" in data["sizing_summary"]
+
+    def test_csv_includes_all_candidates(self, tmp_path):
+        intents = [
+            _mock_intent(entry_price=450.0),
+            _mock_intent(entry_price=455.0),
+            _mock_intent(entry_price=460.0),
+        ]
+        _run_main_full(tmp_path=tmp_path, intents=intents, extra_argv=["--write-report"])
+        with (tmp_path / "live_shadow_candidates.csv").open() as f:
+            rows = list(csv.DictReader(f))
+        assert len(rows) == 3
+
+    def test_csv_columns_present(self, tmp_path):
+        _run_main_full(tmp_path=tmp_path, extra_argv=["--write-report"])
+        with (tmp_path / "live_shadow_candidates.csv").open() as f:
+            reader = csv.DictReader(f)
+            columns = reader.fieldnames or []
+        for col in (
+            "client_order_id", "symbol", "side", "order_type",
+            "original_quantity", "effective_quantity", "entry_price",
+            "estimated_notional", "live_max_quantity", "live_max_notional",
+            "sizing_status", "sizing_reason",
+        ):
+            assert col in columns, f"missing CSV column: {col}"
+
+    def test_csv_sizing_failure_reflected_per_candidate(self, tmp_path):
+        """A candidate that exceeds the notional cap shows FAIL in sizing_status."""
+        intents = [_mock_intent(entry_price=600.0)]  # 1 * 600 > 500 notional cap
+        _run_main_full(
+            tmp_path=tmp_path,
+            intents=intents,
+            live_max_notional=500.0,
+            live_quantity_override=1.0,
+            extra_argv=["--write-report"],
+        )
+        with (tmp_path / "live_shadow_candidates.csv").open() as f:
+            rows = list(csv.DictReader(f))
+        assert rows[0]["sizing_status"] == "FAIL"
+
+    def test_csv_sizing_pass_reflected_per_candidate(self, tmp_path):
+        intents = [_mock_intent(entry_price=400.0)]  # 1 * 400 < 500 cap
+        _run_main_full(
+            tmp_path=tmp_path,
+            intents=intents,
+            live_max_notional=500.0,
+            live_quantity_override=1.0,
+            extra_argv=["--write-report"],
+        )
+        with (tmp_path / "live_shadow_candidates.csv").open() as f:
+            rows = list(csv.DictReader(f))
+        assert rows[0]["sizing_status"] == "PASS"
+
+    def test_no_ledger_writes(self, tmp_path):
+        _run_main_full(tmp_path=tmp_path, extra_argv=["--write-report"])
+        ledger_files = list(tmp_path.glob("*ledger*"))
+        assert ledger_files == []
+
+    def test_submit_order_never_called(self, tmp_path):
+        _, client = _run_main_full(tmp_path=tmp_path, extra_argv=["--write-report"])
+        client.submit_order.assert_not_called()
+
+    def test_cancel_order_never_called(self, tmp_path):
+        _, client = _run_main_full(tmp_path=tmp_path, extra_argv=["--write-report"])
+        client.cancel_order.assert_not_called()
+
+    def test_no_real_network_calls(self, tmp_path):
+        from src.tools.live_shadow_preflight import main
+        cfg_result = {"label": "config", "status": "PASS", "detail": ""}
+        cfg_mock = MagicMock()
+        cfg_mock.execution = _mock_execution_cfg()
+        env = {"ALPACA_LIVE_API_KEY": "k", "ALPACA_LIVE_SECRET_KEY": "s"}
+        with patch.dict(os.environ, env, clear=True), \
+             patch("src.tools.live_shadow_preflight.check_config",
+                   return_value=(cfg_result, cfg_mock)), \
+             patch("src.tools.live_shadow_preflight._run_strategy_preview",
+                   return_value=[_mock_intent(entry_price=450.0)]), \
+             patch("src.tools.live_shadow_preflight._make_live_client",
+                   return_value=_make_client()) as mock_factory:
+            try:
+                main([
+                    "--config", "config/settings.paper.local.yaml",
+                    "--output-dir", str(tmp_path),
+                    "--write-report",
+                ])
+            except SystemExit:
+                pass
+        mock_factory.assert_called_once()
