@@ -145,14 +145,28 @@ python -m src.tools.live_shadow_preflight `
     --output-dir output/live_shadow_preflight
 ```
 
-Optional `--symbol` flag (default `SPY`):
+Optional flags:
 
 ```bash
 python -m src.tools.live_shadow_preflight \
     --config config/settings.paper.local.yaml \
     --output-dir output/live_shadow_preflight \
-    --symbol SPY
+    --symbol SPY \
+    --write-report
 ```
+
+```powershell
+python -m src.tools.live_shadow_preflight `
+    --config config/settings.paper.local.yaml `
+    --output-dir output/live_shadow_preflight `
+    --symbol SPY `
+    --write-report
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--symbol` | `SPY` | Symbol to check |
+| `--write-report` | off | Write JSON report and CSV candidates to `--output-dir` |
 
 ### Checks performed
 
@@ -201,3 +215,42 @@ python -m src.tools.live_shadow_preflight \
 ```
 
 Stop at any FAIL result. A WARN result requires manual review before proceeding.
+
+### Report artifacts (`--write-report`)
+
+When `--write-report` is passed, two files are written to `--output-dir`:
+
+**`live_shadow_preflight_report.json`**
+
+| Field | Description |
+|-------|-------------|
+| `checked_at_utc` | ISO-8601 timestamp of the run |
+| `selected_symbol` | Symbol checked |
+| `final_status` | `PASS`, `WARN`, or `FAIL` |
+| `config_path` | Path to the config file used |
+| `account_status` | Normalized live account status |
+| `trading_blocked` / `account_blocked` | Live account block flags |
+| `buying_power` / `portfolio_value` | Live account balances |
+| `position_for_symbol` | `true` if a live position exists for the symbol |
+| `open_orders_for_symbol` | `true` if a live open order exists for the symbol |
+| `candidate_count` | Number of buy+market candidates from strategy preview |
+| `sizing_summary` | Summary of the `live_sizing` check (status, limits, computed values) |
+| `checks` | Full list of every check with label, status, and detail |
+
+**`live_shadow_candidates.csv`**
+
+One row per candidate intent:
+
+| Column | Description |
+|--------|-------------|
+| `client_order_id` | Intent ID from strategy |
+| `symbol`, `side`, `order_type` | Order parameters |
+| `original_quantity` | Raw quantity from strategy |
+| `effective_quantity` | After `live_quantity_override` is applied |
+| `entry_price` | From intent metadata (if present) |
+| `estimated_notional` | `effective_quantity × entry_price` |
+| `live_max_quantity` / `live_max_notional` | Configured limits |
+| `sizing_status` | `PASS` or `FAIL` per candidate |
+| `sizing_reason` | Human-readable explanation |
+
+No ledger rows are ever written. These files are audit artifacts only.

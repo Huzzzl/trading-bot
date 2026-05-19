@@ -36,8 +36,11 @@ What it never does
 
 from __future__ import annotations
 
+import csv
+import json
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -113,6 +116,62 @@ def _get_entry_price(intent: Any) -> float | None:
         return None
 
 
+def _sizing_params(cfg: Any) -> tuple[float, float | None, float | None]:
+    """Return (live_max_quantity, live_max_notional, live_quantity_override) from cfg."""
+    ex = cfg.execution
+    max_qty  = float(getattr(ex, "live_max_quantity",      1.0))
+    max_not  = getattr(ex, "live_max_notional",  500.0)
+    override = getattr(ex, "live_quantity_override", 1.0)
+    if max_not  is not None: max_not  = float(max_not)
+    if override is not None: override = float(override)
+    return max_qty, max_not, override
+
+
+def _size_candidate(intent: Any, cfg: Any) -> dict[str, Any]:
+    """Compute sizing for one candidate intent; returns a CSV-ready row dict."""
+    max_qty, max_not, override = _sizing_params(cfg)
+
+    original_qty  = float(getattr(intent, "quantity", 1.0))
+    effective_qty = override if override is not None else original_qty
+    entry_price   = _get_entry_price(intent)
+    estimated_notional: float | None = None
+
+    issues: list[str] = []
+
+    if effective_qty > max_qty:
+        issues.append(f"effective_quantity={effective_qty} > live_max_quantity={max_qty}")
+
+    if max_not is not None:
+        if entry_price is None:
+            issues.append(f"live_max_notional={max_not} set but entry_price missing — fail closed")
+        else:
+            estimated_notional = effective_qty * entry_price
+            if estimated_notional > max_not:
+                issues.append(
+                    f"estimated_notional={estimated_notional:.2f} > live_max_notional={max_not}"
+                )
+
+    if entry_price is not None and max_not is None:
+        estimated_notional = effective_qty * entry_price
+
+    cid = getattr(intent, "client_order_id", None)
+
+    return {
+        "client_order_id":   str(cid) if cid is not None else "",
+        "symbol":            str(getattr(intent, "symbol", "")),
+        "side":              str(getattr(intent, "side", "")),
+        "order_type":        str(getattr(intent, "order_type", "")),
+        "original_quantity": original_qty,
+        "effective_quantity": effective_qty,
+        "entry_price":       entry_price,
+        "estimated_notional": estimated_notional,
+        "live_max_quantity": max_qty,
+        "live_max_notional": max_not,
+        "sizing_status":     "FAIL" if issues else "PASS",
+        "sizing_reason":     "; ".join(issues) if issues else "within limits",
+    }
+
+
 def check_live_sizing(intents: list, cfg: Any) -> dict[str, Any]:
     """Evaluate hypothetical live order sizing against configured limits.
 
@@ -120,71 +179,40 @@ def check_live_sizing(intents: list, cfg: Any) -> dict[str, Any]:
     original_quantity, then checks against live_max_quantity and
     live_max_notional.
 
-    Returns PASS, WARN, or FAIL with sizing detail fields.
+    Returns PASS or FAIL with sizing detail fields (from the first candidate).
     """
-    ex = cfg.execution
-    live_max_quantity     = float(getattr(ex, "live_max_quantity",     1.0))
-    live_max_notional     = getattr(ex, "live_max_notional",     500.0)
-    live_quantity_override = getattr(ex, "live_quantity_override", 1.0)
+    max_qty, max_not, override = _sizing_params(cfg)
 
-    if live_max_notional is not None:
-        live_max_notional = float(live_max_notional)
-    if live_quantity_override is not None:
-        live_quantity_override = float(live_quantity_override)
-
-    issues: list[str] = []
-    first = intents[0] if intents else None
-
-    original_qty      = float(getattr(first, "quantity", 1.0)) if first is not None else 0.0
-    effective_qty     = live_quantity_override if live_quantity_override is not None else original_qty
-    entry_price       = _get_entry_price(first) if first is not None else None
-    estimated_notional: float | None = None
-
+    all_issues: list[str] = []
     for intent in intents:
-        orig = float(getattr(intent, "quantity", 1.0))
-        eff  = live_quantity_override if live_quantity_override is not None else orig
+        row = _size_candidate(intent, cfg)
+        if row["sizing_status"] == "FAIL":
+            all_issues.append(row["sizing_reason"])
 
-        if eff > live_max_quantity:
-            issues.append(
-                f"effective_quantity={eff} > live_max_quantity={live_max_quantity}"
-            )
+    first_row = _size_candidate(intents[0], cfg) if intents else {}
 
-        if live_max_notional is not None:
-            price = _get_entry_price(intent)
-            if price is None:
-                issues.append(
-                    f"live_max_notional={live_max_notional} set but entry_price missing — fail closed"
-                )
-            else:
-                notional = eff * price
-                if notional > live_max_notional:
-                    issues.append(
-                        f"estimated_notional={notional:.2f} > live_max_notional={live_max_notional}"
-                    )
-
-    if first is not None and live_max_notional is not None:
-        price = _get_entry_price(first)
-        if price is not None:
-            estimated_notional = effective_qty * price
+    original_qty       = first_row.get("original_quantity",  0.0)
+    effective_qty      = first_row.get("effective_quantity",  0.0)
+    entry_price        = first_row.get("entry_price")
+    estimated_notional = first_row.get("estimated_notional")
 
     extra = {
         "original_quantity":   original_qty,
         "effective_quantity":  effective_qty,
         "entry_price":         entry_price,
         "estimated_notional":  estimated_notional,
-        "live_max_quantity":   live_max_quantity,
-        "live_max_notional":   live_max_notional,
+        "live_max_quantity":   max_qty,
+        "live_max_notional":   max_not,
     }
 
     detail = (
         f"original_quantity={original_qty} effective_quantity={effective_qty} "
         f"entry_price={entry_price} estimated_notional={estimated_notional} "
-        f"live_max_quantity={live_max_quantity} live_max_notional={live_max_notional}"
+        f"live_max_quantity={max_qty} live_max_notional={max_not}"
     )
 
-    if issues:
-        return _result("live_sizing", "FAIL", detail + " — " + "; ".join(issues)) | extra
-
+    if all_issues:
+        return _result("live_sizing", "FAIL", detail + " — " + "; ".join(all_issues)) | extra
     return _result("live_sizing", "PASS", detail) | extra
 
 
@@ -319,6 +347,79 @@ def check_live_orders(client: Any, symbol: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Artifact writer
+# ---------------------------------------------------------------------------
+
+_CSV_COLUMNS = [
+    "client_order_id", "symbol", "side", "order_type",
+    "original_quantity", "effective_quantity", "entry_price",
+    "estimated_notional", "live_max_quantity", "live_max_notional",
+    "sizing_status", "sizing_reason",
+]
+
+
+def write_report(
+    output_dir: Path,
+    symbol: str,
+    config_path: str,
+    checks: list[dict[str, Any]],
+    intents: list,
+    cfg: Any,
+    final_status: str,
+) -> tuple[Path, Path]:
+    """Write JSON report and CSV candidates to *output_dir*.
+
+    Returns (json_path, csv_path).  Never touches Alpaca; no ledger writes.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # --- build lookup helpers ---
+    by_label: dict[str, dict] = {c["label"]: c for c in checks}
+
+    def _field(label: str, key: str, default: Any = None) -> Any:
+        return by_label.get(label, {}).get(key, default)
+
+    # --- JSON ---
+    report: dict[str, Any] = {
+        "checked_at_utc":         datetime.now(timezone.utc).isoformat(),
+        "selected_symbol":        symbol,
+        "final_status":           final_status,
+        "config_path":            str(config_path),
+        "account_status":         _field("live_account", "account_status"),
+        "trading_blocked":        _field("live_account", "trading_blocked"),
+        "account_blocked":        _field("live_account", "account_blocked"),
+        "buying_power":           _field("live_account", "buying_power"),
+        "portfolio_value":        _field("live_account", "portfolio_value"),
+        "position_for_symbol":    _field("live_position", "position_for_symbol"),
+        "open_orders_for_symbol": _field("live_orders",   "open_orders_for_symbol"),
+        "candidate_count":        _field("candidates",    "candidate_count", 0),
+        "sizing_summary":         {
+            k: v for k, v in by_label.get("live_sizing", {}).items()
+            if k in ("status", "detail", "original_quantity", "effective_quantity",
+                     "entry_price", "estimated_notional", "live_max_quantity", "live_max_notional")
+        } if "live_sizing" in by_label else None,
+        "checks": [
+            {k: v for k, v in c.items() if k != "rows"}
+            for c in checks
+        ],
+    }
+
+    json_path = output_dir / "live_shadow_preflight_report.json"
+    json_path.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
+
+    # --- CSV ---
+    csv_path = output_dir / "live_shadow_candidates.csv"
+    rows = [_size_candidate(i, cfg) for i in intents] if cfg is not None else []
+    with csv_path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=_CSV_COLUMNS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({col: row.get(col, "") for col in _CSV_COLUMNS})
+
+    return json_path, csv_path
+
+
+# ---------------------------------------------------------------------------
 # Report printer
 # ---------------------------------------------------------------------------
 
@@ -385,6 +486,15 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--config",     required=True, help="Path to settings YAML")
     parser.add_argument("--output-dir", required=True, help="Output directory")
     parser.add_argument("--symbol",     default="SPY",  help="Symbol to check (default: SPY)")
+    parser.add_argument(
+        "--write-report",
+        action="store_true",
+        default=False,
+        help=(
+            "Write live_shadow_preflight_report.json and live_shadow_candidates.csv "
+            "to --output-dir after all checks complete."
+        ),
+    )
     args = parser.parse_args(argv)
 
     symbol     = args.symbol.upper().strip()
@@ -454,6 +564,19 @@ def main(argv: list[str] | None = None) -> None:
         final_status = "PASS"
 
     print_report(checks, symbol=symbol, final_status=final_status)
+
+    if args.write_report:
+        json_path, csv_path = write_report(
+            output_dir=output_dir,
+            symbol=symbol,
+            config_path=args.config,
+            checks=checks,
+            intents=intents,
+            cfg=cfg,
+            final_status=final_status,
+        )
+        print(f"  report : {json_path}")
+        print(f"  csv    : {csv_path}")
 
     if final_status != "PASS":
         sys.exit(1)
