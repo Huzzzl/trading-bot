@@ -5,6 +5,10 @@ future live trading work.
 
 **This tool is strictly read-only. It never submits or cancels orders.**
 
+> **Current gate status:** see [docs/live_readiness_status.md](live_readiness_status.md)
+> for the latest GO/NO-GO result, active blockers, and conditions required before
+> any live submit design begins.
+
 ---
 
 ## What it does
