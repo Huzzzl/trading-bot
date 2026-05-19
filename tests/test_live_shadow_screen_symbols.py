@@ -69,11 +69,13 @@ def _mock_execution_cfg(
     live_max_quantity: float = 1.0,
     live_max_notional: "float | None" = 500.0,
     live_quantity_override: "float | None" = 1.0,
+    live_shadow_screen_symbols: "list[str] | None" = None,
 ) -> MagicMock:
     ex = MagicMock()
-    ex.live_max_quantity      = live_max_quantity
-    ex.live_max_notional      = live_max_notional
-    ex.live_quantity_override = live_quantity_override
+    ex.live_max_quantity           = live_max_quantity
+    ex.live_max_notional           = live_max_notional
+    ex.live_quantity_override      = live_quantity_override
+    ex.live_shadow_screen_symbols  = live_shadow_screen_symbols if live_shadow_screen_symbols is not None else ["SPY", "QQQ", "IWM", "DIA"]
     return ex
 
 
@@ -93,7 +95,7 @@ def _make_client(
 
 def _run_main(
     tmp_path: Path,
-    symbols: str = "SPY",
+    symbols: "str | None" = "SPY",
     intents_by_symbol: dict | None = None,
     account_raw=None,
     positions=None,
@@ -101,16 +103,21 @@ def _run_main(
     live_max_quantity: float = 1.0,
     live_max_notional: "float | None" = 500.0,
     live_quantity_override: "float | None" = 1.0,
+    config_symbols: "list[str] | None" = None,
     live_key: str = "live-key",
     live_secret: str = "live-secret",
     extra_argv: list[str] | None = None,
 ) -> tuple[int, MagicMock]:
-    """Run main() with everything mocked; return (exit_code, client)."""
+    """Run main() with everything mocked; return (exit_code, client).
+
+    Pass symbols=None to omit --symbols and rely on config_symbols instead.
+    """
     from src.tools.live_shadow_screen_symbols import main
 
     if intents_by_symbol is None:
+        src = symbols if symbols is not None else ",".join(config_symbols or ["SPY"])
         intents_by_symbol = {s.strip(): [_mock_intent(s.strip())]
-                             for s in symbols.split(",")}
+                             for s in src.split(",")}
 
     mock_client = _make_client(account=account_raw, positions=positions, orders=orders)
 
@@ -119,6 +126,7 @@ def _run_main(
         live_max_quantity=live_max_quantity,
         live_max_notional=live_max_notional,
         live_quantity_override=live_quantity_override,
+        live_shadow_screen_symbols=config_symbols if config_symbols is not None else ["SPY", "QQQ", "IWM", "DIA"],
     )
     cfg_result = {"label": "config", "status": "PASS", "detail": ""}
 
@@ -129,8 +137,10 @@ def _run_main(
     argv = [
         "--config", "config/settings.paper.local.yaml",
         "--output-dir", str(tmp_path),
-        "--symbols", symbols,
-    ] + (extra_argv or [])
+    ]
+    if symbols is not None:
+        argv += ["--symbols", symbols]
+    argv += extra_argv or []
 
     with patch.dict(os.environ, env, clear=True), \
          patch("src.tools.live_shadow_screen_symbols.check_config",
@@ -573,3 +583,141 @@ class TestMain:
                   intents_by_symbol={"SPY": [_mock_intent("SPY", entry_price=400.0)]})
         out = capsys.readouterr().out
         assert "SPY" in out
+
+
+# ---------------------------------------------------------------------------
+# 5. Symbol normalization helper
+# ---------------------------------------------------------------------------
+
+class TestNormalizeSymbols:
+    def test_uppercase(self):
+        from src.tools.live_shadow_screen_symbols import _normalize_symbols
+        assert _normalize_symbols(["spy"]) == ["SPY"]
+
+    def test_strips_whitespace(self):
+        from src.tools.live_shadow_screen_symbols import _normalize_symbols
+        assert _normalize_symbols([" SPY ", "  QQQ"]) == ["SPY", "QQQ"]
+
+    def test_removes_duplicates_preserving_order(self):
+        from src.tools.live_shadow_screen_symbols import _normalize_symbols
+        assert _normalize_symbols(["SPY", "QQQ", "SPY", "IWM"]) == ["SPY", "QQQ", "IWM"]
+
+    def test_removes_empty_strings(self):
+        from src.tools.live_shadow_screen_symbols import _normalize_symbols
+        assert _normalize_symbols(["SPY", "", "  ", "QQQ"]) == ["SPY", "QQQ"]
+
+    def test_mixed_case_dedup(self):
+        from src.tools.live_shadow_screen_symbols import _normalize_symbols
+        assert _normalize_symbols(["spy", "SPY", "Spy"]) == ["SPY"]
+
+
+# ---------------------------------------------------------------------------
+# 6. Symbol universe resolution (config vs CLI)
+# ---------------------------------------------------------------------------
+
+class TestSymbolUniverse:
+    def test_no_symbols_arg_uses_config_list(self, tmp_path, capsys):
+        """When --symbols is omitted the config list is used."""
+        code, _ = _run_main(
+            tmp_path,
+            symbols=None,
+            config_symbols=["SPY", "QQQ"],
+            intents_by_symbol={
+                "SPY": [_mock_intent("SPY", entry_price=400.0)],
+                "QQQ": [_mock_intent("QQQ", entry_price=150.0)],
+            },
+        )
+        out = capsys.readouterr().out
+        assert "SPY" in out
+        assert "QQQ" in out
+        assert code in (0, None)
+
+    def test_cli_symbols_override_config_list(self, tmp_path, capsys):
+        """--symbols takes precedence over config list."""
+        code, _ = _run_main(
+            tmp_path,
+            symbols="IWM",
+            config_symbols=["SPY", "QQQ"],
+            intents_by_symbol={"IWM": [_mock_intent("IWM", entry_price=200.0)]},
+        )
+        out = capsys.readouterr().out
+        assert "IWM" in out
+        assert "SPY" not in out
+        assert "QQQ" not in out
+        assert code in (0, None)
+
+    def test_cli_symbols_normalized_uppercase(self, tmp_path, capsys):
+        """Lowercase symbols in --symbols are uppercased."""
+        code, _ = _run_main(
+            tmp_path,
+            symbols="spy",
+            intents_by_symbol={"SPY": [_mock_intent("SPY", entry_price=400.0)]},
+        )
+        out = capsys.readouterr().out
+        assert "SPY" in out
+
+    def test_cli_symbols_normalized_strip(self, tmp_path, capsys):
+        """Whitespace around symbol names is stripped."""
+        code, _ = _run_main(
+            tmp_path,
+            symbols=" SPY , QQQ ",
+            intents_by_symbol={
+                "SPY": [_mock_intent("SPY", entry_price=400.0)],
+                "QQQ": [_mock_intent("QQQ", entry_price=150.0)],
+            },
+        )
+        out = capsys.readouterr().out
+        assert "SPY" in out
+        assert "QQQ" in out
+
+    def test_cli_duplicates_removed_preserving_order(self, tmp_path, capsys):
+        """Duplicate symbols in --symbols are collapsed to one row."""
+        code, _ = _run_main(
+            tmp_path,
+            symbols="SPY,QQQ,SPY",
+            intents_by_symbol={
+                "SPY": [_mock_intent("SPY", entry_price=400.0)],
+                "QQQ": [_mock_intent("QQQ", entry_price=150.0)],
+            },
+            extra_argv=["--write-report"],
+        )
+        with (tmp_path / "live_shadow_symbol_screen.csv").open() as f:
+            rows = list(csv.DictReader(f))
+        symbols_in_csv = [r["symbol"] for r in rows]
+        assert symbols_in_csv.count("SPY") == 1
+        assert symbols_in_csv == ["SPY", "QQQ"]
+
+    def test_empty_cli_symbols_exits_1(self, tmp_path):
+        """--symbols with only whitespace/commas → empty list → exit 1."""
+        from src.tools.live_shadow_screen_symbols import main
+        cfg_result = {"label": "config", "status": "PASS", "detail": ""}
+        cfg_mock = MagicMock()
+        cfg_mock.execution = _mock_execution_cfg(live_shadow_screen_symbols=["SPY"])
+        env = {"ALPACA_LIVE_API_KEY": "k", "ALPACA_LIVE_SECRET_KEY": "s"}
+        with patch.dict(os.environ, env, clear=True), \
+             patch("src.tools.live_shadow_screen_symbols.check_config",
+                   return_value=(cfg_result, cfg_mock)):
+            with pytest.raises(SystemExit) as exc_info:
+                main(["--config", "cfg.yaml", "--output-dir", str(tmp_path),
+                      "--symbols", "  ,  , "])
+        assert exc_info.value.code == 1
+
+    def test_empty_config_symbols_exits_1(self, tmp_path):
+        """Empty config list and no --symbols → exit 1."""
+        from src.tools.live_shadow_screen_symbols import main
+        cfg_result = {"label": "config", "status": "PASS", "detail": ""}
+        cfg_mock = MagicMock()
+        cfg_mock.execution = _mock_execution_cfg(live_shadow_screen_symbols=[])
+        env = {"ALPACA_LIVE_API_KEY": "k", "ALPACA_LIVE_SECRET_KEY": "s"}
+        with patch.dict(os.environ, env, clear=True), \
+             patch("src.tools.live_shadow_screen_symbols.check_config",
+                   return_value=(cfg_result, cfg_mock)):
+            with pytest.raises(SystemExit) as exc_info:
+                main(["--config", "cfg.yaml", "--output-dir", str(tmp_path)])
+        assert exc_info.value.code == 1
+
+    def test_default_config_symbols_spy_qqq_iwm_dia(self):
+        """ExecutionConfig default is SPY, QQQ, IWM, DIA."""
+        from src.config.loader import ExecutionConfig
+        cfg = ExecutionConfig()
+        assert cfg.live_shadow_screen_symbols == ["SPY", "QQQ", "IWM", "DIA"]
