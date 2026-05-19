@@ -328,7 +328,7 @@ class TestWriteGateReport:
             [],
         )
         assert path.exists()
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         assert data["decision"] == "GO"
         assert "checked_at_utc" in data
         assert "stages" in data
@@ -348,13 +348,13 @@ class TestMain:
     def test_all_pass_exits_0_decision_go(self, tmp_path):
         code, _ = _run_main(tmp_path)
         assert code in (0, None)
-        report = json.loads((tmp_path / "live_readiness_gate_report.json").read_text())
+        report = json.loads((tmp_path / "live_readiness_gate_report.json").read_text(encoding="utf-8"))
         assert report["decision"] == "GO"
 
     def test_account_warn_exits_1_no_go(self, tmp_path):
         code, _ = _run_main(tmp_path, account_raw=_mock_account_raw(buying_power="0"))
         assert code == 1
-        report = json.loads((tmp_path / "live_readiness_gate_report.json").read_text())
+        report = json.loads((tmp_path / "live_readiness_gate_report.json").read_text(encoding="utf-8"))
         assert report["decision"] == "NO-GO"
 
     def test_preflight_fail_exits_1_no_go(self, tmp_path):
@@ -364,7 +364,7 @@ class TestMain:
             intents_by_symbol={"SPY": [], "QQQ": []},
         )
         assert code == 1
-        report = json.loads((tmp_path / "live_readiness_gate_report.json").read_text())
+        report = json.loads((tmp_path / "live_readiness_gate_report.json").read_text(encoding="utf-8"))
         assert report["decision"] == "NO-GO"
         assert report["stages"]["shadow_preflight"] == "FAIL"
 
@@ -376,13 +376,13 @@ class TestMain:
             intents_by_symbol={"SPY": [_mock_intent("SPY", entry_price=400.0)]},
         )
         assert code == 1
-        report = json.loads((tmp_path / "live_readiness_gate_report.json").read_text())
+        report = json.loads((tmp_path / "live_readiness_gate_report.json").read_text(encoding="utf-8"))
         assert report["decision"] == "NO-GO"
 
     def test_missing_credentials_exits_1_no_go(self, tmp_path):
         code, _ = _run_main(tmp_path, creds_ok=False)
         assert code == 1
-        report = json.loads((tmp_path / "live_readiness_gate_report.json").read_text())
+        report = json.loads((tmp_path / "live_readiness_gate_report.json").read_text(encoding="utf-8"))
         assert report["decision"] == "NO-GO"
         assert all(s == "FAIL" for s in report["stages"].values())
 
@@ -447,7 +447,7 @@ class TestMain:
 
     def test_gate_report_contains_all_stages(self, tmp_path):
         _run_main(tmp_path)
-        report = json.loads((tmp_path / "live_readiness_gate_report.json").read_text())
+        report = json.loads((tmp_path / "live_readiness_gate_report.json").read_text(encoding="utf-8"))
         for stage in ("account_check", "shadow_preflight", "shadow_review",
                       "symbol_screen", "symbol_screen_review"):
             assert stage in report["stages"], f"missing stage in report: {stage}"
@@ -482,7 +482,7 @@ class TestMain:
             },
         )
         assert code in (0, None)
-        report = json.loads((tmp_path / "live_readiness_gate_report.json").read_text())
+        report = json.loads((tmp_path / "live_readiness_gate_report.json").read_text(encoding="utf-8"))
         assert report["decision"] == "GO"
 
 
@@ -497,7 +497,8 @@ class TestAppendHistoryRow:
         append_history_row(hist, "2026-01-01T00:00:00+00:00", "GO",
                            {"account_check": "PASS"}, [])
         assert hist.exists()
-        rows = list(csv.DictReader(hist.open()))
+        with hist.open(encoding="utf-8", newline="") as f:
+            rows = list(csv.DictReader(f))
         assert rows[0]["decision"] == "GO"
         assert rows[0]["checked_at_utc"] == "2026-01-01T00:00:00+00:00"
 
@@ -508,7 +509,8 @@ class TestAppendHistoryRow:
                            {"account_check": "PASS"}, [])
         append_history_row(hist, "2026-01-02T00:00:00+00:00", "NO-GO",
                            {"account_check": "WARN"}, ["[account_check] warn"])
-        rows = list(csv.DictReader(hist.open()))
+        with hist.open(encoding="utf-8", newline="") as f:
+            rows = list(csv.DictReader(f))
         assert len(rows) == 2
         assert rows[1]["decision"] == "NO-GO"
         assert rows[1]["checked_at_utc"] == "2026-01-02T00:00:00+00:00"
@@ -524,7 +526,8 @@ class TestAppendHistoryRow:
             "symbol_screen_review": "FAIL",
         }
         append_history_row(hist, "2026-01-01T00:00:00+00:00", "NO-GO", stages, [])
-        rows = list(csv.DictReader(hist.open()))
+        with hist.open(encoding="utf-8", newline="") as f:
+            rows = list(csv.DictReader(f))
         assert rows[0]["account_check"]        == "PASS"
         assert rows[0]["shadow_preflight"]     == "PASS"
         assert rows[0]["shadow_review"]        == "FAIL"
@@ -536,7 +539,8 @@ class TestAppendHistoryRow:
         hist = tmp_path / "history.csv"
         blockers = ["[account_check] buying_power=0", "[shadow_review] sizing exceeded"]
         append_history_row(hist, "2026-01-01T00:00:00+00:00", "NO-GO", {}, blockers)
-        rows = list(csv.DictReader(hist.open()))
+        with hist.open(encoding="utf-8", newline="") as f:
+            rows = list(csv.DictReader(f))
         assert rows[0]["top_blockers"] == (
             "[account_check] buying_power=0 | [shadow_review] sizing exceeded"
         )
@@ -574,7 +578,8 @@ class TestAppendHistory:
     def test_append_history_csv_has_header_and_row(self, tmp_path):
         hist = tmp_path / "history.csv"
         _run_main(tmp_path, extra_argv=["--append-history", str(hist)])
-        rows = list(csv.DictReader(hist.open()))
+        with hist.open(encoding="utf-8", newline="") as f:
+            rows = list(csv.DictReader(f))
         assert len(rows) == 1
         assert "decision" in rows[0]
         assert "checked_at_utc" in rows[0]
@@ -584,13 +589,15 @@ class TestAppendHistory:
         extra = ["--append-history", str(hist)]
         _run_main(tmp_path, extra_argv=extra)
         _run_main(tmp_path, extra_argv=extra)
-        rows = list(csv.DictReader(hist.open()))
+        with hist.open(encoding="utf-8", newline="") as f:
+            rows = list(csv.DictReader(f))
         assert len(rows) == 2
 
     def test_decision_and_stages_recorded_correctly(self, tmp_path):
         hist = tmp_path / "history.csv"
         _run_main(tmp_path, extra_argv=["--append-history", str(hist)])
-        rows = list(csv.DictReader(hist.open()))
+        with hist.open(encoding="utf-8", newline="") as f:
+            rows = list(csv.DictReader(f))
         row = rows[0]
         assert row["decision"] in ("GO", "NO-GO")
         for stage in ("account_check", "shadow_preflight", "shadow_review",
@@ -602,8 +609,9 @@ class TestAppendHistory:
         """checked_at_utc in history CSV matches the gate report JSON."""
         hist = tmp_path / "history.csv"
         _run_main(tmp_path, extra_argv=["--append-history", str(hist)])
-        report = json.loads((tmp_path / "live_readiness_gate_report.json").read_text())
-        rows = list(csv.DictReader(hist.open()))
+        report = json.loads((tmp_path / "live_readiness_gate_report.json").read_text(encoding="utf-8"))
+        with hist.open(encoding="utf-8", newline="") as f:
+            rows = list(csv.DictReader(f))
         assert rows[0]["checked_at_utc"] == report["checked_at_utc"]
 
     def test_no_ledger_writes_with_history(self, tmp_path):
