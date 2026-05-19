@@ -378,6 +378,24 @@ checked_at_utc,decision,account_check,shadow_preflight,shadow_review,symbol_scre
 If the write fails (e.g. permissions error), the gate continues and exits
 normally — history logging never causes the gate to fail.
 
+### History review (`live_readiness_history_review`)
+
+After one or more gate runs with `--append-history`, review the trend with
+the read-only history review CLI:
+
+```bash
+python -m src.tools.live_readiness_history_review \
+    --history output/live_readiness_history.csv
+```
+
+Output includes: total runs, latest decision, GO/NO-GO counts, per-stage
+statuses from the latest run, top 5 recurring blockers, and a plain-English
+trend statement (`Latest run is GO.` / `No GO observed yet.` /
+`Readiness regressed from GO to NO-GO.`).
+
+Exit codes: `0` if the latest run is GO, `1` otherwise (including missing
+or empty file).  No credentials required.  Never writes files.
+
 ---
 
 ## Live Shadow Symbol Screen

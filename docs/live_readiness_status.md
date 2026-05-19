@@ -71,6 +71,8 @@ The following read-only checks and guards are implemented and tested:
 | `live_shadow_screen_symbols` | Multi-symbol live sizing screen (read-only) |
 | `live_shadow_screen_review` | Artifact review of symbol screen output (read-only) |
 | `live_readiness_gate` | Unified GO/NO-GO gate across all five checks (read-only) |
+| `live_readiness_gate --append-history` | Optional per-run CSV snapshot for trend tracking (read-only) |
+| `live_readiness_history_review` | Trend review of history CSV: GO/NO-GO counts, recurring blockers (read-only) |
 
 ---
 
