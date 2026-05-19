@@ -200,23 +200,71 @@ If `live_max_notional` is set and `entry_price` is absent from the candidate int
 | `0` | All checks PASS — safe to proceed to a hypothetical live submit |
 | `1` | Any check WARN or FAIL — review before proceeding |
 
-### Recommended pre-flight sequence
+### Artifact review (`live_shadow_review`)
 
-Run both tools in order before considering any live trading work:
+After running `--write-report`, review the artifacts with the read-only review CLI:
+
+```bash
+python -m src.tools.live_shadow_review \
+    --report     output/live_shadow_preflight/live_shadow_preflight_report.json \
+    --candidates output/live_shadow_preflight/live_shadow_candidates.csv
+```
+
+```powershell
+python -m src.tools.live_shadow_review `
+    --report     output/live_shadow_preflight/live_shadow_preflight_report.json `
+    --candidates output/live_shadow_preflight/live_shadow_candidates.csv
+```
+
+Outputs a concise operator summary:
+
+```
+=== Live Shadow Review ===
+  final_status    : PASS
+  selected_symbol : SPY
+  candidate_count : 1
+  pass_count      : 1
+  fail_count      : 0
+
+  Blockers:
+    (none)
+
+  Warnings:
+    (none)
+
+  Suggested actions:
+    > All checks passed — review sizing_summary before any live work.
+
+  RESULT: PASS
+============================
+```
+
+| Exit code | Meaning |
+|-----------|---------|
+| `0` | `final_status=PASS` and no candidate sizing failures |
+| `1` | Any WARN or FAIL in report, or any candidate `sizing_status=FAIL` |
+
+The review tool is strictly read-only: no credentials, no Alpaca calls, no file writes.
+
+### Full recommended pre-flight sequence
 
 ```bash
 # Step 1: verify credentials and account health
 python -m src.tools.live_account_check
 
-# Step 2: verify strategy signal + live account state together
+# Step 2: shadow preflight — strategy preview + live account state + artifacts
 python -m src.tools.live_shadow_preflight \
     --config config/settings.paper.local.yaml \
-    --output-dir output/live_shadow_preflight
+    --output-dir output/live_shadow_preflight \
+    --write-report
+
+# Step 3: review artifacts
+python -m src.tools.live_shadow_review \
+    --report     output/live_shadow_preflight/live_shadow_preflight_report.json \
+    --candidates output/live_shadow_preflight/live_shadow_candidates.csv
 ```
 
-Stop at any FAIL result. A WARN result requires manual review before proceeding.
-
-### Report artifacts (`--write-report`)
+Stop at any FAIL. WARN requires manual review.
 
 When `--write-report` is passed, two files are written to `--output-dir`:
 
