@@ -1022,6 +1022,9 @@ python -m src.tools.paper_pre_submit_check \
 
 ## 16. Safe Manual Flow
 
+> **Operator checklist:** for a concise step-by-step canary SOP with PowerShell
+> command snippets, see [`docs/paper_canary_checklist.md`](paper_canary_checklist.md).
+
 Follow these steps in order.  Stop at any step that produces an unexpected result.
 
 ### Step 1 — Run tests without credentials
