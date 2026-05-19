@@ -1,7 +1,7 @@
 # Live Readiness Status
 
 Current operational status of the live-readiness gate baseline.
-Last updated: 2026-05-19.
+Last updated: 2026-05-19. Fractional/notional shadow sizing added.
 
 ---
 
@@ -73,6 +73,7 @@ The following read-only checks and guards are implemented and tested:
 | `live_readiness_gate` | Unified GO/NO-GO gate across all five checks (read-only) |
 | `live_readiness_gate --append-history` | Optional per-run CSV snapshot for trend tracking (read-only) |
 | `live_readiness_history_review` | Trend review of history CSV: GO/NO-GO counts, recurring blockers (read-only) |
+| Fractional/notional shadow sizing | `live_sizing_mode=notional` + `live_order_notional_override` — shadow check only, no submit |
 
 ---
 
@@ -83,7 +84,7 @@ Each is a hard prerequisite — not a suggestion.
 
 1. **Live account funded and activated** — `buying_power` and `portfolio_value` both non-zero.
 2. **`live_readiness_gate` returns GO** — all five stages must PASS.
-3. **At least one suitable symbol** — at least one symbol in the configured universe passes live sizing under current `live_max_notional`.
+3. **At least one suitable symbol** — at least one symbol in the configured universe passes live sizing under current `live_max_notional` (or `live_max_order_notional` in notional mode).
 4. **Explicit human approval** — a human operator reviews the gate output and approves proceeding.
 5. **Separate PR for live submit design** — live order submission must be designed and reviewed in its own dedicated PR, never silently added to an existing tool.
 6. **Live safeguards must exist first** — a live kill switch, live ledger, and live dry-run mode must be implemented and verified before any submit path is added.
@@ -142,9 +143,14 @@ Remove-Item Env:\ALPACA_LIVE_SECRET_KEY -ErrorAction SilentlyContinue
 
 ## Warnings
 
-> **Do not raise `live_max_notional` to force GO.**
-> The current notional cap exists for safety. Only raise it after a full funding
+> **Do not raise `live_max_notional` or `live_max_order_notional` to force GO.**
+> The current notional caps exist for safety. Only raise them after a full funding
 > and risk review, and only after the live account carries real buying power.
+
+> **`live_sizing_mode=notional` is shadow sizing only.**
+> Switching to notional mode changes how the *preflight check* computes effective
+> notional. It does not add any live order submission path. No live orders are
+> ever submitted by any tool in this repository.
 
 > **Do not bypass NO-GO.**
 > A NO-GO decision is not a configuration problem to be worked around.
