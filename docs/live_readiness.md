@@ -421,7 +421,49 @@ One row per symbol:
 | `open_orders_for_symbol` | `True` if a live open order exists for this symbol |
 | `blocker_summary` | Human-readable reason when `best_status=FAIL` |
 
-When `--write-report` is passed, two files are written to `--output-dir`:
+### Artifact review (`live_shadow_screen_review`)
+
+After running `--write-report`, review the artifacts with the read-only review CLI:
+
+```bash
+python -m src.tools.live_shadow_screen_review \
+    --report output/live_shadow_symbol_screen/live_shadow_symbol_screen_report.json \
+    --csv    output/live_shadow_symbol_screen/live_shadow_symbol_screen.csv
+```
+
+Outputs a concise operator summary:
+
+```
+=== Live Shadow Symbol Screen Review ===
+  overall_status   : PASS
+  symbols_checked  : SPY, QQQ, IWM, DIA
+  suitable_count   : 2/4
+
+  Suitable symbols:
+    SPY, DIA
+
+  No-candidate symbols:
+    IWM
+
+  Sizing-blocked symbols (notional cap exceeded):
+    QQQ
+
+  Suggested actions:
+    > Do not raise live_max_notional without a full funding and risk review; ...
+    > Rerun on another signal day or expand the strategy universe to generate candidates.
+
+  RESULT: PASS
+==========================================
+```
+
+| Exit code | Meaning |
+|-----------|---------|
+| `0` | `overall_result=PASS` and ≥1 suitable symbol |
+| `1` | Zero suitable symbols, or `overall_result` is `WARN` or `FAIL` |
+
+The review tool is strictly read-only: no credentials, no Alpaca calls, no file writes.
+
+
 
 **`live_shadow_preflight_report.json`**
 
