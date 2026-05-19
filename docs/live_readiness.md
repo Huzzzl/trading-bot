@@ -268,6 +268,96 @@ Stop at any FAIL. WARN requires manual review.
 
 ---
 
+## Live Readiness Gate
+
+A single command that runs all five live-readiness checks in order and produces
+one GO / NO-GO decision.  Use this instead of running the individual steps by
+hand.
+
+**This tool is strictly read-only. It never submits or cancels orders.**
+
+### What it does
+
+Runs the following stages in order (all stages always run — no early exit):
+
+| Stage | What it checks |
+|-------|---------------|
+| `account_check` | Credentials + live account health (active, unblocked, buying_power > 0) |
+| `shadow_preflight` | Single-symbol strategy preview + live account state |
+| `shadow_review` | Review of preflight artifacts |
+| `symbol_screen` | Multi-symbol live sizing screen across the configured universe |
+| `symbol_screen_review` | Review of symbol-screen artifacts |
+
+### Decision
+
+| Decision | Condition |
+|----------|-----------|
+| `GO` | All five stages PASS |
+| `NO-GO` | Any stage is WARN or FAIL |
+
+### What it never does
+
+- Never calls `submit_order` or `cancel_order`.
+- Never writes a ledger row.
+- Never reads paper credentials (`ALPACA_API_KEY` / `ALPACA_SECRET_KEY`).
+
+### Usage
+
+```bash
+export ALPACA_LIVE_API_KEY="your-live-api-key"
+export ALPACA_LIVE_SECRET_KEY="your-live-secret-key"
+
+python -m src.tools.live_readiness_gate \
+    --config     config/settings.paper.local.yaml \
+    --output-dir output/live_readiness_gate
+```
+
+### Output example
+
+```
+=== Live Readiness Gate ===
+  account_check           : PASS
+  shadow_preflight        : PASS
+  shadow_review           : PASS
+  symbol_screen           : PASS
+  symbol_screen_review    : PASS
+
+  decision: GO
+============================
+```
+
+### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | `GO` — all stages PASS |
+| `1` | `NO-GO` — any stage is WARN or FAIL |
+
+### Audit artifacts
+
+All files are written to `--output-dir`:
+
+| File | Written by |
+|------|-----------|
+| `live_shadow_preflight_report.json` | Stage 2 (shadow_preflight) |
+| `live_shadow_candidates.csv` | Stage 2 (shadow_preflight) |
+| `live_shadow_symbol_screen_report.json` | Stage 4 (symbol_screen) |
+| `live_shadow_symbol_screen.csv` | Stage 4 (symbol_screen) |
+| `live_readiness_gate_report.json` | Gate final summary |
+
+**`live_readiness_gate_report.json`**
+
+| Field | Description |
+|-------|-------------|
+| `checked_at_utc` | ISO-8601 timestamp of the run |
+| `decision` | `GO` or `NO-GO` |
+| `stages` | Per-stage status dict (`PASS`, `WARN`, or `FAIL`) |
+| `top_blockers` | Up to 5 most important blockers from failing stages |
+
+
+
+---
+
 ## Live Shadow Symbol Screen
 
 A read-only multi-symbol screening tool that runs the strategy preview and live
