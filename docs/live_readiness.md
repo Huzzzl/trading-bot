@@ -113,9 +113,11 @@ account state check. Run this **after** `live_account_check` passes.
 1. Loads config and runs the local backtest/strategy pipeline to generate
    candidate order intents for the selected symbol (same data path as paper preview).
 2. Filters intents to buy+market orders for the selected symbol.
-3. Connects to the live account (`paper=False`) and reads account status,
+3. Evaluates hypothetical live order sizing against configured limits
+   (`live_max_quantity`, `live_max_notional`, `live_quantity_override`).
+4. Connects to the live account (`paper=False`) and reads account status,
    buying power, open positions, and open orders.
-4. Reports whether a hypothetical live submit would be safe.
+5. Reports whether a hypothetical live submit would be safe.
 
 ### What it never does
 
@@ -157,11 +159,25 @@ python -m src.tools.live_shadow_preflight \
 | Check | PASS | WARN | FAIL |
 |-------|------|------|------|
 | `config` | Config loads and validates | — | Load or validation error |
-| `candidates` | ≥1 buy+market candidate for symbol | Candidate quantity > 1 | No candidates |
+| `candidates` | ≥1 buy+market candidate for symbol | — | No candidates |
+| `live_sizing` | Effective qty ≤ `live_max_quantity` and notional ≤ `live_max_notional` | — | Qty or notional exceeds limit; notional enabled but `entry_price` missing |
 | `credentials` | Both `ALPACA_LIVE_*` vars present | — | Either missing or empty |
-| `live_account` | Status `ACTIVE`, not blocked | buying_power or portfolio_value = 0 | Inactive, blocked, or API error |
+| `live_account` | Status `ACTIVE`, not blocked | `buying_power` or `portfolio_value` = 0 | Inactive, blocked, or API error |
 | `live_position` | No open position for symbol | — | Existing live position for symbol |
 | `live_orders` | No open orders for symbol | — | Existing live open order for symbol |
+
+### Sizing config fields
+
+These fields live under `execution:` in your settings YAML:
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `live_max_quantity` | `1.0` | Maximum effective order quantity allowed |
+| `live_max_notional` | `500.0` | Maximum estimated notional value (quantity × entry_price). Set to `null` to disable. |
+| `live_quantity_override` | `1.0` | Override effective quantity regardless of strategy output. Set to `null` to use raw candidate quantity. |
+
+`effective_quantity = live_quantity_override` (if set) else `original_quantity`.
+If `live_max_notional` is set and `entry_price` is absent from the candidate intent's metadata, the check fails closed.
 
 ### Exit codes
 

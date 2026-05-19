@@ -77,6 +77,9 @@ class ExecutionConfig:
     paper_block_if_open_orders:              bool         = True
     paper_require_market_hours:              bool         = True
     paper_kill_switch_enabled:               bool         = False
+    live_max_quantity:                       float        = 1.0
+    live_max_notional:                       float | None = 500.0
+    live_quantity_override:                  float | None = 1.0
 
 
 @dataclass
@@ -282,6 +285,9 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
         paper_block_if_open_orders=bool(ex.get("paper_block_if_open_orders", True)),
         paper_require_market_hours=bool(ex.get("paper_require_market_hours", True)),
         paper_kill_switch_enabled=bool(ex.get("paper_kill_switch_enabled", False)),
+        live_max_quantity=float(ex.get("live_max_quantity", 1.0)),
+        live_max_notional=float(ex["live_max_notional"]) if "live_max_notional" in ex and ex["live_max_notional"] is not None else (None if "live_max_notional" in ex else 500.0),
+        live_quantity_override=float(ex["live_quantity_override"]) if "live_quantity_override" in ex and ex["live_quantity_override"] is not None else (None if "live_quantity_override" in ex else 1.0),
     )
 
     app_cfg = AppConfig(

@@ -84,27 +84,108 @@ def _result(label: str, status: str, detail: str = "") -> dict[str, Any]:
 def check_candidates(intents: list, symbol: str) -> dict[str, Any]:
     """Verify at least one buy+market candidate exists for *symbol*.
 
-    Returns PASS, WARN (quantity > 1), or FAIL (no candidates).
+    Returns PASS or FAIL (no candidates).  Quantity validation is handled
+    separately by check_live_sizing.
     """
     if not intents:
         return _result(
             "candidates", "FAIL",
             f"no buy+market candidate intents for {symbol} — strategy produced no signal",
         )
-
-    warns = [i for i in intents if getattr(i, "quantity", 1) > 1]
-    if warns:
-        qty_list = [getattr(i, "quantity", "?") for i in warns]
-        detail = (
-            f"{len(intents)} candidate(s) for {symbol}; "
-            f"quantity > 1 in shadow mode: {qty_list}"
-        )
-        return _result("candidates", "WARN", detail) | {"candidate_count": len(intents)}
-
     return _result(
         "candidates", "PASS",
         f"{len(intents)} buy+market candidate(s) for {symbol}",
     ) | {"candidate_count": len(intents)}
+
+
+def _get_entry_price(intent: Any) -> float | None:
+    """Extract entry_price from intent.metadata, handling dict and attribute forms."""
+    metadata = getattr(intent, "metadata", {})
+    if isinstance(metadata, dict):
+        raw = metadata.get("entry_price")
+    else:
+        raw = getattr(metadata, "entry_price", None)
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def check_live_sizing(intents: list, cfg: Any) -> dict[str, Any]:
+    """Evaluate hypothetical live order sizing against configured limits.
+
+    Computes effective_quantity = live_quantity_override (if set) else
+    original_quantity, then checks against live_max_quantity and
+    live_max_notional.
+
+    Returns PASS, WARN, or FAIL with sizing detail fields.
+    """
+    ex = cfg.execution
+    live_max_quantity     = float(getattr(ex, "live_max_quantity",     1.0))
+    live_max_notional     = getattr(ex, "live_max_notional",     500.0)
+    live_quantity_override = getattr(ex, "live_quantity_override", 1.0)
+
+    if live_max_notional is not None:
+        live_max_notional = float(live_max_notional)
+    if live_quantity_override is not None:
+        live_quantity_override = float(live_quantity_override)
+
+    issues: list[str] = []
+    first = intents[0] if intents else None
+
+    original_qty      = float(getattr(first, "quantity", 1.0)) if first is not None else 0.0
+    effective_qty     = live_quantity_override if live_quantity_override is not None else original_qty
+    entry_price       = _get_entry_price(first) if first is not None else None
+    estimated_notional: float | None = None
+
+    for intent in intents:
+        orig = float(getattr(intent, "quantity", 1.0))
+        eff  = live_quantity_override if live_quantity_override is not None else orig
+
+        if eff > live_max_quantity:
+            issues.append(
+                f"effective_quantity={eff} > live_max_quantity={live_max_quantity}"
+            )
+
+        if live_max_notional is not None:
+            price = _get_entry_price(intent)
+            if price is None:
+                issues.append(
+                    f"live_max_notional={live_max_notional} set but entry_price missing — fail closed"
+                )
+            else:
+                notional = eff * price
+                if notional > live_max_notional:
+                    issues.append(
+                        f"estimated_notional={notional:.2f} > live_max_notional={live_max_notional}"
+                    )
+
+    if first is not None and live_max_notional is not None:
+        price = _get_entry_price(first)
+        if price is not None:
+            estimated_notional = effective_qty * price
+
+    extra = {
+        "original_quantity":   original_qty,
+        "effective_quantity":  effective_qty,
+        "entry_price":         entry_price,
+        "estimated_notional":  estimated_notional,
+        "live_max_quantity":   live_max_quantity,
+        "live_max_notional":   live_max_notional,
+    }
+
+    detail = (
+        f"original_quantity={original_qty} effective_quantity={effective_qty} "
+        f"entry_price={entry_price} estimated_notional={estimated_notional} "
+        f"live_max_quantity={live_max_quantity} live_max_notional={live_max_notional}"
+    )
+
+    if issues:
+        return _result("live_sizing", "FAIL", detail + " — " + "; ".join(issues)) | extra
+
+    return _result("live_sizing", "PASS", detail) | extra
 
 
 def check_live_account(client: Any) -> dict[str, Any]:
@@ -253,15 +334,22 @@ def print_report(
 
     for c in checks:
         if c["label"] == "candidates":
-            print(f"  candidate_count : {c.get('candidate_count', '?')}")
+            print(f"  candidate_count        : {c.get('candidate_count', '?')}")
+        if c["label"] == "live_sizing":
+            print(f"  original_quantity      : {c.get('original_quantity', '?')}")
+            print(f"  effective_quantity     : {c.get('effective_quantity', '?')}")
+            print(f"  entry_price            : {c.get('entry_price', '?')}")
+            print(f"  estimated_notional     : {c.get('estimated_notional', '?')}")
+            print(f"  live_max_quantity      : {c.get('live_max_quantity', '?')}")
+            print(f"  live_max_notional      : {c.get('live_max_notional', '?')}")
         if c["label"] == "live_account" and c["status"] != "FAIL":
-            print(f"  account_status  : {c.get('account_status', '?')}")
-            print(f"  trading_blocked : {c.get('trading_blocked', '?')}")
-            print(f"  account_blocked : {c.get('account_blocked', '?')}")
-            print(f"  buying_power    : {c.get('buying_power', '?')}")
-            print(f"  portfolio_value : {c.get('portfolio_value', '?')}")
+            print(f"  account_status         : {c.get('account_status', '?')}")
+            print(f"  trading_blocked        : {c.get('trading_blocked', '?')}")
+            print(f"  account_blocked        : {c.get('account_blocked', '?')}")
+            print(f"  buying_power           : {c.get('buying_power', '?')}")
+            print(f"  portfolio_value        : {c.get('portfolio_value', '?')}")
         if c["label"] == "live_position":
-            print(f"  position_for_symbol  : {c.get('position_for_symbol', '?')}")
+            print(f"  position_for_symbol    : {c.get('position_for_symbol', '?')}")
         if c["label"] == "live_orders":
             print(f"  open_orders_for_symbol : {c.get('open_orders_for_symbol', '?')}")
 
@@ -324,6 +412,11 @@ def main(argv: list[str] | None = None) -> None:
         cand_result = check_candidates(intents, symbol)
         checks.append(cand_result)
         all_statuses.append(cand_result["status"])
+
+        if cand_result["status"] != "FAIL":
+            sizing_result = check_live_sizing(intents, cfg)
+            checks.append(sizing_result)
+            all_statuses.append(sizing_result["status"])
 
     # --- 3. Live credentials ---
     cred_result, creds = check_credentials()
