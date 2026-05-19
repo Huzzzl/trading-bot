@@ -53,12 +53,14 @@ def _mock_intent(
     side: str = "buy",
     order_type: str = "market",
     quantity: float = 1.0,
+    entry_price: float | None = None,
 ) -> MagicMock:
     intent = MagicMock()
     intent.symbol     = symbol
     intent.side       = side
     intent.order_type = order_type
     intent.quantity   = quantity
+    intent.metadata   = {"entry_price": entry_price} if entry_price is not None else {}
     return intent
 
 
@@ -76,6 +78,18 @@ def _make_client(
     return client
 
 
+def _mock_execution_cfg(
+    live_max_quantity: float = 1.0,
+    live_max_notional: "float | None" = 500.0,
+    live_quantity_override: "float | None" = 1.0,
+) -> MagicMock:
+    ex = MagicMock()
+    ex.live_max_quantity     = live_max_quantity
+    ex.live_max_notional     = live_max_notional
+    ex.live_quantity_override = live_quantity_override
+    return ex
+
+
 def _run_main(
     account=None,
     positions=None,
@@ -85,6 +99,9 @@ def _run_main(
     live_key: str = "live-key",
     live_secret: str = "live-secret",
     config_ok: bool = True,
+    live_max_quantity: float = 1.0,
+    live_max_notional: "float | None" = 500.0,
+    live_quantity_override: "float | None" = 1.0,
     argv: list[str] | None = None,
     tmp_path: Path | None = None,
 ) -> tuple[int, MagicMock]:
@@ -92,11 +109,16 @@ def _run_main(
     from src.tools.live_shadow_preflight import main
 
     if intents is None:
-        intents = [_mock_intent()]
+        intents = [_mock_intent(entry_price=450.0)]
 
     mock_client = _make_client(account=account, positions=positions, orders=orders)
 
     cfg_mock = MagicMock()
+    cfg_mock.execution = _mock_execution_cfg(
+        live_max_quantity=live_max_quantity,
+        live_max_notional=live_max_notional,
+        live_quantity_override=live_quantity_override,
+    )
     cfg_result = {"label": "config", "status": "PASS" if config_ok else "FAIL", "detail": ""}
 
     out_dir = str(tmp_path or "/tmp/test_shadow_preflight")
@@ -137,10 +159,11 @@ class TestCheckCandidates:
         assert result["status"] == "PASS"
         assert result["candidate_count"] == 1
 
-    def test_quantity_gt_1_warns(self):
+    def test_quantity_gt_1_still_passes_candidates(self):
+        """Quantity validation moved to check_live_sizing; candidates only checks existence."""
         from src.tools.live_shadow_preflight import check_candidates
         result = check_candidates([_mock_intent(quantity=2.0)], "SPY")
-        assert result["status"] == "WARN"
+        assert result["status"] == "PASS"
         assert result["candidate_count"] == 1
 
     def test_multiple_intents_counted(self):
@@ -156,7 +179,88 @@ class TestCheckCandidates:
 
 
 # ---------------------------------------------------------------------------
-# 2. check_live_account
+# 2. check_live_sizing
+# ---------------------------------------------------------------------------
+
+class TestCheckLiveSizing:
+    def _cfg(self, max_qty=1.0, max_notional=500.0, override=1.0):
+        cfg = MagicMock()
+        cfg.execution = _mock_execution_cfg(
+            live_max_quantity=max_qty,
+            live_max_notional=max_notional,
+            live_quantity_override=override,
+        )
+        return cfg
+
+    def test_original_138_override_1_passes_quantity_cap(self):
+        from src.tools.live_shadow_preflight import check_live_sizing
+        intents = [_mock_intent(quantity=138.0, entry_price=450.0)]
+        result = check_live_sizing(intents, self._cfg(override=1.0))
+        assert result["status"] == "PASS"
+        assert result["effective_quantity"] == 1.0
+
+    def test_original_138_no_override_fails(self):
+        from src.tools.live_shadow_preflight import check_live_sizing
+        intents = [_mock_intent(quantity=138.0, entry_price=450.0)]
+        result = check_live_sizing(intents, self._cfg(override=None, max_notional=None))
+        assert result["status"] == "FAIL"
+        assert result["effective_quantity"] == 138.0
+
+    def test_effective_qty_gt_max_fails(self):
+        from src.tools.live_shadow_preflight import check_live_sizing
+        intents = [_mock_intent(quantity=2.0, entry_price=100.0)]
+        result = check_live_sizing(intents, self._cfg(max_qty=1.0, override=None, max_notional=None))
+        assert result["status"] == "FAIL"
+
+    def test_notional_below_cap_passes(self):
+        from src.tools.live_shadow_preflight import check_live_sizing
+        intents = [_mock_intent(quantity=1.0, entry_price=400.0)]
+        result = check_live_sizing(intents, self._cfg(max_notional=500.0, override=1.0))
+        assert result["status"] == "PASS"
+        assert result["estimated_notional"] == pytest.approx(400.0)
+
+    def test_notional_above_cap_fails(self):
+        from src.tools.live_shadow_preflight import check_live_sizing
+        intents = [_mock_intent(quantity=1.0, entry_price=600.0)]
+        result = check_live_sizing(intents, self._cfg(max_notional=500.0, override=1.0))
+        assert result["status"] == "FAIL"
+
+    def test_notional_enabled_missing_price_fails_closed(self):
+        from src.tools.live_shadow_preflight import check_live_sizing
+        intents = [_mock_intent(quantity=1.0, entry_price=None)]
+        result = check_live_sizing(intents, self._cfg(max_notional=500.0, override=1.0))
+        assert result["status"] == "FAIL"
+        assert "entry_price missing" in result["detail"]
+
+    def test_notional_disabled_missing_price_passes(self):
+        from src.tools.live_shadow_preflight import check_live_sizing
+        intents = [_mock_intent(quantity=1.0, entry_price=None)]
+        result = check_live_sizing(intents, self._cfg(max_notional=None, override=1.0))
+        assert result["status"] == "PASS"
+
+    def test_output_fields_present(self):
+        from src.tools.live_shadow_preflight import check_live_sizing
+        intents = [_mock_intent(quantity=138.0, entry_price=450.0)]
+        result = check_live_sizing(intents, self._cfg(override=1.0))
+        for field in ("original_quantity", "effective_quantity", "entry_price",
+                      "estimated_notional", "live_max_quantity", "live_max_notional"):
+            assert field in result, f"missing field: {field}"
+
+    def test_label_is_live_sizing(self):
+        from src.tools.live_shadow_preflight import check_live_sizing
+        result = check_live_sizing([_mock_intent(entry_price=450.0)], self._cfg())
+        assert result["label"] == "live_sizing"
+
+    def test_does_not_call_submit_or_cancel(self):
+        from src.tools.live_shadow_preflight import check_live_sizing
+        client = _make_client()
+        check_live_sizing([_mock_intent(entry_price=450.0)], self._cfg())
+        client.submit_order.assert_not_called()
+        client.cancel_order.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# 3. check_live_account
 # ---------------------------------------------------------------------------
 
 class TestCheckLiveAccount:
@@ -431,8 +535,26 @@ class TestMain:
         code, _ = _run_main(account=_mock_account(status="RESTRICTED"), tmp_path=tmp_path)
         assert code == 1
 
-    def test_quantity_gt_1_exits_1_warn(self, tmp_path):
-        code, _ = _run_main(intents=[_mock_intent(quantity=2.0)], tmp_path=tmp_path)
+    def test_original_138_with_override_1_passes(self, tmp_path):
+        """Original qty=138 but live_quantity_override=1.0 → sizing PASS → exits 0."""
+        code, _ = _run_main(
+            intents=[_mock_intent(quantity=138.0, entry_price=450.0)],
+            live_max_quantity=1.0,
+            live_quantity_override=1.0,
+            live_max_notional=500.0,
+            tmp_path=tmp_path,
+        )
+        assert code in (0, None)
+
+    def test_original_138_without_override_fails(self, tmp_path):
+        """Original qty=138, no override, max_qty=1.0 → FAIL."""
+        code, _ = _run_main(
+            intents=[_mock_intent(quantity=138.0, entry_price=450.0)],
+            live_max_quantity=1.0,
+            live_quantity_override=None,
+            live_max_notional=None,
+            tmp_path=tmp_path,
+        )
         assert code == 1
 
     def test_buying_power_zero_exits_1_warn(self, tmp_path):
