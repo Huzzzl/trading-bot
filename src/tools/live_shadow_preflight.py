@@ -1,0 +1,370 @@
+"""
+tools/live_shadow_preflight.py
+-------------------------------
+Read-only live shadow preflight CLI.
+
+Usage::
+
+    python -m src.tools.live_shadow_preflight \\
+        --config config/settings.paper.local.yaml \\
+        --output-dir output/live_shadow_preflight
+
+This tool is **not** a live trading submission tool.  It runs the local
+strategy preview to produce candidate intents, then reads live Alpaca account
+state, and reports whether a hypothetical live submit would be safe.
+No order is ever submitted or cancelled.
+
+What it does
+------------
+1. Loads config and runs the local backtest/strategy pipeline to produce
+   candidate order intents — same data path used by paper preview.
+2. Filters intents to buy+market orders for the selected symbol.
+3. Resolves live credentials from ``ALPACA_LIVE_API_KEY`` and
+   ``ALPACA_LIVE_SECRET_KEY`` and opens a live ``TradingClient``
+   (``paper=False``).
+4. Reads account status, buying power, open positions, and open orders
+   from the live account — all read-only.
+5. Prints a structured report and exits 0 (PASS) or 1 (WARN / FAIL).
+
+What it never does
+------------------
+* Never calls ``submit_order`` or ``cancel_order``.
+* Never writes a ledger row or any persistent artifact.
+* Never reads paper credentials (``ALPACA_API_KEY`` / ``ALPACA_SECRET_KEY``).
+* Never modifies any position, order, or account state.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+from typing import Any
+
+from src.tools.live_account_check import (
+    _bool,
+    _get,
+    _make_live_client,
+    _normalize_enum_value,
+    _resolve_live_credentials,
+    _str,
+    check_credentials,
+)
+from src.tools.paper_status import check_config
+
+
+# ---------------------------------------------------------------------------
+# Strategy preview
+# ---------------------------------------------------------------------------
+
+def _run_strategy_preview(cfg: Any, symbol: str) -> list:
+    """Run the local backtest engine and return buy+market intents for *symbol*.
+
+    This is a pure local operation — no credentials, no network (unless the
+    data provider fetches prices, which is identical to the paper preview path).
+    """
+    from src.main import build_engine
+    engine = build_engine(cfg)
+    results = engine.run()
+    intents = results.get("order_intents", [])
+    return [
+        i for i in intents
+        if i.symbol == symbol and i.side == "buy" and i.order_type == "market"
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Individual checks
+# ---------------------------------------------------------------------------
+
+def _result(label: str, status: str, detail: str = "") -> dict[str, Any]:
+    return {"label": label, "status": status, "detail": detail}
+
+
+def check_candidates(intents: list, symbol: str) -> dict[str, Any]:
+    """Verify at least one buy+market candidate exists for *symbol*.
+
+    Returns PASS, WARN (quantity > 1), or FAIL (no candidates).
+    """
+    if not intents:
+        return _result(
+            "candidates", "FAIL",
+            f"no buy+market candidate intents for {symbol} — strategy produced no signal",
+        )
+
+    warns = [i for i in intents if getattr(i, "quantity", 1) > 1]
+    if warns:
+        qty_list = [getattr(i, "quantity", "?") for i in warns]
+        detail = (
+            f"{len(intents)} candidate(s) for {symbol}; "
+            f"quantity > 1 in shadow mode: {qty_list}"
+        )
+        return _result("candidates", "WARN", detail) | {"candidate_count": len(intents)}
+
+    return _result(
+        "candidates", "PASS",
+        f"{len(intents)} buy+market candidate(s) for {symbol}",
+    ) | {"candidate_count": len(intents)}
+
+
+def check_live_account(client: Any) -> dict[str, Any]:
+    """Read live account state.
+
+    Returns PASS, WARN (buying_power or portfolio_value is 0 on otherwise
+    healthy account), or FAIL (inactive, blocked, or API error).
+    """
+    try:
+        raw = client.get_account()
+    except Exception as exc:
+        return _result("live_account", "FAIL", f"get_account() failed — {exc}")
+
+    status          = _normalize_enum_value(_get(raw, "status", "unknown"))
+    trading_blocked = _bool(raw, "trading_blocked")
+    account_blocked = _bool(raw, "account_blocked")
+    buying_power    = _str(raw, "buying_power", "0")
+    portfolio_value = _str(raw, "portfolio_value", "0")
+
+    detail = (
+        f"status={status} trading_blocked={trading_blocked} "
+        f"account_blocked={account_blocked} "
+        f"buying_power={buying_power} portfolio_value={portfolio_value}"
+    )
+
+    issues: list[str] = []
+    if status != "active":
+        issues.append(f"account status={status!r} (expected 'active')")
+    if trading_blocked:
+        issues.append("trading_blocked=true")
+    if account_blocked:
+        issues.append("account_blocked=true")
+
+    if issues:
+        return _result("live_account", "FAIL", detail) | {
+            "issues": issues,
+            "account_status": status,
+            "trading_blocked": trading_blocked,
+            "account_blocked": account_blocked,
+            "buying_power": buying_power,
+            "portfolio_value": portfolio_value,
+        }
+
+    # Warn if account is healthy but buying power or portfolio value is zero.
+    warn_issues: list[str] = []
+    try:
+        if float(buying_power) == 0:
+            warn_issues.append("buying_power=0")
+    except (ValueError, TypeError):
+        pass
+    try:
+        if float(portfolio_value) == 0:
+            warn_issues.append("portfolio_value=0")
+    except (ValueError, TypeError):
+        pass
+
+    if warn_issues:
+        return _result("live_account", "WARN", detail + " — " + ", ".join(warn_issues)) | {
+            "account_status": status,
+            "trading_blocked": trading_blocked,
+            "account_blocked": account_blocked,
+            "buying_power": buying_power,
+            "portfolio_value": portfolio_value,
+        }
+
+    return _result("live_account", "PASS", detail) | {
+        "account_status": status,
+        "trading_blocked": trading_blocked,
+        "account_blocked": account_blocked,
+        "buying_power": buying_power,
+        "portfolio_value": portfolio_value,
+    }
+
+
+def check_live_position(client: Any, symbol: str) -> dict[str, Any]:
+    """Return FAIL if a live open position exists for *symbol*, PASS otherwise."""
+    try:
+        if hasattr(client, "get_all_positions"):
+            positions = client.get_all_positions()
+        elif hasattr(client, "get_positions"):
+            positions = client.get_positions()
+        else:
+            return _result(
+                "live_position", "FAIL",
+                "client exposes neither get_all_positions nor get_positions",
+            )
+    except Exception as exc:
+        return _result("live_position", "FAIL", f"position lookup failed — {exc}")
+
+    symbol_positions = [
+        p for p in (positions or []) if _str(p, "symbol") == symbol
+    ]
+    if symbol_positions:
+        return _result(
+            "live_position", "FAIL",
+            f"existing live position in {symbol} — close it before a live submit",
+        ) | {"position_for_symbol": True}
+
+    return _result("live_position", "PASS", f"no live position in {symbol}") | {
+        "position_for_symbol": False,
+    }
+
+
+def check_live_orders(client: Any, symbol: str) -> dict[str, Any]:
+    """Return FAIL if a live open order exists for *symbol*, PASS otherwise."""
+    try:
+        if hasattr(client, "get_orders"):
+            orders = client.get_orders()
+        elif hasattr(client, "list_orders"):
+            orders = client.list_orders()
+        else:
+            return _result(
+                "live_orders", "FAIL",
+                "client exposes neither get_orders nor list_orders",
+            )
+    except Exception as exc:
+        return _result("live_orders", "FAIL", f"order lookup failed — {exc}")
+
+    symbol_orders = [
+        o for o in (orders or []) if _str(o, "symbol") == symbol
+    ]
+    if symbol_orders:
+        return _result(
+            "live_orders", "FAIL",
+            f"existing live open order(s) for {symbol} — cancel before a live submit",
+        ) | {"open_orders_for_symbol": True}
+
+    return _result("live_orders", "PASS", f"no live open orders for {symbol}") | {
+        "open_orders_for_symbol": False,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Report printer
+# ---------------------------------------------------------------------------
+
+def print_report(
+    checks: list[dict[str, Any]],
+    symbol: str,
+    final_status: str,
+) -> None:
+    """Print a human-readable live shadow preflight report."""
+    _ICON = {"PASS": "[PASS]", "WARN": "[WARN]", "FAIL": "[FAIL]"}
+    print("\n=== Live Shadow Preflight ===")
+    print(f"  selected_symbol : {symbol}")
+
+    for c in checks:
+        if c["label"] == "candidates":
+            print(f"  candidate_count : {c.get('candidate_count', '?')}")
+        if c["label"] == "live_account" and c["status"] != "FAIL":
+            print(f"  account_status  : {c.get('account_status', '?')}")
+            print(f"  trading_blocked : {c.get('trading_blocked', '?')}")
+            print(f"  account_blocked : {c.get('account_blocked', '?')}")
+            print(f"  buying_power    : {c.get('buying_power', '?')}")
+            print(f"  portfolio_value : {c.get('portfolio_value', '?')}")
+        if c["label"] == "live_position":
+            print(f"  position_for_symbol  : {c.get('position_for_symbol', '?')}")
+        if c["label"] == "live_orders":
+            print(f"  open_orders_for_symbol : {c.get('open_orders_for_symbol', '?')}")
+
+    print()
+    for c in checks:
+        icon   = _ICON.get(c["status"], f"[{c['status']}]")
+        detail = f"  ({c['detail']})" if c.get("detail") else ""
+        print(f"  {icon} {c['label']}{detail}")
+        if c.get("issues"):
+            for issue in c["issues"]:
+                print(f"         ! {issue}")
+
+    print()
+    print(f"  RESULT: {final_status}")
+    print("=" * 30)
+
+
+# ---------------------------------------------------------------------------
+# CLI entry-point
+# ---------------------------------------------------------------------------
+
+def main(argv: list[str] | None = None) -> None:
+    import argparse
+    parser = argparse.ArgumentParser(
+        prog="python -m src.tools.live_shadow_preflight",
+        description=(
+            "Read-only live shadow preflight. "
+            "Runs strategy preview locally and checks live account state. "
+            "Never submits or cancels orders. "
+            "Requires ALPACA_LIVE_API_KEY and ALPACA_LIVE_SECRET_KEY."
+        ),
+    )
+    parser.add_argument("--config",     required=True, help="Path to settings YAML")
+    parser.add_argument("--output-dir", required=True, help="Output directory")
+    parser.add_argument("--symbol",     default="SPY",  help="Symbol to check (default: SPY)")
+    args = parser.parse_args(argv)
+
+    symbol     = args.symbol.upper().strip()
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    checks: list[dict[str, Any]] = []
+    all_statuses: list[str] = []
+
+    # --- 1. Config ---
+    config_result, cfg = check_config(Path(args.config))
+    checks.append(config_result)
+    all_statuses.append(config_result["status"])
+
+    # --- 2. Strategy preview (local, no credentials) ---
+    intents: list = []
+    if cfg is not None:
+        try:
+            intents = _run_strategy_preview(cfg, symbol)
+        except Exception as exc:
+            checks.append(_result("strategy_preview", "FAIL", f"engine error — {exc}"))
+            all_statuses.append("FAIL")
+
+    if cfg is not None and not any(c["label"] == "strategy_preview" for c in checks):
+        cand_result = check_candidates(intents, symbol)
+        checks.append(cand_result)
+        all_statuses.append(cand_result["status"])
+
+    # --- 3. Live credentials ---
+    cred_result, creds = check_credentials()
+    checks.append(cred_result)
+    all_statuses.append(cred_result["status"])
+
+    # --- 4–6. Live account checks (only when credentials resolve) ---
+    client = None
+    if creds is not None:
+        try:
+            client = _make_live_client(*creds)
+        except Exception as exc:
+            checks.append(_result("live_client", "FAIL", f"TradingClient creation failed — {exc}"))
+            all_statuses.append("FAIL")
+
+    if client is not None:
+        acct_result = check_live_account(client)
+        checks.append(acct_result)
+        all_statuses.append(acct_result["status"])
+
+        pos_result = check_live_position(client, symbol)
+        checks.append(pos_result)
+        all_statuses.append(pos_result["status"])
+
+        ord_result = check_live_orders(client, symbol)
+        checks.append(ord_result)
+        all_statuses.append(ord_result["status"])
+
+    # --- Final status ---
+    if "FAIL" in all_statuses:
+        final_status = "FAIL"
+    elif "WARN" in all_statuses:
+        final_status = "WARN"
+    else:
+        final_status = "PASS"
+
+    print_report(checks, symbol=symbol, final_status=final_status)
+
+    if final_status != "PASS":
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
