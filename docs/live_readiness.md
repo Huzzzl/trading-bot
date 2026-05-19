@@ -314,6 +314,12 @@ export ALPACA_LIVE_SECRET_KEY="your-live-secret-key"
 python -m src.tools.live_readiness_gate \
     --config     config/settings.paper.local.yaml \
     --output-dir output/live_readiness_gate
+
+# Optional: append a snapshot row to a history CSV
+python -m src.tools.live_readiness_gate \
+    --config         config/settings.paper.local.yaml \
+    --output-dir     output/live_readiness_gate \
+    --append-history output/live_readiness_history.csv
 ```
 
 ### Output example
@@ -358,7 +364,19 @@ All files are written to `--output-dir`:
 | `stages` | Per-stage status dict (`PASS`, `WARN`, or `FAIL`) |
 | `top_blockers` | Up to 5 most important blockers from failing stages |
 
+### Optional history log (`--append-history`)
 
+Passing `--append-history <CSV_PATH>` appends one snapshot row per run to a
+CSV file, creating it (with a header) on first use.  The CSV path may be
+outside `--output-dir`.
+
+```
+checked_at_utc,decision,account_check,shadow_preflight,shadow_review,symbol_screen,symbol_screen_review,top_blockers
+2026-05-19T12:00:00+00:00,NO-GO,WARN,FAIL,FAIL,WARN,FAIL,[account_check] buying_power=0 | [shadow_review] ...
+```
+
+If the write fails (e.g. permissions error), the gate continues and exits
+normally — history logging never causes the gate to fail.
 
 ---
 

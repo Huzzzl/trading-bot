@@ -109,6 +109,21 @@ python -m src.tools.live_readiness_gate \
 | Symbol screen report | `output/live_readiness_gate/live_shadow_symbol_screen_report.json` |
 | Symbol screen summary | `output/live_readiness_gate/live_shadow_symbol_screen.csv` |
 
+### Optional history log
+
+To track gate results over time, add `--append-history`:
+
+```bash
+python -m src.tools.live_readiness_gate \
+    --config         config/settings.paper.local.yaml \
+    --output-dir     output/live_readiness_gate \
+    --append-history output/live_readiness_history.csv
+```
+
+Each run appends one row to the CSV (header written on first use).
+The CSV is never read by the gate — it is a plain audit trail only.
+History logging never causes the gate to fail.
+
 ### Clear credentials when done
 
 ```bash

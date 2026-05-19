@@ -9,6 +9,12 @@ Usage::
         --config  config/settings.paper.local.yaml \\
         --output-dir output/live_readiness_gate
 
+    # Optional: append a snapshot row to a history CSV
+    python -m src.tools.live_readiness_gate \\
+        --config  config/settings.paper.local.yaml \\
+        --output-dir output/live_readiness_gate \\
+        --append-history output/live_readiness_history.csv
+
 Goal
 ----
 Run all live-readiness checks in one command and produce a single GO / NO-GO
@@ -37,6 +43,7 @@ What it never does
 
 from __future__ import annotations
 
+import csv
 import json
 import sys
 from datetime import datetime, timezone
@@ -303,10 +310,11 @@ def write_gate_report(
     stages: dict[str, str],
     decision: str,
     top_blockers: list[str],
+    checked_at_utc: str | None = None,
 ) -> Path:
     """Write live_readiness_gate_report.json to output_dir."""
     report = {
-        "checked_at_utc": datetime.now(timezone.utc).isoformat(),
+        "checked_at_utc": checked_at_utc or datetime.now(timezone.utc).isoformat(),
         "decision":       decision,
         "stages":         stages,
         "top_blockers":   top_blockers,
@@ -314,6 +322,52 @@ def write_gate_report(
     path = output_dir / "live_readiness_gate_report.json"
     path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     return path
+
+
+_HISTORY_COLUMNS = [
+    "checked_at_utc",
+    "decision",
+    "account_check",
+    "shadow_preflight",
+    "shadow_review",
+    "symbol_screen",
+    "symbol_screen_review",
+    "top_blockers",
+]
+
+
+def append_history_row(
+    history_path: Path,
+    checked_at_utc: str,
+    decision: str,
+    stages: dict[str, str],
+    top_blockers: list[str],
+) -> None:
+    """Append one snapshot row to the history CSV.
+
+    Creates the file (with header) if it does not exist.
+    Creates parent directories as needed.
+    Never raises — silently skips on any write error.
+    """
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+    write_header = not history_path.exists()
+    try:
+        with history_path.open("a", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=_HISTORY_COLUMNS)
+            if write_header:
+                writer.writeheader()
+            writer.writerow({
+                "checked_at_utc":      checked_at_utc,
+                "decision":            decision,
+                "account_check":       stages.get("account_check", ""),
+                "shadow_preflight":    stages.get("shadow_preflight", ""),
+                "shadow_review":       stages.get("shadow_review", ""),
+                "symbol_screen":       stages.get("symbol_screen", ""),
+                "symbol_screen_review": stages.get("symbol_screen_review", ""),
+                "top_blockers":        " | ".join(top_blockers),
+            })
+    except Exception:
+        pass
 
 
 def _fail_all(reason: str, output_dir: Path) -> None:
@@ -342,6 +396,10 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("--config",      required=True, help="Path to settings YAML")
     parser.add_argument("--output-dir",  required=True, help="Output directory for audit artifacts")
+    parser.add_argument(
+        "--append-history", default=None, metavar="CSV_PATH",
+        help="Append a one-line snapshot to this CSV after every run (created if missing).",
+    )
     args = parser.parse_args(argv)
 
     output_dir = Path(args.output_dir)
@@ -396,9 +454,15 @@ def main(argv: list[str] | None = None) -> None:
     decision   = compute_decision(stages)
     top_blockers = collect_top_blockers(stage_results)
 
+    checked_at_utc = datetime.now(timezone.utc).isoformat()
     print_gate_report(stages, decision, top_blockers)
-    gate_path = write_gate_report(output_dir, stages, decision, top_blockers)
+    gate_path = write_gate_report(output_dir, stages, decision, top_blockers, checked_at_utc)
     print(f"  gate report: {gate_path}")
+
+    if args.append_history:
+        history_path = Path(args.append_history)
+        append_history_row(history_path, checked_at_utc, decision, stages, top_blockers)
+        print(f"  history    : {history_path}")
 
     if decision != "GO":
         sys.exit(1)

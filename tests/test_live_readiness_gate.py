@@ -9,6 +9,7 @@ no orders submitted or cancelled, no ledger writes.
 
 from __future__ import annotations
 
+import csv
 import json
 import os
 from pathlib import Path
@@ -96,6 +97,7 @@ def _run_main(
     creds_ok: bool = True,
     live_key: str = "live-key",
     live_secret: str = "live-secret",
+    extra_argv: list[str] | None = None,
 ) -> tuple[int, MagicMock]:
     """Run main() with everything mocked; return (exit_code, mock_client)."""
     from src.tools.live_readiness_gate import main
@@ -133,7 +135,7 @@ def _run_main(
     argv = [
         "--config",     "config/settings.paper.local.yaml",
         "--output-dir", str(tmp_path),
-    ]
+    ] + (extra_argv or [])
 
     with patch.dict(os.environ, env, clear=True), \
          patch("src.tools.live_readiness_gate.check_config",
@@ -482,3 +484,163 @@ class TestMain:
         assert code in (0, None)
         report = json.loads((tmp_path / "live_readiness_gate_report.json").read_text())
         assert report["decision"] == "GO"
+
+
+# ---------------------------------------------------------------------------
+# 4. append_history_row (unit)
+# ---------------------------------------------------------------------------
+
+class TestAppendHistoryRow:
+    def test_creates_file_with_header_on_first_write(self, tmp_path):
+        from src.tools.live_readiness_gate import append_history_row
+        hist = tmp_path / "history.csv"
+        append_history_row(hist, "2026-01-01T00:00:00+00:00", "GO",
+                           {"account_check": "PASS"}, [])
+        assert hist.exists()
+        rows = list(csv.DictReader(hist.open()))
+        assert rows[0]["decision"] == "GO"
+        assert rows[0]["checked_at_utc"] == "2026-01-01T00:00:00+00:00"
+
+    def test_appends_second_row_without_duplicate_header(self, tmp_path):
+        from src.tools.live_readiness_gate import append_history_row
+        hist = tmp_path / "history.csv"
+        append_history_row(hist, "2026-01-01T00:00:00+00:00", "GO",
+                           {"account_check": "PASS"}, [])
+        append_history_row(hist, "2026-01-02T00:00:00+00:00", "NO-GO",
+                           {"account_check": "WARN"}, ["[account_check] warn"])
+        rows = list(csv.DictReader(hist.open()))
+        assert len(rows) == 2
+        assert rows[1]["decision"] == "NO-GO"
+        assert rows[1]["checked_at_utc"] == "2026-01-02T00:00:00+00:00"
+
+    def test_stage_statuses_recorded(self, tmp_path):
+        from src.tools.live_readiness_gate import append_history_row
+        hist = tmp_path / "history.csv"
+        stages = {
+            "account_check":        "PASS",
+            "shadow_preflight":     "PASS",
+            "shadow_review":        "FAIL",
+            "symbol_screen":        "WARN",
+            "symbol_screen_review": "FAIL",
+        }
+        append_history_row(hist, "2026-01-01T00:00:00+00:00", "NO-GO", stages, [])
+        rows = list(csv.DictReader(hist.open()))
+        assert rows[0]["account_check"]        == "PASS"
+        assert rows[0]["shadow_preflight"]     == "PASS"
+        assert rows[0]["shadow_review"]        == "FAIL"
+        assert rows[0]["symbol_screen"]        == "WARN"
+        assert rows[0]["symbol_screen_review"] == "FAIL"
+
+    def test_top_blockers_joined_with_pipe(self, tmp_path):
+        from src.tools.live_readiness_gate import append_history_row
+        hist = tmp_path / "history.csv"
+        blockers = ["[account_check] buying_power=0", "[shadow_review] sizing exceeded"]
+        append_history_row(hist, "2026-01-01T00:00:00+00:00", "NO-GO", {}, blockers)
+        rows = list(csv.DictReader(hist.open()))
+        assert rows[0]["top_blockers"] == (
+            "[account_check] buying_power=0 | [shadow_review] sizing exceeded"
+        )
+
+    def test_creates_parent_dirs(self, tmp_path):
+        from src.tools.live_readiness_gate import append_history_row
+        hist = tmp_path / "sub" / "deep" / "history.csv"
+        append_history_row(hist, "2026-01-01T00:00:00+00:00", "GO", {}, [])
+        assert hist.exists()
+
+    def test_silently_skips_on_write_error(self, tmp_path):
+        from src.tools.live_readiness_gate import append_history_row
+        hist = tmp_path / "history.csv"
+        hist.mkdir()  # make it a directory so open() fails
+        append_history_row(hist, "2026-01-01T00:00:00+00:00", "GO", {}, [])
+        # should not raise
+
+
+# ---------------------------------------------------------------------------
+# 5. CLI: --append-history flag
+# ---------------------------------------------------------------------------
+
+class TestAppendHistory:
+    def test_default_no_history_written(self, tmp_path):
+        """Without --append-history, no CSV beyond the standard artifacts is written."""
+        _run_main(tmp_path)
+        files = {f.name for f in tmp_path.iterdir()}
+        assert not any("history" in name for name in files)
+
+    def test_append_history_creates_csv(self, tmp_path):
+        hist = tmp_path / "history.csv"
+        _run_main(tmp_path, extra_argv=["--append-history", str(hist)])
+        assert hist.exists()
+
+    def test_append_history_csv_has_header_and_row(self, tmp_path):
+        hist = tmp_path / "history.csv"
+        _run_main(tmp_path, extra_argv=["--append-history", str(hist)])
+        rows = list(csv.DictReader(hist.open()))
+        assert len(rows) == 1
+        assert "decision" in rows[0]
+        assert "checked_at_utc" in rows[0]
+
+    def test_second_run_appends_row_no_duplicate_header(self, tmp_path):
+        hist = tmp_path / "history.csv"
+        extra = ["--append-history", str(hist)]
+        _run_main(tmp_path, extra_argv=extra)
+        _run_main(tmp_path, extra_argv=extra)
+        rows = list(csv.DictReader(hist.open()))
+        assert len(rows) == 2
+
+    def test_decision_and_stages_recorded_correctly(self, tmp_path):
+        hist = tmp_path / "history.csv"
+        _run_main(tmp_path, extra_argv=["--append-history", str(hist)])
+        rows = list(csv.DictReader(hist.open()))
+        row = rows[0]
+        assert row["decision"] in ("GO", "NO-GO")
+        for stage in ("account_check", "shadow_preflight", "shadow_review",
+                      "symbol_screen", "symbol_screen_review"):
+            assert row[stage] in ("PASS", "FAIL", "WARN"), \
+                f"stage {stage!r} has unexpected value: {row[stage]!r}"
+
+    def test_timestamp_matches_gate_report(self, tmp_path):
+        """checked_at_utc in history CSV matches the gate report JSON."""
+        hist = tmp_path / "history.csv"
+        _run_main(tmp_path, extra_argv=["--append-history", str(hist)])
+        report = json.loads((tmp_path / "live_readiness_gate_report.json").read_text())
+        rows = list(csv.DictReader(hist.open()))
+        assert rows[0]["checked_at_utc"] == report["checked_at_utc"]
+
+    def test_no_ledger_writes_with_history(self, tmp_path):
+        hist = tmp_path / "history.csv"
+        _run_main(tmp_path, extra_argv=["--append-history", str(hist)])
+        files = {f.name for f in tmp_path.iterdir()}
+        assert not any("ledger" in name for name in files)
+
+    def test_submit_order_never_called_with_history(self, tmp_path):
+        hist = tmp_path / "history.csv"
+        _, client = _run_main(tmp_path, extra_argv=["--append-history", str(hist)])
+        client.submit_order.assert_not_called()
+
+    def test_history_outside_output_dir(self, tmp_path):
+        """--append-history path may be outside --output-dir."""
+        out_dir = tmp_path / "output"
+        out_dir.mkdir()
+        hist = tmp_path / "history" / "log.csv"
+        mock_client = _mock_client(account=_mock_account_raw())
+        mock_cfg    = _mock_cfg(symbols=["SPY"], screen_symbols=["SPY"])
+        with patch.dict(os.environ,
+                        {"ALPACA_LIVE_API_KEY": "k", "ALPACA_LIVE_SECRET_KEY": "s"}, clear=True), \
+             patch("src.tools.live_readiness_gate.check_config",
+                   return_value=({"label": "config", "status": "PASS", "detail": ""}, mock_cfg)), \
+             patch("src.tools.live_readiness_gate.check_credentials",
+                   return_value=({"label": "creds", "status": "PASS", "detail": ""}, ("k", "s"))), \
+             patch("src.tools.live_readiness_gate._make_live_client",
+                   return_value=mock_client), \
+             patch("src.tools.live_readiness_gate._run_strategy_preview",
+                   return_value=[_mock_intent("SPY")]):
+            try:
+                from src.tools.live_readiness_gate import main
+                main([
+                    "--config",         "cfg.yaml",
+                    "--output-dir",     str(out_dir),
+                    "--append-history", str(hist),
+                ])
+            except SystemExit:
+                pass
+        assert hist.exists()
