@@ -266,6 +266,128 @@ python -m src.tools.live_shadow_review \
 
 Stop at any FAIL. WARN requires manual review.
 
+---
+
+## Live Shadow Symbol Screen
+
+A read-only multi-symbol screening tool that runs the strategy preview and live
+sizing checks across several symbols in a single pass. Run this to identify which
+symbols from a candidate list are currently safe under live sizing limits.
+
+**This tool is strictly read-only. It never submits or cancels orders.**
+
+### What it does
+
+1. Loads config and resolves live credentials.
+2. Creates a live `TradingClient` (`paper=False`) and reads account state, open
+   positions, and open orders — once for all symbols.
+3. For each symbol, runs the local strategy preview and applies live sizing checks.
+4. Prints a per-symbol table and an overall PASS/WARN/FAIL result.
+5. Optionally writes `live_shadow_symbol_screen_report.json` and
+   `live_shadow_symbol_screen.csv` when `--write-report` is set.
+
+### What it never does
+
+- Never calls `submit_order` or `cancel_order`.
+- Never writes a ledger row.
+- Never reads paper credentials (`ALPACA_API_KEY` / `ALPACA_SECRET_KEY`).
+
+### Usage
+
+```bash
+export ALPACA_LIVE_API_KEY="your-live-api-key"
+export ALPACA_LIVE_SECRET_KEY="your-live-secret-key"
+
+python -m src.tools.live_shadow_screen_symbols \
+    --config    config/settings.paper.local.yaml \
+    --output-dir output/live_shadow_symbol_screen \
+    --symbols   SPY,QQQ,IWM,DIA
+```
+
+Optional flags:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--symbols` | (required) | Comma-separated symbols to screen, e.g. `SPY,QQQ,IWM` |
+| `--write-report` | off | Write JSON report and CSV summary to `--output-dir` |
+
+### Per-symbol result
+
+Each symbol is independently evaluated:
+
+| Result | Condition |
+|--------|-----------|
+| `PASS` | Account ok, no existing position/order for symbol, ≥1 candidate passes sizing |
+| `FAIL` | Account not ok, existing position or open order, no candidates, or all candidates fail sizing |
+
+A position or order in QQQ does **not** block SPY (and vice versa) — each symbol
+is checked independently against the live account state.
+
+### Overall result
+
+| Result | Condition |
+|--------|-----------|
+| `PASS` | Credentials ok, account active and unblocked, ≥1 symbol is `PASS` |
+| `WARN` | No symbol passes but account has `warn` state (zero buying_power or portfolio_value) |
+| `FAIL` | Credentials fail, account inactive/blocked, or no symbol passes |
+
+### Output example
+
+```
+=== Live Shadow Symbol Screen ===
+  account_status  : active
+  buying_power    : 10000.00
+  portfolio_value : 25000.00
+  symbols_checked : SPY,QQQ,IWM,DIA
+
+  Symbol    Cands  Pass  Fail  Min Notional  Max Notional  Status  Blocker
+  ------    -----  ----  ----  ------------  ------------  ------  -------
+  SPY           1     1     0        450.00        450.00  PASS
+  QQQ           1     0     1        480.00        480.00  FAIL    all 1 candidate(s) fail sizing ...
+  IWM           0     0     0             -             -  FAIL    no candidates
+  DIA           1     1     0        420.00        420.00  PASS
+
+  RESULT: PASS (2/4 symbols suitable)
+  suitable: SPY, DIA
+===================================
+```
+
+### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Overall result is `PASS` — ≥1 symbol is suitable under live sizing limits |
+| `1` | Overall result is `WARN` or `FAIL` |
+
+### Artifact files (with `--write-report`)
+
+**`live_shadow_symbol_screen_report.json`**
+
+| Field | Description |
+|-------|-------------|
+| `checked_at_utc` | ISO-8601 timestamp of the run |
+| `symbols` | List of symbols checked |
+| `overall_result` | `PASS`, `WARN`, or `FAIL` |
+| `account` | Snapshot of account state (status, balances, block flags) |
+| `symbol_results` | Per-symbol result list (see CSV columns below) |
+
+**`live_shadow_symbol_screen.csv`**
+
+One row per symbol:
+
+| Column | Description |
+|--------|-------------|
+| `symbol` | Ticker symbol |
+| `candidate_count` | Number of buy+market candidates from strategy preview |
+| `best_status` | `PASS` or `FAIL` |
+| `min_estimated_notional` | Lowest notional across all candidates |
+| `max_estimated_notional` | Highest notional across all candidates |
+| `pass_count` | Candidates passing live sizing |
+| `fail_count` | Candidates failing live sizing |
+| `position_for_symbol` | `True` if a live position exists for this symbol |
+| `open_orders_for_symbol` | `True` if a live open order exists for this symbol |
+| `blocker_summary` | Human-readable reason when `best_status=FAIL` |
+
 When `--write-report` is passed, two files are written to `--output-dir`:
 
 **`live_shadow_preflight_report.json`**
