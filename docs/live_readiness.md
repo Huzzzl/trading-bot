@@ -118,7 +118,8 @@ account state check. Run this **after** `live_account_check` passes.
    candidate order intents for the selected symbol (same data path as paper preview).
 2. Filters intents to buy+market orders for the selected symbol.
 3. Evaluates hypothetical live order sizing against configured limits
-   (`live_max_quantity`, `live_max_notional`, `live_quantity_override`).
+   (`live_sizing_mode`, `live_max_quantity`, `live_max_notional`, `live_quantity_override`,
+   `live_order_notional_override`, `live_max_order_notional`).
 4. Connects to the live account (`paper=False`) and reads account status,
    buying power, open positions, and open orders.
 5. Reports whether a hypothetical live submit would be safe.
@@ -178,7 +179,7 @@ python -m src.tools.live_shadow_preflight `
 |-------|------|------|------|
 | `config` | Config loads and validates | — | Load or validation error |
 | `candidates` | ≥1 buy+market candidate for symbol | — | No candidates |
-| `live_sizing` | Effective qty ≤ `live_max_quantity` and notional ≤ `live_max_notional` | — | Qty or notional exceeds limit; notional enabled but `entry_price` missing |
+| `live_sizing` | Sizing within all configured limits | — | Qty/notional exceeds limit; `entry_price` missing in notional mode; `live_order_notional_override` missing |
 | `credentials` | Both `ALPACA_LIVE_*` vars present | — | Either missing or empty |
 | `live_account` | Status `ACTIVE`, not blocked | `buying_power` or `portfolio_value` = 0 | Inactive, blocked, or API error |
 | `live_position` | No open position for symbol | — | Existing live position for symbol |
@@ -190,12 +191,48 @@ These fields live under `execution:` in your settings YAML:
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `live_max_quantity` | `1.0` | Maximum effective order quantity allowed |
-| `live_max_notional` | `500.0` | Maximum estimated notional value (quantity × entry_price). Set to `null` to disable. |
-| `live_quantity_override` | `1.0` | Override effective quantity regardless of strategy output. Set to `null` to use raw candidate quantity. |
+| `live_sizing_mode` | `"quantity"` | `"quantity"` (default) or `"notional"` — controls which sizing path is used |
+| `live_max_quantity` | `1.0` | Maximum effective order quantity allowed (quantity mode) |
+| `live_max_notional` | `500.0` | Maximum estimated notional value. Set to `null` to disable. Applied in both modes. |
+| `live_quantity_override` | `1.0` | Override effective quantity regardless of strategy output (quantity mode). Set to `null` to use raw candidate quantity. |
+| `live_order_notional_override` | `null` | Fixed notional per order (notional mode). Required when `live_sizing_mode=notional`. |
+| `live_max_order_notional` | `100.0` | Maximum allowed value for `live_order_notional_override` (notional mode). |
+| `live_max_daily_notional` | `200.0` | Daily notional cap (reserved for future gate integration). |
+| `live_max_account_notional_fraction` | `0.1` | Maximum fraction of portfolio value per order (reserved for future gate integration). |
+
+#### Quantity mode (default)
 
 `effective_quantity = live_quantity_override` (if set) else `original_quantity`.
-If `live_max_notional` is set and `entry_price` is absent from the candidate intent's metadata, the check fails closed.
+`estimated_notional = effective_quantity × entry_price` (when `entry_price` is available).
+If `live_max_notional` is set and `entry_price` is absent, the check fails closed.
+
+#### Notional mode
+
+Set `live_sizing_mode: notional` and `live_order_notional_override: <amount>` to use fixed-dollar sizing.
+
+`effective_notional = live_order_notional_override`.
+`effective_quantity = effective_notional / entry_price`.
+
+The check **fails closed** if:
+- `live_order_notional_override` is not set or ≤ 0
+- `entry_price` is missing or ≤ 0 from the candidate intent's metadata
+- `effective_notional > live_max_order_notional`
+- `effective_notional > live_max_notional` (when `live_max_notional` is set)
+
+Example notional-mode config snippet:
+
+```yaml
+execution:
+  live_sizing_mode: notional
+  live_order_notional_override: 100.0   # fixed $100 per order
+  live_max_order_notional: 100.0        # must be >= live_order_notional_override
+  live_max_notional: 500.0              # portfolio-level cap; null to disable
+```
+
+> **Shadow sizing only** — `live_sizing_mode` and all related fields control the
+> *shadow preflight sizing check* only. No live orders are ever submitted by any
+> tool in this repository. The effective notional is computed to validate whether
+> a hypothetical live order would be within configured limits.
 
 ### Exit codes
 
@@ -543,8 +580,8 @@ One row per symbol:
 | `symbol` | Ticker symbol |
 | `candidate_count` | Number of buy+market candidates from strategy preview |
 | `best_status` | `PASS` or `FAIL` |
-| `min_estimated_notional` | Lowest notional across all candidates |
-| `max_estimated_notional` | Highest notional across all candidates |
+| `min_estimated_notional` | Lowest effective notional across all candidates |
+| `max_estimated_notional` | Highest effective notional across all candidates |
 | `pass_count` | Candidates passing live sizing |
 | `fail_count` | Candidates failing live sizing |
 | `position_for_symbol` | `True` if a live position exists for this symbol |
@@ -620,11 +657,15 @@ One row per candidate intent:
 |--------|-------------|
 | `client_order_id` | Intent ID from strategy |
 | `symbol`, `side`, `order_type` | Order parameters |
+| `live_sizing_mode` | `"quantity"` or `"notional"` — which sizing path was used |
 | `original_quantity` | Raw quantity from strategy |
-| `effective_quantity` | After `live_quantity_override` is applied |
+| `effective_quantity` | After override or notional division is applied |
 | `entry_price` | From intent metadata (if present) |
-| `estimated_notional` | `effective_quantity × entry_price` |
-| `live_max_quantity` / `live_max_notional` | Configured limits |
+| `effective_notional` | Canonical notional for this sizing mode |
+| `estimated_notional` | Alias for `effective_notional` (backward compatibility) |
+| `live_max_quantity` | Configured quantity limit |
+| `live_max_notional` | Configured portfolio-level notional cap |
+| `live_max_order_notional` | Configured per-order notional cap (notional mode) |
 | `sizing_status` | `PASS` or `FAIL` per candidate |
 | `sizing_reason` | Human-readable explanation |
 

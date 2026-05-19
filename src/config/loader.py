@@ -81,6 +81,11 @@ class ExecutionConfig:
     live_max_notional:                       float | None = 500.0
     live_quantity_override:                  float | None = 1.0
     live_shadow_screen_symbols:              list[str]    = field(default_factory=lambda: ["SPY", "QQQ", "IWM", "DIA"])
+    live_sizing_mode:                        str          = "quantity"
+    live_order_notional_override:            float | None = None
+    live_max_order_notional:                 float        = 100.0
+    live_max_daily_notional:                 float        = 200.0
+    live_max_account_notional_fraction:      float        = 0.1
 
 
 @dataclass
@@ -306,6 +311,11 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
         live_max_notional=float(ex["live_max_notional"]) if "live_max_notional" in ex and ex["live_max_notional"] is not None else (None if "live_max_notional" in ex else 500.0),
         live_quantity_override=float(ex["live_quantity_override"]) if "live_quantity_override" in ex and ex["live_quantity_override"] is not None else (None if "live_quantity_override" in ex else 1.0),
         live_shadow_screen_symbols=_normalize_symbol_list(ex["live_shadow_screen_symbols"]) if "live_shadow_screen_symbols" in ex else ["SPY", "QQQ", "IWM", "DIA"],
+        live_sizing_mode=str(ex.get("live_sizing_mode", "quantity")),
+        live_order_notional_override=float(ex["live_order_notional_override"]) if "live_order_notional_override" in ex and ex["live_order_notional_override"] is not None else None,
+        live_max_order_notional=float(ex.get("live_max_order_notional", 100.0)),
+        live_max_daily_notional=float(ex.get("live_max_daily_notional", 200.0)),
+        live_max_account_notional_fraction=float(ex.get("live_max_account_notional_fraction", 0.1)),
     )
 
     app_cfg = AppConfig(

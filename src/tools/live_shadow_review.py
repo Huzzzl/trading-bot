@@ -98,22 +98,37 @@ def find_blockers(report: dict[str, Any], candidates: list[dict]) -> list[dict[s
 
     # Candidate sizing aggregate
     if fail_rows:
+        # Use effective_notional (notional mode) if present, else estimated_notional (quantity mode)
+        def _notional_val(r: dict) -> float | None:
+            for key in ("effective_notional", "estimated_notional"):
+                v = r.get(key)
+                if v not in (None, "", "None"):
+                    try:
+                        return float(v)
+                    except (ValueError, TypeError):
+                        pass
+            return None
+
         try:
-            notionals = [
-                float(r["estimated_notional"])
-                for r in fail_rows
-                if r.get("estimated_notional") not in (None, "", "None")
-            ]
-        except (ValueError, TypeError):
+            notionals = [n for r in fail_rows if (n := _notional_val(r)) is not None]
+        except Exception:
             notionals = []
 
+        sizing_mode      = fail_rows[0].get("live_sizing_mode", "quantity")
         live_max_notional = fail_rows[0].get("live_max_notional", "?")
+        live_max_order_notional = fail_rows[0].get("live_max_order_notional", "?")
+        notional_cap_label = (
+            f"live_max_order_notional={live_max_order_notional}"
+            if sizing_mode == "notional"
+            else f"live_max_notional={live_max_notional}"
+        )
+        notional_field = "effective_notional" if sizing_mode == "notional" else "estimated_notional"
 
         if notionals:
             msg = (
                 f"[live_sizing] {len(fail_rows)} candidate(s) exceed "
-                f"live_max_notional={live_max_notional}; "
-                f"estimated_notional range={min(notionals):.2f}..{max(notionals):.2f}"
+                f"{notional_cap_label}; "
+                f"{notional_field} range={min(notionals):.2f}..{max(notionals):.2f}"
             )
         else:
             msg = (
@@ -175,19 +190,26 @@ def suggest_actions(
             f"Cancel existing live open order for {symbol} manually before rerunning."
         )
 
-    # Sizing: notional cap exceeded
+    # Sizing failures
     sizing_check = checks_by_label.get("live_sizing", {})
     if sizing_check.get("status") == "FAIL":
-        detail = sizing_check.get("detail", "")
-        if "notional" in detail.lower():
+        detail     = sizing_check.get("detail", "").lower()
+        sizing_mode = sizing_check.get("live_sizing_mode", "quantity")
+        if "live_order_notional_override" in detail and "requires" in detail:
             actions.append(
-                "live_sizing notional cap exceeded — only increase live_max_notional "
-                "after a full funding and risk review, or choose a lower-priced symbol."
+                "live_sizing_mode=notional requires live_order_notional_override > 0 — "
+                "set a positive value in config."
             )
-        elif "entry_price missing" in detail.lower():
+        elif "entry_price" in detail and ("missing" in detail or "fail closed" in detail):
             actions.append(
-                "live_sizing failed: entry_price missing from candidate metadata. "
+                "live_sizing failed: entry_price missing or <= 0 in candidate metadata. "
                 "Ensure the strategy populates metadata['entry_price'] before sizing checks."
+            )
+        elif "notional" in detail:
+            cap_field = "live_max_order_notional" if sizing_mode == "notional" else "live_max_notional"
+            actions.append(
+                f"live_sizing notional cap exceeded — only increase {cap_field} "
+                "after a full funding and risk review, or choose a lower-priced symbol."
             )
 
     # Zero buying power / portfolio value

@@ -116,72 +116,131 @@ def _get_entry_price(intent: Any) -> float | None:
         return None
 
 
-def _sizing_params(cfg: Any) -> tuple[float, float | None, float | None]:
-    """Return (live_max_quantity, live_max_notional, live_quantity_override) from cfg."""
+def _sizing_params(cfg: Any) -> tuple:
+    """Return sizing parameters from cfg as a 6-tuple.
+
+    Returns (mode, max_qty, max_not, override, notional_override, max_order_not)
+    where mode is "quantity" or "notional".
+    """
     ex = cfg.execution
-    max_qty  = float(getattr(ex, "live_max_quantity",      1.0))
-    max_not  = getattr(ex, "live_max_notional",  500.0)
-    override = getattr(ex, "live_quantity_override", 1.0)
-    if max_not  is not None: max_not  = float(max_not)
-    if override is not None: override = float(override)
-    return max_qty, max_not, override
+    mode              = str(getattr(ex, "live_sizing_mode",              "quantity"))
+    max_qty           = float(getattr(ex, "live_max_quantity",            1.0))
+    max_not           = getattr(ex, "live_max_notional",          500.0)
+    override          = getattr(ex, "live_quantity_override",      1.0)
+    notional_override = getattr(ex, "live_order_notional_override", None)
+    max_order_not     = float(getattr(ex, "live_max_order_notional",     100.0))
+    if max_not           is not None: max_not           = float(max_not)
+    if override          is not None: override          = float(override)
+    if notional_override is not None: notional_override = float(notional_override)
+    return mode, max_qty, max_not, override, notional_override, max_order_not
 
 
 def _size_candidate(intent: Any, cfg: Any) -> dict[str, Any]:
-    """Compute sizing for one candidate intent; returns a CSV-ready row dict."""
-    max_qty, max_not, override = _sizing_params(cfg)
+    """Compute sizing for one candidate intent; returns a CSV-ready row dict.
 
-    original_qty  = float(getattr(intent, "quantity", 1.0))
-    effective_qty = override if override is not None else original_qty
-    entry_price   = _get_entry_price(intent)
-    estimated_notional: float | None = None
+    Supports two modes controlled by cfg.execution.live_sizing_mode:
+      "quantity" (default) — existing behaviour: quantity-based sizing.
+      "notional"           — notional-based sizing via live_order_notional_override.
+    """
+    mode, max_qty, max_not, override, notional_override, max_order_not = _sizing_params(cfg)
 
+    original_qty = float(getattr(intent, "quantity", 1.0))
+    entry_price  = _get_entry_price(intent)
     issues: list[str] = []
 
-    if effective_qty > max_qty:
-        issues.append(f"effective_quantity={effective_qty} > live_max_quantity={max_qty}")
+    effective_qty:      float | None
+    effective_notional: float | None
+    estimated_notional: float | None
 
-    if max_not is not None:
-        if entry_price is None:
-            issues.append(f"live_max_notional={max_not} set but entry_price missing — fail closed")
+    if mode == "notional":
+        if notional_override is None or notional_override <= 0:
+            issues.append(
+                f"live_sizing_mode=notional requires live_order_notional_override > 0 "
+                f"(got {notional_override})"
+            )
+            effective_notional = None
+            estimated_notional = None
+            effective_qty      = None
         else:
-            estimated_notional = effective_qty * entry_price
-            if estimated_notional > max_not:
-                issues.append(
-                    f"estimated_notional={estimated_notional:.2f} > live_max_notional={max_not}"
-                )
+            effective_notional = notional_override
+            estimated_notional = effective_notional
 
-    if entry_price is not None and max_not is None:
-        estimated_notional = effective_qty * entry_price
+            if effective_notional > max_order_not:
+                issues.append(
+                    f"effective_notional={effective_notional:.2f} > "
+                    f"live_max_order_notional={max_order_not}"
+                )
+            if max_not is not None and effective_notional > max_not:
+                issues.append(
+                    f"effective_notional={effective_notional:.2f} > live_max_notional={max_not}"
+                )
+            if entry_price is None or entry_price <= 0:
+                issues.append(
+                    f"notional mode requires entry_price > 0 (got {entry_price}) — fail closed"
+                )
+                effective_qty = None
+            else:
+                effective_qty = effective_notional / entry_price
+    else:
+        # quantity mode — existing behaviour
+        effective_qty      = override if override is not None else original_qty
+        estimated_notional = None
+
+        if effective_qty > max_qty:
+            issues.append(f"effective_quantity={effective_qty} > live_max_quantity={max_qty}")
+
+        if max_not is not None:
+            if entry_price is None:
+                issues.append(
+                    f"live_max_notional={max_not} set but entry_price missing — fail closed"
+                )
+            else:
+                estimated_notional = effective_qty * entry_price
+                if estimated_notional > max_not:
+                    issues.append(
+                        f"estimated_notional={estimated_notional:.2f} > live_max_notional={max_not}"
+                    )
+
+        if entry_price is not None and max_not is None:
+            estimated_notional = effective_qty * entry_price
+
+        effective_notional = estimated_notional  # alias in quantity mode
 
     cid = getattr(intent, "client_order_id", None)
 
     return {
-        "client_order_id":   str(cid) if cid is not None else "",
-        "symbol":            str(getattr(intent, "symbol", "")),
-        "side":              str(getattr(intent, "side", "")),
-        "order_type":        str(getattr(intent, "order_type", "")),
-        "original_quantity": original_qty,
-        "effective_quantity": effective_qty,
-        "entry_price":       entry_price,
-        "estimated_notional": estimated_notional,
-        "live_max_quantity": max_qty,
-        "live_max_notional": max_not,
-        "sizing_status":     "FAIL" if issues else "PASS",
-        "sizing_reason":     "; ".join(issues) if issues else "within limits",
+        "client_order_id":        str(cid) if cid is not None else "",
+        "symbol":                 str(getattr(intent, "symbol", "")),
+        "side":                   str(getattr(intent, "side", "")),
+        "order_type":             str(getattr(intent, "order_type", "")),
+        "live_sizing_mode":       mode,
+        "original_quantity":      original_qty,
+        "effective_quantity":     effective_qty,
+        "entry_price":            entry_price,
+        "effective_notional":     effective_notional,
+        "estimated_notional":     estimated_notional,   # backward-compat alias
+        "live_max_quantity":      max_qty,
+        "live_max_notional":      max_not,
+        "live_max_order_notional": max_order_not,
+        "sizing_status":          "FAIL" if issues else "PASS",
+        "sizing_reason":          "; ".join(issues) if issues else "within limits",
     }
 
 
 def check_live_sizing(intents: list, cfg: Any) -> dict[str, Any]:
     """Evaluate hypothetical live order sizing against configured limits.
 
-    Computes effective_quantity = live_quantity_override (if set) else
-    original_quantity, then checks against live_max_quantity and
+    In "quantity" mode (default): computes effective_quantity = live_quantity_override
+    (if set) else original_quantity, then checks against live_max_quantity and
     live_max_notional.
+
+    In "notional" mode: uses live_order_notional_override as the notional, checks
+    against live_max_order_notional and live_max_notional, estimates effective_quantity
+    = effective_notional / entry_price; fails closed if entry_price missing or <= 0.
 
     Returns PASS or FAIL with sizing detail fields (from the first candidate).
     """
-    max_qty, max_not, override = _sizing_params(cfg)
+    mode, max_qty, max_not, override, notional_override, max_order_not = _sizing_params(cfg)
 
     all_issues: list[str] = []
     for intent in intents:
@@ -191,24 +250,30 @@ def check_live_sizing(intents: list, cfg: Any) -> dict[str, Any]:
 
     first_row = _size_candidate(intents[0], cfg) if intents else {}
 
-    original_qty       = first_row.get("original_quantity",  0.0)
-    effective_qty      = first_row.get("effective_quantity",  0.0)
+    original_qty       = first_row.get("original_quantity",   0.0)
+    effective_qty      = first_row.get("effective_quantity")
     entry_price        = first_row.get("entry_price")
     estimated_notional = first_row.get("estimated_notional")
+    effective_notional = first_row.get("effective_notional")
 
     extra = {
-        "original_quantity":   original_qty,
-        "effective_quantity":  effective_qty,
-        "entry_price":         entry_price,
-        "estimated_notional":  estimated_notional,
-        "live_max_quantity":   max_qty,
-        "live_max_notional":   max_not,
+        "live_sizing_mode":       mode,
+        "original_quantity":      original_qty,
+        "effective_quantity":     effective_qty,
+        "entry_price":            entry_price,
+        "effective_notional":     effective_notional,
+        "estimated_notional":     estimated_notional,   # backward-compat alias
+        "live_max_quantity":      max_qty,
+        "live_max_notional":      max_not,
+        "live_max_order_notional": max_order_not,
     }
 
     detail = (
-        f"original_quantity={original_qty} effective_quantity={effective_qty} "
-        f"entry_price={entry_price} estimated_notional={estimated_notional} "
-        f"live_max_quantity={max_qty} live_max_notional={max_not}"
+        f"live_sizing_mode={mode} original_quantity={original_qty} "
+        f"effective_quantity={effective_qty} entry_price={entry_price} "
+        f"effective_notional={effective_notional} estimated_notional={estimated_notional} "
+        f"live_max_quantity={max_qty} live_max_notional={max_not} "
+        f"live_max_order_notional={max_order_not}"
     )
 
     if all_issues:
@@ -352,8 +417,10 @@ def check_live_orders(client: Any, symbol: str) -> dict[str, Any]:
 
 _CSV_COLUMNS = [
     "client_order_id", "symbol", "side", "order_type",
+    "live_sizing_mode",
     "original_quantity", "effective_quantity", "entry_price",
-    "estimated_notional", "live_max_quantity", "live_max_notional",
+    "effective_notional", "estimated_notional",
+    "live_max_quantity", "live_max_notional", "live_max_order_notional",
     "sizing_status", "sizing_reason",
 ]
 
@@ -395,8 +462,10 @@ def write_report(
         "candidate_count":        _field("candidates",    "candidate_count", 0),
         "sizing_summary":         {
             k: v for k, v in by_label.get("live_sizing", {}).items()
-            if k in ("status", "detail", "original_quantity", "effective_quantity",
-                     "entry_price", "estimated_notional", "live_max_quantity", "live_max_notional")
+            if k in ("status", "detail", "live_sizing_mode",
+                     "original_quantity", "effective_quantity",
+                     "entry_price", "effective_notional", "estimated_notional",
+                     "live_max_quantity", "live_max_notional", "live_max_order_notional")
         } if "live_sizing" in by_label else None,
         "checks": [
             {k: v for k, v in c.items() if k != "rows"}
@@ -437,12 +506,15 @@ def print_report(
         if c["label"] == "candidates":
             print(f"  candidate_count        : {c.get('candidate_count', '?')}")
         if c["label"] == "live_sizing":
+            print(f"  live_sizing_mode       : {c.get('live_sizing_mode', '?')}")
             print(f"  original_quantity      : {c.get('original_quantity', '?')}")
             print(f"  effective_quantity     : {c.get('effective_quantity', '?')}")
             print(f"  entry_price            : {c.get('entry_price', '?')}")
+            print(f"  effective_notional     : {c.get('effective_notional', '?')}")
             print(f"  estimated_notional     : {c.get('estimated_notional', '?')}")
             print(f"  live_max_quantity      : {c.get('live_max_quantity', '?')}")
             print(f"  live_max_notional      : {c.get('live_max_notional', '?')}")
+            print(f"  live_max_order_notional: {c.get('live_max_order_notional', '?')}")
         if c["label"] == "live_account" and c["status"] != "FAIL":
             print(f"  account_status         : {c.get('account_status', '?')}")
             print(f"  trading_blocked        : {c.get('trading_blocked', '?')}")
