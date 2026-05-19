@@ -51,3 +51,16 @@ execution:
   paper_preview_only: true          # Phase 1: generate candidates only — no orders submitted
   # paper_selected_client_order_id: "BT-YYYYMMDDHHMMSS-SPY"  # uncomment for Phase 2
   # paper_order_quantity_override: 1  # must be exactly 1 when set
+
+  # Conservative ETF universe for live shadow symbol screening.
+  # Used by: python -m src.tools.live_shadow_screen_symbols (when --symbols is omitted)
+  live_shadow_screen_symbols:
+    - SPY   # S&P 500
+    - QQQ   # Nasdaq-100
+    - IWM   # Russell 2000
+    - DIA   # Dow Jones
+    - XLF   # Financials
+    - XLE   # Energy
+    - XLV   # Health Care
+    - TLT   # 20+ Year Treasury
+    - GLD   # Gold

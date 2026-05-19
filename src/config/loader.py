@@ -80,6 +80,7 @@ class ExecutionConfig:
     live_max_quantity:                       float        = 1.0
     live_max_notional:                       float | None = 500.0
     live_quantity_override:                  float | None = 1.0
+    live_shadow_screen_symbols:              list[str]    = field(default_factory=lambda: ["SPY", "QQQ", "IWM", "DIA"])
 
 
 @dataclass
@@ -97,6 +98,22 @@ class AppConfig:
     risk: RiskConfig
     logging: LoggingConfig
     execution: ExecutionConfig = field(default_factory=ExecutionConfig)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _normalize_symbol_list(raw: list) -> list[str]:
+    """Uppercase, strip, deduplicate preserving order."""
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in raw:
+        s = str(item).strip().upper()
+        if s and s not in seen:
+            seen.add(s)
+            result.append(s)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +305,7 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
         live_max_quantity=float(ex.get("live_max_quantity", 1.0)),
         live_max_notional=float(ex["live_max_notional"]) if "live_max_notional" in ex and ex["live_max_notional"] is not None else (None if "live_max_notional" in ex else 500.0),
         live_quantity_override=float(ex["live_quantity_override"]) if "live_quantity_override" in ex and ex["live_quantity_override"] is not None else (None if "live_quantity_override" in ex else 1.0),
+        live_shadow_screen_symbols=_normalize_symbol_list(ex["live_shadow_screen_symbols"]) if "live_shadow_screen_symbols" in ex else ["SPY", "QQQ", "IWM", "DIA"],
     )
 
     app_cfg = AppConfig(

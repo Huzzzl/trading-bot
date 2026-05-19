@@ -57,6 +57,18 @@ from src.tools.paper_status import check_config
 # Account reader (one-shot for all symbols)
 # ---------------------------------------------------------------------------
 
+def _normalize_symbols(raw: list) -> list[str]:
+    """Uppercase, strip, deduplicate preserving order."""
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in raw:
+        s = str(item).strip().upper()
+        if s and s not in seen:
+            seen.add(s)
+            result.append(s)
+    return result
+
+
 def _is_zero(value: Any) -> bool:
     try:
         return float(value) == 0.0
@@ -335,8 +347,9 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--config",     required=True, help="Path to settings YAML")
     parser.add_argument("--output-dir", required=True, help="Output directory")
     parser.add_argument(
-        "--symbols", required=True,
-        help="Comma-separated symbols to screen (e.g. SPY,QQQ,IWM)",
+        "--symbols", default=None,
+        help="Comma-separated symbols to screen (e.g. SPY,QQQ,IWM). "
+             "Overrides execution.live_shadow_screen_symbols from config.",
     )
     parser.add_argument(
         "--write-report", action="store_true", default=False,
@@ -344,7 +357,6 @@ def main(argv: list[str] | None = None) -> None:
     )
     args = parser.parse_args(argv)
 
-    symbols    = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -354,7 +366,18 @@ def main(argv: list[str] | None = None) -> None:
         print(f"\n[FAIL] config: {config_result['detail']}")
         sys.exit(1)
 
-    # --- 2. Credentials ---
+    # --- 2. Resolve symbol list ---
+    if args.symbols is not None:
+        symbols = _normalize_symbols(args.symbols.split(","))
+    else:
+        symbols = _normalize_symbols(cfg.execution.live_shadow_screen_symbols)
+
+    if not symbols:
+        print("\n[FAIL] symbol list is empty — pass --symbols or set "
+              "execution.live_shadow_screen_symbols in config")
+        sys.exit(1)
+
+    # --- 3. Credentials ---
     cred_result, creds = check_credentials()
     creds_ok = cred_result["status"] == "PASS"
     if not creds_ok:
@@ -363,7 +386,7 @@ def main(argv: list[str] | None = None) -> None:
         print(f"\n  RESULT: {overall}")
         sys.exit(1)
 
-    # --- 3. Live client + account ---
+    # --- 4. Live client + account ---
     try:
         client = _make_live_client(*creds)
     except Exception as exc:
@@ -372,7 +395,7 @@ def main(argv: list[str] | None = None) -> None:
 
     account = read_account(client)
 
-    # --- 4. Per-symbol screening ---
+    # --- 5. Per-symbol screening ---
     symbol_results: list[dict] = []
     for symbol in symbols:
         try:
@@ -382,13 +405,13 @@ def main(argv: list[str] | None = None) -> None:
         result = screen_symbol(symbol, intents, account, cfg)
         symbol_results.append(result)
 
-    # --- 5. Overall result ---
+    # --- 6. Overall result ---
     overall = compute_overall(creds_ok, account, symbol_results)
 
-    # --- 6. Print ---
+    # --- 7. Print ---
     print_screen_report(account, symbol_results, symbols, overall)
 
-    # --- 7. Optional artifacts ---
+    # --- 8. Optional artifacts ---
     if args.write_report:
         json_path, csv_path = write_screen_report(
             output_dir, symbols, account, symbol_results, overall,

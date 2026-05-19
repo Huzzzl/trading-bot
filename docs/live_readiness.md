@@ -292,23 +292,56 @@ symbols from a candidate list are currently safe under live sizing limits.
 - Never writes a ledger row.
 - Never reads paper credentials (`ALPACA_API_KEY` / `ALPACA_SECRET_KEY`).
 
+### Symbol universe
+
+Symbols are resolved in this order:
+
+1. `--symbols` CLI flag (comma-separated) — takes precedence when provided.
+2. `execution.live_shadow_screen_symbols` in the config YAML — used when `--symbols` is omitted.
+3. Default: `["SPY", "QQQ", "IWM", "DIA"]` — used when the field is absent from config.
+
+In all cases symbols are uppercased, whitespace-stripped, and deduplicated (preserving
+order). The run fails immediately if the resolved list is empty.
+
+Configure the universe in your YAML:
+
+```yaml
+execution:
+  live_shadow_screen_symbols:
+    - SPY   # S&P 500
+    - QQQ   # Nasdaq-100
+    - IWM   # Russell 2000
+    - DIA   # Dow Jones
+    - XLF   # Financials
+    - XLE   # Energy
+    - XLV   # Health Care
+    - TLT   # 20+ Year Treasury
+    - GLD   # Gold
+```
+
 ### Usage
 
 ```bash
 export ALPACA_LIVE_API_KEY="your-live-api-key"
 export ALPACA_LIVE_SECRET_KEY="your-live-secret-key"
 
+# Use symbol universe from config
 python -m src.tools.live_shadow_screen_symbols \
-    --config    config/settings.paper.local.yaml \
+    --config     config/settings.paper.local.yaml \
+    --output-dir output/live_shadow_symbol_screen
+
+# Override symbol universe from CLI
+python -m src.tools.live_shadow_screen_symbols \
+    --config     config/settings.paper.local.yaml \
     --output-dir output/live_shadow_symbol_screen \
-    --symbols   SPY,QQQ,IWM,DIA
+    --symbols    SPY,QQQ,IWM,DIA
 ```
 
 Optional flags:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--symbols` | (required) | Comma-separated symbols to screen, e.g. `SPY,QQQ,IWM` |
+| `--symbols` | (omit to use config) | Comma-separated symbols to screen — overrides `execution.live_shadow_screen_symbols` |
 | `--write-report` | off | Write JSON report and CSV summary to `--output-dir` |
 
 ### Per-symbol result
