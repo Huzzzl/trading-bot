@@ -101,6 +101,18 @@ def _get(obj: Any, key: str, default: Any = None) -> Any:
     return getattr(obj, key, default)
 
 
+def _normalize_enum_value(value: Any) -> str:
+    """Normalize an enum-like value to its bare lowercase name.
+
+    alpaca-py returns status as an enum whose str() is e.g. "AccountStatus.ACTIVE".
+    This strips the class prefix so comparisons against "active" work correctly.
+    """
+    s = str(value).strip()
+    if "." in s:
+        s = s.rsplit(".", 1)[-1]
+    return s.lower()
+
+
 def _str(obj: Any, key: str, default: str = "") -> str:
     v = _get(obj, key, default)
     return str(v).strip() if v is not None else default
@@ -140,7 +152,7 @@ def check_account(client: Any) -> dict[str, Any]:
     except Exception as exc:
         return _result("account", "FAIL", f"get_account() failed — {exc}")
 
-    status          = _str(raw, "status", "unknown").lower()
+    status          = _normalize_enum_value(_get(raw, "status", "unknown"))
     trading_blocked = _bool(raw, "trading_blocked")
     account_blocked = _bool(raw, "account_blocked")
     buying_power    = _str(raw, "buying_power", "unknown")

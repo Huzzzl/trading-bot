@@ -66,6 +66,38 @@ def _make_client(
 
 
 # ---------------------------------------------------------------------------
+# 0. _normalize_enum_value
+# ---------------------------------------------------------------------------
+
+class TestNormalizeEnumValue:
+    def test_plain_string_active(self):
+        from src.tools.live_account_check import _normalize_enum_value
+        assert _normalize_enum_value("active") == "active"
+
+    def test_plain_string_uppercase(self):
+        from src.tools.live_account_check import _normalize_enum_value
+        assert _normalize_enum_value("ACTIVE") == "active"
+
+    def test_enum_str_repr(self):
+        from src.tools.live_account_check import _normalize_enum_value
+        assert _normalize_enum_value("AccountStatus.ACTIVE") == "active"
+
+    def test_enum_object_whose_str_is_prefixed(self):
+        from src.tools.live_account_check import _normalize_enum_value
+        mock_enum = MagicMock()
+        mock_enum.__str__ = lambda self: "AccountStatus.ACTIVE"
+        assert _normalize_enum_value(mock_enum) == "active"
+
+    def test_restricted_enum_str(self):
+        from src.tools.live_account_check import _normalize_enum_value
+        assert _normalize_enum_value("AccountStatus.RESTRICTED") == "restricted"
+
+    def test_no_dot_passes_through(self):
+        from src.tools.live_account_check import _normalize_enum_value
+        assert _normalize_enum_value("restricted") == "restricted"
+
+
+# ---------------------------------------------------------------------------
 # 1. _resolve_live_credentials
 # ---------------------------------------------------------------------------
 
@@ -231,6 +263,38 @@ class TestCheckAccount:
         check_account(client)
         client.submit_order.assert_not_called()
         client.cancel_order.assert_not_called()
+
+    def test_enum_status_active_passes(self):
+        """account.status as enum object whose str() is 'AccountStatus.ACTIVE' must PASS."""
+        from src.tools.live_account_check import check_account
+        acct = _mock_account()
+        mock_enum = MagicMock()
+        mock_enum.__str__ = lambda self: "AccountStatus.ACTIVE"
+        acct.status = mock_enum
+        result = check_account(_make_client(account=acct))
+        assert result["status"] == "PASS"
+        assert result["account_status"] == "active"
+
+    def test_enum_status_restricted_fails(self):
+        """account.status as enum 'AccountStatus.RESTRICTED' must FAIL."""
+        from src.tools.live_account_check import check_account
+        acct = _mock_account()
+        mock_enum = MagicMock()
+        mock_enum.__str__ = lambda self: "AccountStatus.RESTRICTED"
+        acct.status = mock_enum
+        result = check_account(_make_client(account=acct))
+        assert result["status"] == "FAIL"
+        assert result["account_status"] == "restricted"
+
+    def test_enum_status_active_blocked_still_fails(self):
+        """ACTIVE status with trading_blocked=True must still FAIL."""
+        from src.tools.live_account_check import check_account
+        acct = _mock_account(trading_blocked=True)
+        mock_enum = MagicMock()
+        mock_enum.__str__ = lambda self: "AccountStatus.ACTIVE"
+        acct.status = mock_enum
+        result = check_account(_make_client(account=acct))
+        assert result["status"] == "FAIL"
 
 
 # ---------------------------------------------------------------------------
