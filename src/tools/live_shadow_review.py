@@ -65,22 +65,67 @@ def parse_candidates(path: Path) -> list[dict[str, str]]:
 # Analysis
 # ---------------------------------------------------------------------------
 
-def find_blockers(report: dict[str, Any], candidates: list[dict]) -> list[str]:
-    """Return a list of human-readable blocker strings."""
-    blockers: list[str] = []
+def find_blockers(report: dict[str, Any], candidates: list[dict]) -> list[dict[str, Any]]:
+    """Return a list of blocker dicts with a ``message`` and optional ``samples``.
 
+    Candidate sizing failures are aggregated into a single compact entry with
+    fail_count, min/max estimated_notional, and up to 3 sample rows.
+    The raw ``live_sizing`` check detail is suppressed when candidate-level
+    data is available (to avoid repeating the same information verbosely).
+    """
+    blockers: list[dict[str, Any]] = []
+
+    checks_by_label = {c.get("label", ""): c for c in report.get("checks", [])}
+    fail_rows = [r for r in candidates if r.get("sizing_status") == "FAIL"]
+
+    # Check-level failures — skip live_sizing if we'll handle it via candidate aggregate
+    skip_live_sizing = bool(fail_rows)
     for check in report.get("checks", []):
-        if check.get("status") == "FAIL":
-            label  = check.get("label", "?")
+        if check.get("status") != "FAIL":
+            continue
+        label = check.get("label", "?")
+        if label == "live_sizing" and skip_live_sizing:
+            continue
+        if label == "live_sizing":
+            # Truncate at the " — " boundary so only the summary half is shown
             detail = check.get("detail", "")
-            blockers.append(f"[{label}] {detail}" if detail else f"[{label}] check failed")
+            summary_part = detail.split(" — ")[0] if " — " in detail else detail
+            msg = f"[live_sizing] {summary_part}" if summary_part else "[live_sizing] check failed"
+        else:
+            detail = check.get("detail", "")
+            msg = f"[{label}] {detail}" if detail else f"[{label}] check failed"
+        blockers.append({"message": msg, "samples": []})
 
-    fail_cands = [r for r in candidates if r.get("sizing_status") == "FAIL"]
-    if fail_cands:
-        reasons = "; ".join(
-            r.get("sizing_reason", "sizing failed") for r in fail_cands
-        )
-        blockers.append(f"[candidate sizing] {len(fail_cands)} candidate(s) failed — {reasons}")
+    # Candidate sizing aggregate
+    if fail_rows:
+        try:
+            notionals = [
+                float(r["estimated_notional"])
+                for r in fail_rows
+                if r.get("estimated_notional") not in (None, "", "None")
+            ]
+        except (ValueError, TypeError):
+            notionals = []
+
+        live_max_notional = fail_rows[0].get("live_max_notional", "?")
+
+        if notionals:
+            msg = (
+                f"[live_sizing] {len(fail_rows)} candidate(s) exceed "
+                f"live_max_notional={live_max_notional}; "
+                f"estimated_notional range={min(notionals):.2f}..{max(notionals):.2f}"
+            )
+        else:
+            msg = (
+                f"[live_sizing] {len(fail_rows)} candidate(s) failed sizing — "
+                + "; ".join(r.get("sizing_reason", "?") for r in fail_rows[:3])
+            )
+
+        samples = [
+            f"{r.get('client_order_id', '?')} {r.get('sizing_reason', '')}".strip()
+            for r in fail_rows[:3]
+        ]
+        blockers.append({"message": msg, "samples": samples})
 
     return blockers
 
@@ -226,7 +271,11 @@ def print_summary(summary: dict[str, Any]) -> None:
     print("  Blockers:")
     if summary["blockers"]:
         for b in summary["blockers"]:
-            print(f"    ! {b}")
+            print(f"    ! {b['message']}")
+            if b.get("samples"):
+                print("    ! sample failures:")
+                for s in b["samples"]:
+                    print(f"        {s}")
     else:
         print("    (none)")
 

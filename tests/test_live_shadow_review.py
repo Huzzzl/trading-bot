@@ -179,14 +179,15 @@ class TestAnalysis:
         checks = [{"label": "live_account", "status": "FAIL", "detail": "inactive"}]
         blockers = find_blockers(self._report(checks), [])
         assert len(blockers) == 1
-        assert "live_account" in blockers[0]
+        assert "live_account" in blockers[0]["message"]
 
     def test_candidate_fail_creates_blocker(self):
         from src.tools.live_shadow_review import find_blockers
         report = self._report([])
-        cands = [{"sizing_status": "FAIL", "sizing_reason": "notional exceeded"}]
+        cands = [{"sizing_status": "FAIL", "sizing_reason": "notional exceeded",
+                  "estimated_notional": "600", "live_max_notional": "500"}]
         blockers = find_blockers(report, cands)
-        assert any("candidate sizing" in b for b in blockers)
+        assert any("live_sizing" in b["message"] for b in blockers)
 
     def test_warn_check_not_a_blocker(self):
         from src.tools.live_shadow_review import find_blockers
@@ -313,10 +314,11 @@ class TestBuildSummary:
                    "detail": "estimated_notional=600 > live_max_notional=500"}]
         rp = _write_report(tmp_path / "r.json", final_status="FAIL", checks=checks)
         cp = _write_candidates(tmp_path / "c.csv",
-                               rows=[{"sizing_status": "FAIL", "sizing_reason": "notional exceeded"}])
+                               rows=[{"sizing_status": "FAIL", "sizing_reason": "notional exceeded",
+                                      "estimated_notional": "600", "live_max_notional": "500"}])
         summary = build_summary(parse_report(rp), parse_candidates(cp))
         assert len(summary["blockers"]) > 0
-        assert any("notional" in b.lower() for b in summary["blockers"])
+        assert any("notional" in b["message"].lower() for b in summary["blockers"])
 
     def test_zero_buying_power_in_warnings(self, tmp_path):
         from src.tools.live_shadow_review import build_summary, parse_report, parse_candidates
@@ -327,6 +329,131 @@ class TestBuildSummary:
         cp = _write_candidates(tmp_path / "c.csv")
         summary = build_summary(parse_report(rp), parse_candidates(cp))
         assert len(summary["warnings"]) > 0
+
+
+# ---------------------------------------------------------------------------
+# 4b. Blocker compaction
+# ---------------------------------------------------------------------------
+
+def _make_fail_rows(count: int, base_notional: float = 690.0,
+                    max_notional: str = "500.0") -> list[dict]:
+    """Generate *count* candidate sizing-fail rows with ascending notionals."""
+    rows = []
+    for i in range(count):
+        notional = base_notional + i * 5
+        rows.append({
+            "sizing_status":      "FAIL",
+            "sizing_reason":      f"estimated_notional={notional:.2f} > live_max_notional={max_notional}",
+            "estimated_notional": str(notional),
+            "live_max_notional":  max_notional,
+            "client_order_id":    f"BT-{i:04d}",
+            "symbol":             "SPY",
+            "side":               "buy",
+            "order_type":         "market",
+        })
+    return rows
+
+
+class TestBlockerCompaction:
+    def test_many_failures_produce_one_blocker(self):
+        from src.tools.live_shadow_review import find_blockers
+        report = {"checks": [], "candidate_count": 14,
+                  "position_for_symbol": False, "open_orders_for_symbol": False,
+                  "buying_power": "10000", "portfolio_value": "50000",
+                  "selected_symbol": "SPY", "final_status": "FAIL"}
+        blockers = find_blockers(report, _make_fail_rows(14))
+        sizing_blockers = [b for b in blockers if "live_sizing" in b["message"]]
+        assert len(sizing_blockers) == 1
+
+    def test_blocker_message_contains_fail_count(self):
+        from src.tools.live_shadow_review import find_blockers
+        report = {"checks": [], "candidate_count": 14,
+                  "position_for_symbol": False, "open_orders_for_symbol": False,
+                  "buying_power": "10000", "portfolio_value": "50000",
+                  "selected_symbol": "SPY", "final_status": "FAIL"}
+        blockers = find_blockers(report, _make_fail_rows(14))
+        sizing_msg = next(b["message"] for b in blockers if "live_sizing" in b["message"])
+        assert "14" in sizing_msg
+
+    def test_blocker_message_contains_min_max_notional(self):
+        from src.tools.live_shadow_review import find_blockers
+        report = {"checks": [], "candidate_count": 14,
+                  "position_for_symbol": False, "open_orders_for_symbol": False,
+                  "buying_power": "10000", "portfolio_value": "50000",
+                  "selected_symbol": "SPY", "final_status": "FAIL"}
+        rows = _make_fail_rows(14, base_notional=690.0)
+        blockers = find_blockers(report, rows)
+        sizing_msg = next(b["message"] for b in blockers if "live_sizing" in b["message"])
+        assert "690.00" in sizing_msg  # min
+        assert "755.00" in sizing_msg  # max = 690 + 13*5
+
+    def test_blocker_message_contains_live_max_notional(self):
+        from src.tools.live_shadow_review import find_blockers
+        report = {"checks": [], "candidate_count": 14,
+                  "position_for_symbol": False, "open_orders_for_symbol": False,
+                  "buying_power": "10000", "portfolio_value": "50000",
+                  "selected_symbol": "SPY", "final_status": "FAIL"}
+        blockers = find_blockers(report, _make_fail_rows(14, max_notional="500.0"))
+        sizing_msg = next(b["message"] for b in blockers if "live_sizing" in b["message"])
+        assert "500.0" in sizing_msg
+
+    def test_samples_capped_at_3(self):
+        from src.tools.live_shadow_review import find_blockers
+        report = {"checks": [], "candidate_count": 14,
+                  "position_for_symbol": False, "open_orders_for_symbol": False,
+                  "buying_power": "10000", "portfolio_value": "50000",
+                  "selected_symbol": "SPY", "final_status": "FAIL"}
+        blockers = find_blockers(report, _make_fail_rows(14))
+        sizing_blocker = next(b for b in blockers if "live_sizing" in b["message"])
+        assert len(sizing_blocker["samples"]) == 3
+
+    def test_samples_include_client_order_id(self):
+        from src.tools.live_shadow_review import find_blockers
+        report = {"checks": [], "candidate_count": 5,
+                  "position_for_symbol": False, "open_orders_for_symbol": False,
+                  "buying_power": "10000", "portfolio_value": "50000",
+                  "selected_symbol": "SPY", "final_status": "FAIL"}
+        blockers = find_blockers(report, _make_fail_rows(5))
+        sizing_blocker = next(b for b in blockers if "live_sizing" in b["message"])
+        assert any("BT-" in s for s in sizing_blocker["samples"])
+
+    def test_pass_candidates_produce_no_sizing_blocker(self):
+        from src.tools.live_shadow_review import find_blockers
+        report = {"checks": [], "candidate_count": 1,
+                  "position_for_symbol": False, "open_orders_for_symbol": False,
+                  "buying_power": "10000", "portfolio_value": "50000",
+                  "selected_symbol": "SPY", "final_status": "PASS"}
+        rows = [{"sizing_status": "PASS", "sizing_reason": "ok"}]
+        assert find_blockers(report, rows) == []
+
+    def test_output_contains_sample_failures_header(self, tmp_path, capsys):
+        """When candidates fail, terminal output shows 'sample failures' sub-header."""
+        checks = [{"label": "live_sizing", "status": "FAIL",
+                   "detail": "estimated_notional=700 > live_max_notional=500"}]
+        _run_main(tmp_path,
+                  report_kwargs={"final_status": "FAIL", "checks": checks},
+                  candidate_rows=_make_fail_rows(5))
+        out = capsys.readouterr().out
+        assert "sample failures" in out
+
+    def test_output_at_most_3_sample_lines(self, tmp_path, capsys):
+        """14 failing candidates must not produce more than 3 sample lines."""
+        checks = [{"label": "live_sizing", "status": "FAIL",
+                   "detail": "estimated_notional=700 > live_max_notional=500"}]
+        _run_main(tmp_path,
+                  report_kwargs={"final_status": "FAIL", "checks": checks},
+                  candidate_rows=_make_fail_rows(14))
+        out = capsys.readouterr().out
+        # Count indented sample lines (8 leading spaces)
+        sample_lines = [l for l in out.splitlines() if l.startswith("        BT-")]
+        assert len(sample_lines) <= 3
+
+    def test_pass_report_output_unchanged(self, tmp_path, capsys):
+        """A clean PASS run must still show (none) for blockers."""
+        _run_main(tmp_path)
+        out = capsys.readouterr().out
+        assert "(none)" in out
+        assert "RESULT: PASS" in out
 
 
 # ---------------------------------------------------------------------------
