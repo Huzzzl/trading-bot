@@ -1,0 +1,100 @@
+# Live Account Readiness Check
+
+Read-only tool to verify live Alpaca credentials and account health before any
+future live trading work.
+
+**This tool is strictly read-only. It never submits or cancels orders.**
+
+---
+
+## What it does
+
+1. Resolves live credentials from `ALPACA_LIVE_API_KEY` and `ALPACA_LIVE_SECRET_KEY`.
+2. Opens a live (non-paper) `TradingClient` connection (`paper=False`).
+3. Reads account status, buying power, portfolio value, open positions, and open orders.
+4. Prints a structured report and exits `0` (all PASS) or `1` (any WARN or FAIL).
+
+## What it never does
+
+- Never calls `submit_order` or `cancel_order`.
+- Never modifies positions, orders, or account state.
+- Never reads paper credentials (`ALPACA_API_KEY` / `ALPACA_SECRET_KEY`).
+- Never writes any file.
+
+---
+
+## This is NOT a live trading submission tool
+
+This tool exists solely to let you verify that your live account is accessible and
+in a healthy state. Running it will not place trades, will not affect your positions,
+and will not consume any of your daily order limits.
+
+Future live trading submission support (if ever added) would be a separate,
+explicitly gated tool — not an extension of this one.
+
+---
+
+## Usage
+
+```bash
+export ALPACA_LIVE_API_KEY="your-live-api-key"
+export ALPACA_LIVE_SECRET_KEY="your-live-secret-key"
+
+python -m src.tools.live_account_check
+```
+
+```powershell
+$env:ALPACA_LIVE_API_KEY    = "your-live-api-key"
+$env:ALPACA_LIVE_SECRET_KEY = "your-live-secret-key"
+
+python -m src.tools.live_account_check
+```
+
+Clear credentials from the shell when done:
+
+```bash
+unset ALPACA_LIVE_API_KEY
+unset ALPACA_LIVE_SECRET_KEY
+```
+
+```powershell
+Remove-Item Env:\ALPACA_LIVE_API_KEY    -ErrorAction SilentlyContinue
+Remove-Item Env:\ALPACA_LIVE_SECRET_KEY -ErrorAction SilentlyContinue
+```
+
+---
+
+## Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0`  | All checks PASS — account is active, unblocked, no open positions or orders |
+| `1`  | Any check WARN or FAIL — review the report before proceeding |
+
+---
+
+## Check summary
+
+| Check | PASS | WARN | FAIL |
+|-------|------|------|------|
+| `credentials` | Both env vars present and non-empty | — | Either var missing or empty |
+| `account` | Status `ACTIVE`, not blocked | — | Non-active status, trading/account blocked, or API error |
+| `positions` | No open positions | Open positions found | API error |
+| `orders` | No open orders | Open orders found | API error |
+
+WARN on positions or orders is informational — open positions on a live account
+are normal. Investigate before starting any automated trading to confirm the
+account is in the state you expect.
+
+---
+
+## Environment variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `ALPACA_LIVE_API_KEY` | Yes | Live (non-paper) Alpaca API key |
+| `ALPACA_LIVE_SECRET_KEY` | Yes | Live (non-paper) Alpaca secret key |
+| `ALPACA_LIVE_BASE_URL` | No | Override the default live endpoint URL |
+
+Paper credential variables (`ALPACA_API_KEY`, `ALPACA_SECRET_KEY`) are
+deliberately ignored by this tool.
