@@ -204,25 +204,110 @@ class TestComputeDecision:
         assert compute_decision({}) == "GO"
 
 
+class TestTrimBlocker:
+    def test_trims_at_dash_separator(self):
+        from src.tools.live_readiness_gate import _trim_blocker
+        raw = "status=active buying_power=0 — buying_power=0, portfolio_value=0"
+        assert _trim_blocker(raw) == "buying_power=0, portfolio_value=0"
+
+    def test_no_dash_returns_original(self):
+        from src.tools.live_readiness_gate import _trim_blocker
+        assert _trim_blocker("buying_power=0") == "buying_power=0"
+
+    def test_truncates_long_strings(self):
+        from src.tools.live_readiness_gate import _trim_blocker
+        long = "x" * 200
+        result = _trim_blocker(long)
+        assert len(result) <= 120
+        assert result.endswith("...")
+
+    def test_short_string_not_truncated(self):
+        from src.tools.live_readiness_gate import _trim_blocker
+        short = "some short blocker"
+        assert _trim_blocker(short) == short
+
+
 class TestCollectTopBlockers:
-    def test_collects_blockers_from_failing_stages(self):
-        from src.tools.live_readiness_gate import collect_top_blockers
-        results = {
-            "account_check":  {"blockers": ["buying_power=0"]},
-            "shadow_preflight": {"blockers": []},
+    def _results(self, **kw) -> dict:
+        base = {
+            "account_check":        {"blockers": []},
+            "shadow_preflight":     {"blockers": []},
+            "shadow_review":        {"blockers": []},
+            "symbol_screen":        {"blockers": []},
+            "symbol_screen_review": {"blockers": []},
         }
+        base.update(kw)
+        return base
+
+    def test_account_check_blocker_included(self):
+        from src.tools.live_readiness_gate import collect_top_blockers
+        results = self._results(account_check={"blockers": ["buying_power=0"]})
         blockers = collect_top_blockers(results)
         assert any("account_check" in b for b in blockers)
         assert any("buying_power=0" in b for b in blockers)
 
+    def test_account_check_blocker_trimmed_at_dash(self):
+        from src.tools.live_readiness_gate import collect_top_blockers
+        raw = "status=active buying_power=0 — buying_power=0, portfolio_value=0"
+        results = self._results(account_check={"blockers": [raw]})
+        blockers = collect_top_blockers(results)
+        assert any("buying_power=0, portfolio_value=0" in b for b in blockers)
+        assert not any("status=active" in b for b in blockers)
+
+    def test_shadow_review_preferred_over_shadow_preflight(self):
+        from src.tools.live_readiness_gate import collect_top_blockers
+        results = self._results(
+            shadow_preflight={"blockers": ["very verbose raw sizing detail A", "B"]},
+            shadow_review={"blockers": ["[live_sizing] compact summary"]},
+        )
+        blockers = collect_top_blockers(results)
+        assert any("shadow_review" in b for b in blockers)
+        assert not any("shadow_preflight" in b for b in blockers)
+        assert any("compact summary" in b for b in blockers)
+
+    def test_raw_shadow_preflight_used_when_review_has_no_blockers(self):
+        from src.tools.live_readiness_gate import collect_top_blockers
+        results = self._results(
+            shadow_preflight={"blockers": ["preflight blocker"]},
+            shadow_review={"blockers": []},
+        )
+        blockers = collect_top_blockers(results)
+        assert any("shadow_preflight" in b for b in blockers)
+        assert any("preflight blocker" in b for b in blockers)
+
+    def test_symbol_screen_review_preferred_over_symbol_screen(self):
+        from src.tools.live_readiness_gate import collect_top_blockers
+        results = self._results(
+            symbol_screen={"blockers": ["SPY: verbose per-symbol blocker A", "QQQ: verbose B"]},
+            symbol_screen_review={"blockers": ["No symbols currently suitable."]},
+        )
+        blockers = collect_top_blockers(results)
+        assert any("symbol_screen_review" in b for b in blockers)
+        assert not any("symbol_screen" in b and "symbol_screen_review" not in b
+                       for b in blockers)
+        assert any("No symbols currently suitable" in b for b in blockers)
+
+    def test_raw_symbol_screen_used_when_review_has_no_blockers(self):
+        from src.tools.live_readiness_gate import collect_top_blockers
+        results = self._results(
+            symbol_screen={"blockers": ["SPY: no candidates"]},
+            symbol_screen_review={"blockers": []},
+        )
+        blockers = collect_top_blockers(results)
+        assert any("symbol_screen" in b for b in blockers)
+
     def test_capped_at_five(self):
         from src.tools.live_readiness_gate import collect_top_blockers
-        results = {f"stage_{i}": {"blockers": [f"err {i}a", f"err {i}b"]} for i in range(10)}
+        results = self._results(
+            account_check={"blockers": ["acct error"]},
+            shadow_review={"blockers": ["r1", "r2"]},
+            symbol_screen_review={"blockers": ["s1", "s2"]},
+        )
         assert len(collect_top_blockers(results)) <= 5
 
     def test_skips_empty_blockers(self):
         from src.tools.live_readiness_gate import collect_top_blockers
-        results = {"a": {"blockers": ["", "real error"]}}
+        results = self._results(account_check={"blockers": ["", "real error"]})
         blockers = collect_top_blockers(results)
         assert not any(b.endswith("] ") for b in blockers)
 
