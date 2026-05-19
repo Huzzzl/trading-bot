@@ -98,3 +98,90 @@ account is in the state you expect.
 
 Paper credential variables (`ALPACA_API_KEY`, `ALPACA_SECRET_KEY`) are
 deliberately ignored by this tool.
+
+---
+
+## Live Shadow Preflight
+
+A second read-only step that combines a local strategy preview with a live
+account state check. Run this **after** `live_account_check` passes.
+
+**This tool is also strictly read-only. It never submits or cancels orders.**
+
+### What it does
+
+1. Loads config and runs the local backtest/strategy pipeline to generate
+   candidate order intents for the selected symbol (same data path as paper preview).
+2. Filters intents to buy+market orders for the selected symbol.
+3. Connects to the live account (`paper=False`) and reads account status,
+   buying power, open positions, and open orders.
+4. Reports whether a hypothetical live submit would be safe.
+
+### What it never does
+
+- Never calls `submit_order` or `cancel_order`.
+- Never writes a ledger row or any persistent artifact.
+- Never reads paper credentials (`ALPACA_API_KEY` / `ALPACA_SECRET_KEY`).
+
+### Usage
+
+```bash
+export ALPACA_LIVE_API_KEY="your-live-api-key"
+export ALPACA_LIVE_SECRET_KEY="your-live-secret-key"
+
+python -m src.tools.live_shadow_preflight \
+    --config config/settings.paper.local.yaml \
+    --output-dir output/live_shadow_preflight
+```
+
+```powershell
+$env:ALPACA_LIVE_API_KEY    = "your-live-api-key"
+$env:ALPACA_LIVE_SECRET_KEY = "your-live-secret-key"
+
+python -m src.tools.live_shadow_preflight `
+    --config config/settings.paper.local.yaml `
+    --output-dir output/live_shadow_preflight
+```
+
+Optional `--symbol` flag (default `SPY`):
+
+```bash
+python -m src.tools.live_shadow_preflight \
+    --config config/settings.paper.local.yaml \
+    --output-dir output/live_shadow_preflight \
+    --symbol SPY
+```
+
+### Checks performed
+
+| Check | PASS | WARN | FAIL |
+|-------|------|------|------|
+| `config` | Config loads and validates | — | Load or validation error |
+| `candidates` | ≥1 buy+market candidate for symbol | Candidate quantity > 1 | No candidates |
+| `credentials` | Both `ALPACA_LIVE_*` vars present | — | Either missing or empty |
+| `live_account` | Status `ACTIVE`, not blocked | buying_power or portfolio_value = 0 | Inactive, blocked, or API error |
+| `live_position` | No open position for symbol | — | Existing live position for symbol |
+| `live_orders` | No open orders for symbol | — | Existing live open order for symbol |
+
+### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | All checks PASS — safe to proceed to a hypothetical live submit |
+| `1` | Any check WARN or FAIL — review before proceeding |
+
+### Recommended pre-flight sequence
+
+Run both tools in order before considering any live trading work:
+
+```bash
+# Step 1: verify credentials and account health
+python -m src.tools.live_account_check
+
+# Step 2: verify strategy signal + live account state together
+python -m src.tools.live_shadow_preflight \
+    --config config/settings.paper.local.yaml \
+    --output-dir output/live_shadow_preflight
+```
+
+Stop at any FAIL result. A WARN result requires manual review before proceeding.
