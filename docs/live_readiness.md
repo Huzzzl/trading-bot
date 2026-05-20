@@ -955,3 +955,91 @@ is formally reviewed and approved.
 > No live order submission path exists in this codebase.
 > Adding one requires its own dedicated PR, its own safeguards,
 > and explicit human sign-off as listed in the Prerequisites section.
+
+---
+
+## Live Pre-Submit Checklist (`live_pre_submit_checklist`)
+
+### What it does
+
+Runs all five live-readiness and dry-run audit checks in a single command
+and produces a final operator checklist.  This is the **last read-only
+gate** before any future live submit design begins.
+
+```bash
+export ALPACA_LIVE_API_KEY="your-live-api-key"
+export ALPACA_LIVE_SECRET_KEY="your-live-secret-key"
+
+python -m src.tools.live_pre_submit_checklist \
+    --config     config/settings.paper.local.yaml \
+    --symbol     SPY \
+    --output-dir output/live_pre_submit_checklist
+```
+
+### Checks (run in order)
+
+| # | Check | Credentials needed | Notes |
+|---|-------|--------------------|-------|
+| 1 | `live_safety_status` | No | Config-only; all locks must be engaged |
+| 2 | `live_readiness_gate` | Yes (live) | Full GO/NO-GO gate across 5 stages |
+| 3 | `live_dry_run_intents` | Yes (live) | Dry-run intent audit; GO→PASS, NO-GO→FAIL |
+| 4 | `live_dry_run_review` | No | Reads step-3 artifacts; checks safety flags |
+| 5 | `live_ledger_verify` | No | Schema check; PASS if ledger absent |
+
+### Final result
+
+| Result | Condition |
+|--------|-----------|
+| `READY` | All five checks PASS |
+| `NOT READY` | Any check is WARN or FAIL |
+
+Both results write `live_pre_submit_checklist.json`.
+`NOT READY` exits 1.  `READY` exits 0.
+
+### Output format
+
+```
+=== Live Pre-Submit Checklist ===
+  live_safety_status      : PASS/WARN/FAIL
+  live_readiness_gate     : PASS/FAIL
+  live_dry_run_intents    : PASS/FAIL
+  live_dry_run_review     : PASS/FAIL
+  live_ledger_verify      : PASS/WARN/FAIL
+
+  final_result: READY / NOT READY
+==================================
+```
+
+### Artifact written
+
+| Artifact | Path |
+|----------|------|
+| Checklist report | `output/live_pre_submit_checklist/live_pre_submit_checklist.json` |
+| Gate sub-artifacts | `output/live_pre_submit_checklist/live_readiness_gate/` |
+| Intent sub-artifacts | `output/live_pre_submit_checklist/live_dry_run_intents/` |
+
+### Optional: custom ledger path
+
+```bash
+python -m src.tools.live_pre_submit_checklist \
+    --config     config/settings.paper.local.yaml \
+    --symbol     SPY \
+    --output-dir output/live_pre_submit_checklist \
+    --ledger     output/live_execution_ledger.csv
+```
+
+If `--ledger` is omitted, the path is read from `execution.live_ledger_path`
+in the config file (default: `output/live_execution_ledger.csv`).
+
+### What it never does
+
+- Never calls `submit_order` or `cancel_order`.
+- Never writes a live ledger row.
+- Never reads paper credentials (`ALPACA_API_KEY` / `ALPACA_SECRET_KEY`).
+- Never modifies any position, order, or account state.
+
+> **This is the final read-only gate before live submit design.**
+> A `READY` result does not authorize live trading — it means all existing
+> safety checks have passed.  Live order submission requires its own
+> dedicated PR, its own safeguards, and explicit human sign-off as listed
+> in the Prerequisites section.
