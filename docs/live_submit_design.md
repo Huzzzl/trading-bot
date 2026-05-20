@@ -297,3 +297,30 @@ artifact directory (defaults to `{output-dir}/live_pre_submit_checklist/live_dry
 - Never writes the live ledger.
 - Never reads paper credentials.
 - Never submits or modifies any order or position.
+
+---
+
+## Implemented: Plan Review (`live_submit_plan_review.py`)
+
+`src/tools/live_submit_plan_review.py` is a read-only CLI that parses the
+plan artifact and verifies every safety field.
+
+```bash
+python -m src.tools.live_submit_plan_review \
+    --plan output/live_submit_dry_run/live_submit_dry_run_plan.json
+```
+
+### Fields verified (all must pass)
+
+| Field | Required value |
+|---|---|
+| `live_submit_dry_run` | `true` |
+| `live_trading_enabled` | `false` |
+| `live_kill_switch_enabled` | `true` |
+| `submit_order_called` | `false` |
+| `submit_allowed` | `false` |
+| `final_action` | `"DRY_RUN_ONLY_NO_ORDER_SUBMITTED"` |
+| `live_sizing_mode` | `"notional"` |
+| `effective_notional` | `> 0` and `≤ live_max_order_notional` |
+
+PASS exits 0.  FAIL exits 1.  Never writes files.  Never calls Alpaca.

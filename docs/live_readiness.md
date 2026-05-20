@@ -1046,13 +1046,12 @@ in the config file (default: `output/live_execution_ledger.csv`).
 
 ---
 
-## Live Submit Design and Dry-Run Skeleton
+## Live Submit Design, Dry-Run Skeleton, and Plan Review
 
 The proposed live submit architecture is documented in
 **[docs/live_submit_design.md](live_submit_design.md)**.
 
-The dry-run skeleton (`src/tools/live_submit.py`) is implemented and validates
-all preconditions without ever calling `submit_order`.
+### Step 1 — Generate the dry-run plan
 
 ```bash
 python -m src.tools.live_submit \
@@ -1062,6 +1061,19 @@ python -m src.tools.live_submit \
     --output-dir output/live_submit_dry_run
 ```
 
+Validates all preconditions and writes `live_submit_dry_run_plan.json`.
+Never calls `submit_order`.
+
+### Step 2 — Review the plan artifact
+
+```bash
+python -m src.tools.live_submit_plan_review \
+    --plan output/live_submit_dry_run/live_submit_dry_run_plan.json
+```
+
+Verifies every safety field in the plan.  PASS exits 0; FAIL exits 1.
+Never calls Alpaca.  Never writes files.
+
 See the design document for:
 
 - Preconditions that must be satisfied before any real submit implementation
@@ -1070,6 +1082,5 @@ See the design document for:
 - Required implementation components for the real submit PR
 - Rollback and emergency procedures
 
-> **Real live submit is not implemented.**  The skeleton enforces
-> `live_submit_dry_run=true` and writes a plan artifact only.
-> `submit_order` is never called.
+> **Real live submit is not implemented.**  Both tools enforce
+> `live_submit_dry_run=true`.  `submit_order` is never called.
