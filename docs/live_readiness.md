@@ -1043,3 +1043,20 @@ in the config file (default: `output/live_execution_ledger.csv`).
 > safety checks have passed.  Live order submission requires its own
 > dedicated PR, its own safeguards, and explicit human sign-off as listed
 > in the Prerequisites section.
+
+---
+
+## Live Submit Design
+
+The proposed live submit architecture is documented separately.
+
+See **[docs/live_submit_design.md](live_submit_design.md)** for:
+
+- Preconditions that must be satisfied before any implementation PR
+- The full proposed submit flow (steps 1–12)
+- Hard safety constraints and non-goals
+- Required implementation components
+- Rollback and emergency procedures
+
+> **Live submit is not implemented.**  The design document is for planning
+> purposes only.  No `submit_order` call exists in the current codebase.
