@@ -1134,3 +1134,21 @@ It does **not** authorise live trading or live order submission.
 
 Never calls Alpaca.  Never reads credentials.  Never submits orders.
 Never mutates the source release checklist file.
+
+### Step 5 — Guarded submit executor (skeleton — submit unreachable)
+
+`src/execution/live_submit_executor.py` contains `maybe_execute_live_submit()`,
+which runs all 18 safety guards before reaching `submit_order`.  With current
+defaults and approval artifacts, `submit_order` is permanently unreachable:
+
+- Guards 5–6: `live_trading_approved=false` and `live_order_submission_approved=false`
+  are always written by current approval tooling → **always block**
+- Guard 7: `live_trading_enabled=false` (default) → blocks
+- Guard 8: `live_submit_dry_run=true` (default) → blocks
+- Guard 9: `live_kill_switch_enabled=true` (default) → blocks
+
+On any blocked path, `live_submit_blocked_report.json` is written with
+`submit_order_called=false` and the blocking guard identified.
+
+> **`submit_order` is never called in this codebase.**
+> All 18 guards must pass simultaneously — impossible with current tooling.
