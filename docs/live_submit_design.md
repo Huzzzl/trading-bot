@@ -308,8 +308,13 @@ plan artifact and verifies every safety field.
 
 ```bash
 python -m src.tools.live_submit_plan_review \
-    --plan output/live_submit_dry_run/live_submit_dry_run_plan.json
+    --plan   output/live_submit_dry_run/live_submit_dry_run_plan.json \
+    [--output output/live_submit_dry_run/live_submit_plan_review.json]
 ```
+
+`--output` is optional.  When provided, the review dict is written as JSON
+so that `live_operator_release_checklist` can consume it.  When omitted,
+no file is written (original behavior preserved).
 
 ### Fields verified (all must pass)
 
@@ -324,7 +329,7 @@ python -m src.tools.live_submit_plan_review \
 | `live_sizing_mode` | `"notional"` |
 | `effective_notional` | `> 0` and `≤ live_max_order_notional` |
 
-PASS exits 0.  FAIL exits 1.  Never writes files.  Never calls Alpaca.
+PASS exits 0.  FAIL exits 1.  Never calls Alpaca.
 
 ---
 

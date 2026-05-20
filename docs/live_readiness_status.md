@@ -1,7 +1,7 @@
 # Live Readiness Status
 
 Current operational status of the live-readiness gate baseline.
-Last updated: 2026-05-20. Live operator release checklist added.
+Last updated: 2026-05-20. live_submit_plan_review --output JSON option added.
 
 ---
 
@@ -83,7 +83,7 @@ The following read-only checks and guards are implemented and tested:
 | Live ledger schema | 16-column schema defined in `src/execution/live_ledger.py`; `append_live_ledger_row()` write-guarded — raises unless `allow_write=True` explicitly passed |
 | `live_pre_submit_checklist` | Unified operator checklist; runs all 5 checks in sequence and produces READY/NOT READY; no live submit, no credentials for offline checks |
 | `live_submit` (dry-run skeleton) | Validates all preconditions; writes `live_submit_dry_run_plan.json`; never calls `submit_order`; enforces `live_submit_dry_run=true` |
-| `live_submit_plan_review` | Read-only review of dry-run plan artifact; verifies all 8 safety fields; never calls Alpaca; never writes files |
+| `live_submit_plan_review` | Read-only review of dry-run plan artifact; verifies all 8 safety fields; optional `--output` writes review JSON for downstream tools; never calls Alpaca |
 | `live_operator_release_checklist` | Offline release gate; reads pre-submit checklist, dry-run plan, and optional plan-review artifacts; produces RELEASE_READY / NOT_RELEASE_READY; includes manual approval fields for operator sign-off; never calls Alpaca; never submits orders |
 
 ---

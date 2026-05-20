@@ -1068,11 +1068,14 @@ Never calls `submit_order`.
 
 ```bash
 python -m src.tools.live_submit_plan_review \
-    --plan output/live_submit_dry_run/live_submit_dry_run_plan.json
+    --plan   output/live_submit_dry_run/live_submit_dry_run_plan.json \
+    --output output/live_submit_dry_run/live_submit_plan_review.json
 ```
 
 Verifies every safety field in the plan.  PASS exits 0; FAIL exits 1.
-Never calls Alpaca.  Never writes files.
+Never calls Alpaca.  `--output` is optional; when provided, the review dict
+is written as JSON for consumption by `live_operator_release_checklist`.
+When omitted, no file is written.
 
 See the design document for:
 

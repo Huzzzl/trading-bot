@@ -50,10 +50,13 @@ def _write_plan(tmp_path: Path, plan: dict) -> Path:
     return path
 
 
-def _run_main(plan_path: str) -> int | None:
+def _run_main(plan_path: str, output_path: str | None = None) -> int | None:
     from src.tools.live_submit_plan_review import main
+    argv = ["--plan", plan_path]
+    if output_path is not None:
+        argv += ["--output", output_path]
     try:
-        main(["--plan", plan_path])
+        main(argv)
         return None
     except SystemExit as exc:
         return exc.code
@@ -320,3 +323,82 @@ class TestMain:
         _run_main(str(plan_path))
         after = set(tmp_path.glob("**/*"))
         assert after == before  # no new files created
+
+
+# ---------------------------------------------------------------------------
+# --output JSON tests
+# ---------------------------------------------------------------------------
+
+class TestOutputJson:
+    def test_no_output_writes_no_file(self, tmp_path):
+        plan_path = _write_plan(tmp_path, _valid_plan())
+        before = set(tmp_path.glob("**/*"))
+        _run_main(str(plan_path), output_path=None)
+        after = set(tmp_path.glob("**/*"))
+        assert after == before
+
+    def test_output_writes_json_on_pass(self, tmp_path):
+        plan_path = _write_plan(tmp_path, _valid_plan())
+        out = tmp_path / "review.json"
+        code = _run_main(str(plan_path), output_path=str(out))
+        assert code in (0, None)
+        assert out.exists()
+        data = json.loads(out.read_text(encoding="utf-8"))
+        assert data["review_result"] == "PASS"
+
+    def test_output_writes_json_on_fail_before_exit_1(self, tmp_path):
+        plan_path = _write_plan(tmp_path, _valid_plan(submit_order_called=True))
+        out = tmp_path / "review.json"
+        code = _run_main(str(plan_path), output_path=str(out))
+        assert code == 1
+        assert out.exists()
+        data = json.loads(out.read_text(encoding="utf-8"))
+        assert data["review_result"] == "FAIL"
+
+    def test_output_creates_parent_dirs(self, tmp_path):
+        plan_path = _write_plan(tmp_path, _valid_plan())
+        out = tmp_path / "nested" / "dir" / "review.json"
+        _run_main(str(plan_path), output_path=str(out))
+        assert out.exists()
+
+    def test_output_review_result_preserved(self, tmp_path):
+        plan_path = _write_plan(tmp_path, _valid_plan())
+        out = tmp_path / "review.json"
+        _run_main(str(plan_path), output_path=str(out))
+        data = json.loads(out.read_text(encoding="utf-8"))
+        assert data["review_result"] == "PASS"
+        assert data["violations"] == []
+
+    def test_output_required_fields_present(self, tmp_path):
+        plan_path = _write_plan(tmp_path, _valid_plan())
+        out = tmp_path / "review.json"
+        _run_main(str(plan_path), output_path=str(out))
+        data = json.loads(out.read_text(encoding="utf-8"))
+        for field in [
+            "symbol", "side", "order_type", "live_sizing_mode",
+            "effective_quantity", "effective_notional", "live_max_order_notional",
+            "live_submit_dry_run", "live_trading_enabled", "live_kill_switch_enabled",
+            "submit_order_called", "submit_allowed", "final_action",
+            "review_result", "violations",
+        ]:
+            assert field in data, f"Missing field: {field}"
+
+    def test_no_alpaca_calls_with_output(self, tmp_path):
+        plan_path = _write_plan(tmp_path, _valid_plan())
+        out = tmp_path / "review.json"
+        broker = MagicMock()
+        _run_main(str(plan_path), output_path=str(out))
+        broker.submit_order.assert_not_called()
+        broker.cancel_order.assert_not_called()
+
+    def test_no_credentials_with_output(self, tmp_path):
+        import os
+        from unittest.mock import patch
+        plan_path = _write_plan(tmp_path, _valid_plan())
+        out = tmp_path / "review.json"
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("ALPACA_LIVE_API_KEY", "ALPACA_LIVE_SECRET_KEY",
+                            "ALPACA_API_KEY", "ALPACA_SECRET_KEY")}
+        with patch.dict(os.environ, env, clear=True):
+            code = _run_main(str(plan_path), output_path=str(out))
+        assert code in (0, None)
