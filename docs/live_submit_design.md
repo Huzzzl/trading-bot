@@ -237,6 +237,7 @@ is manual and operator-driven.
 | `python -m src.tools.live_dry_run_intents` | Generate dry-run intent artifacts |
 | `python -m src.tools.live_dry_run_review` | Review dry-run artifacts |
 | `python -m src.tools.live_ledger_verify` | Validate live ledger schema |
+| `python -m src.tools.live_operator_release_checklist` | Offline release gate; reads 3 artifacts; produces RELEASE_READY verdict with manual approval fields |
 
 ---
 
@@ -324,3 +325,71 @@ python -m src.tools.live_submit_plan_review \
 | `effective_notional` | `> 0` and `≤ live_max_order_notional` |
 
 PASS exits 0.  FAIL exits 1.  Never writes files.  Never calls Alpaca.
+
+---
+
+## Implemented: Operator Release Checklist (`live_operator_release_checklist.py`)
+
+`src/tools/live_operator_release_checklist.py` is an offline CLI that reads three
+artifacts and produces a `RELEASE_READY` / `NOT_RELEASE_READY` verdict with
+manual approval fields for operator sign-off.  It does not authorize live trading
+by itself — it only states the project is ready to open a separate real-submit PR.
+
+```bash
+python -m src.tools.live_operator_release_checklist \
+    --config   config/settings.paper.local.yaml \
+    --pre-submit  output/live_pre_submit_checklist/live_pre_submit_checklist.json \
+    --submit-plan output/live_submit_dry_run/live_submit_dry_run_plan.json \
+    [--plan-review output/live_submit_dry_run/live_submit_plan_review.json] \
+    --output   output/live_operator_release_checklist.json
+```
+
+### Inputs
+
+| Argument | Required | Description |
+|---|---|---|
+| `--pre-submit` | Yes | `live_pre_submit_checklist.json` — must have `final_result=READY` |
+| `--submit-plan` | Yes | `live_submit_dry_run_plan.json` — 8 safety fields checked |
+| `--plan-review` | No | Plan review JSON — `review_result` must be `PASS` if provided |
+
+### Conditions checked (all must pass for RELEASE_READY)
+
+| # | Condition | Required value |
+|---|---|---|
+| 1 | `pre_submit_checklist.final_result` | `READY` |
+| 2 | `submit_plan.live_submit_dry_run` | `true` |
+| 3 | `submit_plan.live_trading_enabled` | `false` |
+| 4 | `submit_plan.live_kill_switch_enabled` | `true` |
+| 5 | `submit_plan.submit_order_called` | `false` |
+| 6 | `submit_plan.submit_allowed` | `false` |
+| 7 | `submit_plan.final_action` | `"DRY_RUN_ONLY_NO_ORDER_SUBMITTED"` |
+| 8 | `submit_plan.live_sizing_mode` | `"notional"` |
+| 9 | `submit_plan.effective_notional` | `> 0` |
+| 10 | `plan_review.review_result` (if provided) | `PASS` |
+
+### Artifact written
+
+`{output}` — includes all summary fields plus manual approval placeholders:
+
+```json
+{
+  "release_result": "RELEASE_READY",
+  "operator_name": null,
+  "approval_timestamp_utc": null,
+  "approval_for_real_submit_pr": false,
+  "notes": ""
+}
+```
+
+A human operator must fill in `operator_name`, `approval_timestamp_utc`,
+set `approval_for_real_submit_pr` to `true`, and add notes before opening
+a real-submit implementation PR.
+
+### What the checklist never does
+
+- Never calls `submit_order` or `cancel_order`.
+- Never reads credentials (`ALPACA_*` environment variables).
+- Never writes the live ledger.
+- Never calls any Alpaca endpoint.
+- RELEASE_READY does not authorise live trading — it only clears the gate for
+  a separate implementation PR.
