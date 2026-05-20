@@ -1,7 +1,7 @@
 # Live Readiness Status
 
 Current operational status of the live-readiness gate baseline.
-Last updated: 2026-05-19. Fractional/notional shadow sizing added.
+Last updated: 2026-05-20. Live ledger schema and validator added.
 
 ---
 
@@ -78,6 +78,8 @@ The following read-only checks and guards are implemented and tested:
 | `live_dry_run_review` | Read-only artifact review of dry-run intent outputs; detects safety flag violations (read-only) |
 | `live_safety_status` | Read-only live safety config baseline status; checks safety locks are engaged (read-only) |
 | Live safety config fields | `live_trading_enabled=false`, `live_kill_switch_enabled=true`, `live_submit_dry_run=true`, `live_require_human_confirm=true` — all defaulting safe |
+| `live_ledger_verify` | Read-only live ledger schema validator; checks required columns and safety invariants; PASS on missing ledger (not yet created) |
+| Live ledger schema | 16-column schema defined in `src/execution/live_ledger.py`; `append_live_ledger_row()` write-guarded — raises unless `allow_write=True` explicitly passed |
 
 ---
 
