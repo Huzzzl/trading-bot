@@ -238,6 +238,7 @@ is manual and operator-driven.
 | `python -m src.tools.live_dry_run_review` | Review dry-run artifacts |
 | `python -m src.tools.live_ledger_verify` | Validate live ledger schema |
 | `python -m src.tools.live_operator_release_checklist` | Offline release gate; reads 3 artifacts; produces RELEASE_READY verdict with manual approval fields |
+| `python -m src.tools.live_real_submit_pr_approval` | Offline approval artifact CLI; reads release checklist; produces explicit human sign-off for opening the real-submit PR only; does NOT approve live trading |
 
 ---
 
@@ -398,3 +399,53 @@ a real-submit implementation PR.
 - Never calls any Alpaca endpoint.
 - RELEASE_READY does not authorise live trading — it only clears the gate for
   a separate implementation PR.
+
+---
+
+## Implemented: Real-Submit PR Approval (`live_real_submit_pr_approval.py`)
+
+`src/tools/live_real_submit_pr_approval.py` is an offline CLI that reads
+`live_operator_release_checklist.json` and produces an explicit human approval
+artifact for opening a real-submit implementation PR.
+
+```bash
+python -m src.tools.live_real_submit_pr_approval \
+    --release-checklist output/live_operator_release_checklist.json \
+    --operator-name "Huzzzl" \
+    --approval-note "Approve opening real-submit implementation PR only; not approving live trading." \
+    --output output/live_real_submit_pr_approval.json
+```
+
+### Preconditions
+
+| Condition | Required value |
+|---|---|
+| `release_result` in checklist | `RELEASE_READY` |
+| `--operator-name` | Non-empty |
+| `--approval-note` | Non-empty |
+
+### Artifact fields
+
+| Field | Value |
+|---|---|
+| `approval_for_real_submit_pr` | `true` |
+| `approval_scope` | `"OPEN_REAL_SUBMIT_IMPLEMENTATION_PR_ONLY"` |
+| `live_trading_approved` | `false` |
+| `live_order_submission_approved` | `false` |
+| `operator_name` | Supplied by operator |
+| `approval_note` | Supplied by operator |
+| `approval_timestamp_utc` | Set at run time |
+
+### Scope of approval
+
+This approval authorises **only** opening a separate real-submit implementation PR.
+It does **not** authorise live trading or live order submission.
+`live_trading_approved` and `live_order_submission_approved` are always `false`.
+
+### What it never does
+
+- Never calls `submit_order` or `cancel_order`.
+- Never reads credentials (`ALPACA_*` environment variables).
+- Never writes the live ledger.
+- Never calls any Alpaca endpoint.
+- Never mutates the source release checklist file.

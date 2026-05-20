@@ -1110,3 +1110,27 @@ An operator must fill in these fields before opening a real-submit implementatio
 that all offline checks pass and the project is ready for a dedicated real-submit PR.
 
 Never calls Alpaca.  Never reads credentials.  Never submits orders.
+
+### Step 4 — Produce the real-submit PR approval artifact
+
+```bash
+python -m src.tools.live_real_submit_pr_approval \
+    --release-checklist output/live_operator_release_checklist.json \
+    --operator-name "Huzzzl" \
+    --approval-note "Approve opening real-submit implementation PR only; not approving live trading." \
+    --output output/live_real_submit_pr_approval.json
+```
+
+Reads the release checklist (must be `RELEASE_READY`), requires a non-empty
+operator name and approval note, and writes an explicit approval artifact with:
+
+- `approval_for_real_submit_pr: true`
+- `approval_scope: "OPEN_REAL_SUBMIT_IMPLEMENTATION_PR_ONLY"`
+- `live_trading_approved: false`
+- `live_order_submission_approved: false`
+
+This approval authorises **only** opening a future real-submit implementation PR.
+It does **not** authorise live trading or live order submission.
+
+Never calls Alpaca.  Never reads credentials.  Never submits orders.
+Never mutates the source release checklist file.
