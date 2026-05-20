@@ -240,6 +240,7 @@ is manual and operator-driven.
 | `python -m src.tools.live_operator_release_checklist` | Offline release gate; reads 3 artifacts; produces RELEASE_READY verdict with manual approval fields |
 | `python -m src.tools.live_real_submit_pr_approval` | Offline approval artifact CLI; reads release checklist; produces explicit human sign-off for opening the real-submit PR only; does NOT approve live trading |
 | `src.execution.live_submit_executor` | Guarded executor skeleton; `maybe_execute_live_submit()` runs all 18 guards; `submit_order` is unreachable with current defaults; writes `live_submit_blocked_report.json` on blocked path |
+| `python -m src.tools.live_submit_blocked_review` | Read-only review of `live_submit_blocked_report.json`; verifies executor failed closed safely (`blocked=true`, `submit_order_called=false`, non-empty `block_guard` and `violations`); never writes files; never calls Alpaca |
 
 ---
 
@@ -512,3 +513,28 @@ On every exit path, `live_submit_blocked_report.json` is written with:
 - Never writes the live ledger on the blocked path.
 - Never reads paper credentials.
 - Never cancels orders.
+
+---
+
+## Implemented: Blocked Report Review (`live_submit_blocked_review.py`)
+
+`src/tools/live_submit_blocked_review.py` is a read-only CLI that parses
+`live_submit_blocked_report.json` and verifies the executor failed closed safely.
+
+```bash
+python -m src.tools.live_submit_blocked_review \
+    --report output/live_submit_executor/live_submit_blocked_report.json
+```
+
+### PASS conditions (all must hold)
+
+| Field | Required value |
+|---|---|
+| `blocked` | `true` |
+| `submit_order_called` | `false` |
+| `block_guard` | non-empty string |
+| `violations` | non-empty list |
+
+FAIL if any field is in an unsafe state, or if the report is missing or malformed.
+
+PASS exits 0.  FAIL exits 1.  Never writes files.  Never calls Alpaca.
