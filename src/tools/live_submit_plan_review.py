@@ -240,12 +240,17 @@ def main(argv: list[str] | None = None) -> None:
         description=(
             "Read-only review of live submit dry-run plan artifact. "
             "Checks all safety fields. "
-            "No credentials required. Never calls Alpaca. Never writes files."
+            "No credentials required. Never calls Alpaca. "
+            "Optionally writes review JSON with --output."
         ),
     )
     parser.add_argument(
         "--plan", required=True,
         help="Path to live_submit_dry_run_plan.json",
+    )
+    parser.add_argument(
+        "--output", required=False, default=None,
+        help="Optional path to write the review result as JSON",
     )
     args = parser.parse_args(argv)
 
@@ -262,6 +267,14 @@ def main(argv: list[str] | None = None) -> None:
 
     review = build_review(plan)
     print_review(review)
+
+    if args.output is not None:
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(
+            json.dumps(review, indent=2, default=str),
+            encoding="utf-8",
+        )
 
     if review["review_result"] != "PASS":
         sys.exit(1)
