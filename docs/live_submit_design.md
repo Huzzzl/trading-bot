@@ -2,7 +2,7 @@
 
 **Status:** Design only. Not implemented. Requires a separate PR after this document.
 
-**Last updated:** 2026-05-20
+**Last updated:** 2026-05-20. Dry-run skeleton (`live_submit.py`) implemented — see below.
 
 ---
 
@@ -251,3 +251,49 @@ is manual and operator-driven.
 | Review date | _(pending)_ |
 | Implementation PR authorised | No |
 | Notes | — |
+
+---
+
+## Implemented: Dry-Run Skeleton (`live_submit.py`)
+
+`src/tools/live_submit.py` is the dry-run-only skeleton that validates all
+preconditions and writes the plan artifact.  It will never call `submit_order`
+while `live_submit_dry_run=true`.
+
+```bash
+python -m src.tools.live_submit \
+    --config     config/settings.paper.local.yaml \
+    --symbol     SPY \
+    --confirm    "DRY-RUN-LIVE-SUBMIT" \
+    --output-dir output/live_submit_dry_run
+```
+
+Optional: `--intents-dir <path>` to point at a previous `live_dry_run_intents`
+artifact directory (defaults to `{output-dir}/live_pre_submit_checklist/live_dry_run_intents`).
+
+### Preconditions enforced at runtime
+
+| # | Precondition | Fails if |
+|---|---|---|
+| 1 | Confirmation token | Not exactly `DRY-RUN-LIVE-SUBMIT` |
+| 2 | Config loads | Any YAML/validation error |
+| 3 | `live_trading_enabled` | `true` |
+| 4 | `live_submit_dry_run` | `false` |
+| 5 | `live_kill_switch_enabled` | `false` |
+| 6 | `live_require_human_confirm` | `false` |
+| 7 | `live_pre_submit_checklist` | `NOT READY` |
+| 8 | Intent available | No intent with `live_sizing_mode=notional`, `sizing_status=PASS` |
+| 9 | Intent safety flags | `submit_allowed=true` or `dry_run_only=false` |
+
+### Artifact written
+
+`{output-dir}/live_submit_dry_run_plan.json` — includes all plan fields with
+`submit_order_called=false`, `submit_allowed=false`, and
+`final_action="DRY_RUN_ONLY_NO_ORDER_SUBMITTED"`.
+
+### What the skeleton never does
+
+- Never calls `submit_order` or `cancel_order`.
+- Never writes the live ledger.
+- Never reads paper credentials.
+- Never submits or modifies any order or position.
