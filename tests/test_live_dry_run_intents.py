@@ -449,3 +449,175 @@ class TestMain:
         _run_main(tmp_path, symbol="spy", intents=[intent])
         s = _read_summary(tmp_path)
         assert s["symbol"] == "SPY"
+
+
+# ---------------------------------------------------------------------------
+# Early-failure summary artifact
+# ---------------------------------------------------------------------------
+
+def _run_main_config_fail(tmp_path: Path, detail: str = "bad yaml") -> int | None:
+    """Run main() with config returning FAIL."""
+    from src.tools.live_dry_run_intents import main
+    cfg_result = {"label": "config", "status": "FAIL", "detail": detail}
+    argv = ["--config", "config/settings.paper.local.yaml",
+            "--output-dir", str(tmp_path), "--symbol", "SPY"]
+    with patch("src.tools.live_dry_run_intents.check_config",
+               return_value=(cfg_result, None)):
+        try:
+            main(argv)
+            return None
+        except SystemExit as exc:
+            return exc.code
+
+
+def _run_main_creds_fail(tmp_path: Path, detail: str = "missing live credentials") -> int | None:
+    """Run main() with credentials returning FAIL."""
+    from src.tools.live_dry_run_intents import main
+    cfg_result  = {"label": "config",      "status": "PASS", "detail": ""}
+    cred_result = ({"label": "credentials", "status": "FAIL", "detail": detail}, None)
+    argv = ["--config", "config/settings.paper.local.yaml",
+            "--output-dir", str(tmp_path), "--symbol", "SPY"]
+    with patch("src.tools.live_dry_run_intents.check_config",
+               return_value=(cfg_result, _mock_cfg())), \
+         patch("src.tools.live_dry_run_intents.check_credentials",
+               return_value=cred_result):
+        try:
+            main(argv)
+            return None
+        except SystemExit as exc:
+            return exc.code
+
+
+def _run_main_client_fail(tmp_path: Path) -> int | None:
+    """Run main() with _make_live_client raising an exception."""
+    from src.tools.live_dry_run_intents import main
+    cfg_result  = {"label": "config",      "status": "PASS", "detail": ""}
+    cred_result = ({"label": "credentials", "status": "PASS", "detail": ""}, ("k", "s"))
+    argv = ["--config", "config/settings.paper.local.yaml",
+            "--output-dir", str(tmp_path), "--symbol", "SPY"]
+    with patch("src.tools.live_dry_run_intents.check_config",
+               return_value=(cfg_result, _mock_cfg())), \
+         patch("src.tools.live_dry_run_intents.check_credentials",
+               return_value=cred_result), \
+         patch("src.tools.live_dry_run_intents._make_live_client",
+               side_effect=RuntimeError("connection refused")):
+        try:
+            main(argv)
+            return None
+        except SystemExit as exc:
+            return exc.code
+
+
+class TestEarlyFailureSummary:
+    """Early NO-GO paths (config/creds/client fail) must write live_dry_run_summary.json."""
+
+    # --- config fail ---
+
+    def test_config_fail_exits_1(self, tmp_path):
+        assert _run_main_config_fail(tmp_path) == 1
+
+    def test_config_fail_writes_summary(self, tmp_path):
+        _run_main_config_fail(tmp_path)
+        assert (tmp_path / "live_dry_run_summary.json").exists()
+
+    def test_config_fail_summary_decision_no_go(self, tmp_path):
+        _run_main_config_fail(tmp_path)
+        s = _read_summary(tmp_path)
+        assert s["decision"] == "NO-GO"
+
+    def test_config_fail_summary_dry_run_flags(self, tmp_path):
+        _run_main_config_fail(tmp_path)
+        s = _read_summary(tmp_path)
+        assert s["dry_run_only"]   is True
+        assert s["submit_allowed"] is False
+
+    def test_config_fail_summary_intent_count_zero(self, tmp_path):
+        _run_main_config_fail(tmp_path)
+        assert _read_summary(tmp_path)["intent_count"] == 0
+
+    def test_config_fail_summary_blocker_label(self, tmp_path):
+        _run_main_config_fail(tmp_path, detail="bad yaml syntax")
+        s = _read_summary(tmp_path)
+        assert any("[config]" in b for b in s["top_blockers"])
+        assert any("bad yaml syntax" in b for b in s["top_blockers"])
+
+    def test_config_fail_no_intent_csv(self, tmp_path):
+        _run_main_config_fail(tmp_path)
+        assert not (tmp_path / "live_order_intents.csv").exists()
+
+    def test_config_fail_no_intent_json(self, tmp_path):
+        _run_main_config_fail(tmp_path)
+        assert not (tmp_path / "live_order_intents.json").exists()
+
+    # --- credentials fail ---
+
+    def test_creds_fail_exits_1(self, tmp_path):
+        assert _run_main_creds_fail(tmp_path) == 1
+
+    def test_creds_fail_writes_summary(self, tmp_path):
+        _run_main_creds_fail(tmp_path)
+        assert (tmp_path / "live_dry_run_summary.json").exists()
+
+    def test_creds_fail_summary_decision_no_go(self, tmp_path):
+        _run_main_creds_fail(tmp_path)
+        assert _read_summary(tmp_path)["decision"] == "NO-GO"
+
+    def test_creds_fail_summary_dry_run_flags(self, tmp_path):
+        _run_main_creds_fail(tmp_path)
+        s = _read_summary(tmp_path)
+        assert s["dry_run_only"]   is True
+        assert s["submit_allowed"] is False
+
+    def test_creds_fail_summary_blocker_label(self, tmp_path):
+        _run_main_creds_fail(tmp_path, detail="ALPACA_LIVE_API_KEY not set")
+        s = _read_summary(tmp_path)
+        assert any("[credentials]" in b for b in s["top_blockers"])
+        assert any("ALPACA_LIVE_API_KEY" in b for b in s["top_blockers"])
+
+    def test_creds_fail_no_intent_files(self, tmp_path):
+        _run_main_creds_fail(tmp_path)
+        assert not (tmp_path / "live_order_intents.csv").exists()
+        assert not (tmp_path / "live_order_intents.json").exists()
+
+    # --- client creation fail ---
+
+    def test_client_fail_exits_1(self, tmp_path):
+        assert _run_main_client_fail(tmp_path) == 1
+
+    def test_client_fail_writes_summary(self, tmp_path):
+        _run_main_client_fail(tmp_path)
+        assert (tmp_path / "live_dry_run_summary.json").exists()
+
+    def test_client_fail_summary_decision_no_go(self, tmp_path):
+        _run_main_client_fail(tmp_path)
+        assert _read_summary(tmp_path)["decision"] == "NO-GO"
+
+    def test_client_fail_summary_dry_run_flags(self, tmp_path):
+        _run_main_client_fail(tmp_path)
+        s = _read_summary(tmp_path)
+        assert s["dry_run_only"]   is True
+        assert s["submit_allowed"] is False
+
+    def test_client_fail_summary_blocker_label(self, tmp_path):
+        _run_main_client_fail(tmp_path)
+        s = _read_summary(tmp_path)
+        assert any("[client]" in b for b in s["top_blockers"])
+
+    def test_client_fail_no_intent_files(self, tmp_path):
+        _run_main_client_fail(tmp_path)
+        assert not (tmp_path / "live_order_intents.csv").exists()
+        assert not (tmp_path / "live_order_intents.json").exists()
+
+    # --- shared: no submit/cancel/ledger in any early-fail path ---
+
+    def test_config_fail_no_ledger(self, tmp_path):
+        _run_main_config_fail(tmp_path)
+        assert list(tmp_path.glob("**/*ledger*")) == []
+
+    def test_creds_fail_no_ledger(self, tmp_path):
+        _run_main_creds_fail(tmp_path)
+        assert list(tmp_path.glob("**/*ledger*")) == []
+
+    def test_client_fail_no_ledger(self, tmp_path):
+        _run_main_client_fail(tmp_path)
+        assert list(tmp_path.glob("**/*ledger*")) == []
