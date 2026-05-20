@@ -120,10 +120,11 @@ def _sizing_params(cfg: Any) -> tuple:
     """Return sizing parameters from cfg as a 6-tuple.
 
     Returns (mode, max_qty, max_not, override, notional_override, max_order_not)
-    where mode is "quantity" or "notional".
+    where mode is "quantity", "notional", or the raw invalid value (for fail-closed
+    handling in _size_candidate).
     """
     ex = cfg.execution
-    mode              = str(getattr(ex, "live_sizing_mode",              "quantity"))
+    mode              = str(getattr(ex, "live_sizing_mode",              "quantity")).strip().lower()
     max_qty           = float(getattr(ex, "live_max_quantity",            1.0))
     max_not           = getattr(ex, "live_max_notional",          500.0)
     override          = getattr(ex, "live_quantity_override",      1.0)
@@ -152,7 +153,14 @@ def _size_candidate(intent: Any, cfg: Any) -> dict[str, Any]:
     effective_notional: float | None
     estimated_notional: float | None
 
-    if mode == "notional":
+    if mode not in ("quantity", "notional"):
+        issues.append(
+            f"invalid live_sizing_mode={mode!r} (expected 'quantity' or 'notional')"
+        )
+        effective_qty      = None
+        effective_notional = None
+        estimated_notional = None
+    elif mode == "notional":
         if notional_override is None or notional_override <= 0:
             issues.append(
                 f"live_sizing_mode=notional requires live_order_notional_override > 0 "

@@ -84,11 +84,17 @@ def _mock_execution_cfg(
     live_max_quantity: float = 1.0,
     live_max_notional: "float | None" = 500.0,
     live_quantity_override: "float | None" = 1.0,
+    live_sizing_mode: str = "quantity",
+    live_order_notional_override: "float | None" = None,
+    live_max_order_notional: float = 100.0,
 ) -> MagicMock:
     ex = MagicMock()
-    ex.live_max_quantity     = live_max_quantity
-    ex.live_max_notional     = live_max_notional
-    ex.live_quantity_override = live_quantity_override
+    ex.live_max_quantity              = live_max_quantity
+    ex.live_max_notional              = live_max_notional
+    ex.live_quantity_override         = live_quantity_override
+    ex.live_sizing_mode               = live_sizing_mode
+    ex.live_order_notional_override   = live_order_notional_override
+    ex.live_max_order_notional        = live_max_order_notional
     return ex
 
 

@@ -73,13 +73,19 @@ def _mock_cfg(
     live_max_notional: float | None = 500.0,
     live_quantity_override: float | None = 1.0,
     screen_symbols: list[str] | None = None,
+    live_sizing_mode: str = "quantity",
+    live_order_notional_override: float | None = None,
+    live_max_order_notional: float = 100.0,
 ) -> MagicMock:
     cfg = MagicMock()
-    cfg.symbols                                = symbols or ["SPY"]
-    cfg.execution.live_max_quantity            = live_max_quantity
-    cfg.execution.live_max_notional            = live_max_notional
-    cfg.execution.live_quantity_override       = live_quantity_override
-    cfg.execution.live_shadow_screen_symbols   = screen_symbols or ["SPY"]
+    cfg.symbols                                    = symbols or ["SPY"]
+    cfg.execution.live_max_quantity                = live_max_quantity
+    cfg.execution.live_max_notional                = live_max_notional
+    cfg.execution.live_quantity_override           = live_quantity_override
+    cfg.execution.live_shadow_screen_symbols       = screen_symbols or ["SPY"]
+    cfg.execution.live_sizing_mode                 = live_sizing_mode
+    cfg.execution.live_order_notional_override     = live_order_notional_override
+    cfg.execution.live_max_order_notional          = live_max_order_notional
     return cfg
 
 
