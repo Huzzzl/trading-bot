@@ -1156,3 +1156,14 @@ On every exit path, `live_submit_blocked_report.json` is written with
 
 > **`submit_order` is never called in this codebase.**
 > All 18 guards passing still ends at `real_submit_not_implemented`.
+
+### Step 6 — Review the blocked report artifact
+
+```bash
+python -m src.tools.live_submit_blocked_review \
+    --report output/live_submit_executor/live_submit_blocked_report.json
+```
+
+Parses the blocked-path artifact and verifies the executor failed closed:
+`blocked=true`, `submit_order_called=false`, non-empty `block_guard` and
+`violations`.  PASS exits 0; FAIL exits 1.  Never writes files.  Never calls Alpaca.
