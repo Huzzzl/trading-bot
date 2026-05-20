@@ -1046,7 +1046,7 @@ in the config file (default: `output/live_execution_ledger.csv`).
 
 ---
 
-## Live Submit Design, Dry-Run Skeleton, and Plan Review
+## Live Submit Design, Dry-Run Skeleton, Plan Review, and Operator Release Checklist
 
 The proposed live submit architecture is documented in
 **[docs/live_submit_design.md](live_submit_design.md)**.
@@ -1084,3 +1084,26 @@ See the design document for:
 
 > **Real live submit is not implemented.**  Both tools enforce
 > `live_submit_dry_run=true`.  `submit_order` is never called.
+
+### Step 3 — Run the operator release checklist
+
+```bash
+python -m src.tools.live_operator_release_checklist \
+    --config      config/settings.paper.local.yaml \
+    --pre-submit  output/live_pre_submit_checklist/live_pre_submit_checklist.json \
+    --submit-plan output/live_submit_dry_run/live_submit_dry_run_plan.json \
+    --plan-review output/live_submit_dry_run/live_submit_plan_review.json \
+    --output      output/live_operator_release_checklist.json
+```
+
+Reads the three artifacts from steps 1–2 (plan-review is optional) and
+produces `RELEASE_READY` / `NOT_RELEASE_READY`.  Writes a JSON artifact that
+includes manual approval fields (`operator_name`, `approval_timestamp_utc`,
+`approval_for_real_submit_pr`, `notes`) — all null / false / empty by default.
+
+An operator must fill in these fields before opening a real-submit implementation PR.
+
+`RELEASE_READY` does **not** authorize live trading by itself.  It only confirms
+that all offline checks pass and the project is ready for a dedicated real-submit PR.
+
+Never calls Alpaca.  Never reads credentials.  Never submits orders.
