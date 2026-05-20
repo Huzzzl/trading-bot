@@ -62,6 +62,7 @@ Output: `output/live_pre_submit_checklist/live_pre_submit_checklist.json`
 python -m src.tools.live_submit \
     --config     config/settings.paper.local.yaml \
     --symbol     SPY \
+    --confirm    "DRY-RUN-LIVE-SUBMIT" \
     --output-dir output/live_submit_dry_run
 ```
 
@@ -94,7 +95,6 @@ Output: `output/live_operator_release_checklist.json`
 
 ```bash
 python -m src.tools.live_real_submit_pr_approval \
-    --config        config/settings.paper.local.yaml \
     --release-checklist output/live_operator_release_checklist.json \
     --operator-name "Operator Name" \
     --approval-note "Approving to open real-submit implementation PR only" \
