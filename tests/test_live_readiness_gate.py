@@ -73,13 +73,19 @@ def _mock_cfg(
     live_max_notional: float | None = 500.0,
     live_quantity_override: float | None = 1.0,
     screen_symbols: list[str] | None = None,
+    live_sizing_mode: str = "quantity",
+    live_order_notional_override: float | None = None,
+    live_max_order_notional: float = 100.0,
 ) -> MagicMock:
     cfg = MagicMock()
-    cfg.symbols                                = symbols or ["SPY"]
-    cfg.execution.live_max_quantity            = live_max_quantity
-    cfg.execution.live_max_notional            = live_max_notional
-    cfg.execution.live_quantity_override       = live_quantity_override
-    cfg.execution.live_shadow_screen_symbols   = screen_symbols or ["SPY"]
+    cfg.symbols                                    = symbols or ["SPY"]
+    cfg.execution.live_max_quantity                = live_max_quantity
+    cfg.execution.live_max_notional                = live_max_notional
+    cfg.execution.live_quantity_override           = live_quantity_override
+    cfg.execution.live_shadow_screen_symbols       = screen_symbols or ["SPY"]
+    cfg.execution.live_sizing_mode                 = live_sizing_mode
+    cfg.execution.live_order_notional_override     = live_order_notional_override
+    cfg.execution.live_max_order_notional          = live_max_order_notional
     return cfg
 
 
@@ -231,19 +237,32 @@ class TestTrimBlocker:
 
 class TestCollectTopBlockers:
     def _results(self, **kw) -> dict:
+        # All stages default to PASS with no blockers; override per-test as needed.
         base = {
-            "account_check":        {"blockers": []},
-            "shadow_preflight":     {"blockers": []},
-            "shadow_review":        {"blockers": []},
-            "symbol_screen":        {"blockers": []},
-            "symbol_screen_review": {"blockers": []},
+            "account_check":        {"status": "PASS", "blockers": []},
+            "shadow_preflight":     {"status": "PASS", "blockers": []},
+            "shadow_review":        {"status": "PASS", "blockers": []},
+            "symbol_screen":        {"status": "PASS", "blockers": []},
+            "symbol_screen_review": {"status": "PASS", "blockers": []},
         }
         base.update(kw)
         return base
 
+    def test_all_pass_returns_empty(self):
+        from src.tools.live_readiness_gate import collect_top_blockers
+        assert collect_top_blockers(self._results()) == []
+
+    def test_pass_stage_with_blockers_ignored(self):
+        # A PASS stage that carries a blocker list must not surface it.
+        from src.tools.live_readiness_gate import collect_top_blockers
+        results = self._results(
+            symbol_screen_review={"status": "PASS", "blockers": ["some suggested action"]},
+        )
+        assert collect_top_blockers(results) == []
+
     def test_account_check_blocker_included(self):
         from src.tools.live_readiness_gate import collect_top_blockers
-        results = self._results(account_check={"blockers": ["buying_power=0"]})
+        results = self._results(account_check={"status": "WARN", "blockers": ["buying_power=0"]})
         blockers = collect_top_blockers(results)
         assert any("account_check" in b for b in blockers)
         assert any("buying_power=0" in b for b in blockers)
@@ -251,7 +270,7 @@ class TestCollectTopBlockers:
     def test_account_check_blocker_trimmed_at_dash(self):
         from src.tools.live_readiness_gate import collect_top_blockers
         raw = "status=active buying_power=0 — buying_power=0, portfolio_value=0"
-        results = self._results(account_check={"blockers": [raw]})
+        results = self._results(account_check={"status": "FAIL", "blockers": [raw]})
         blockers = collect_top_blockers(results)
         assert any("buying_power=0, portfolio_value=0" in b for b in blockers)
         assert not any("status=active" in b for b in blockers)
@@ -259,29 +278,39 @@ class TestCollectTopBlockers:
     def test_shadow_review_preferred_over_shadow_preflight(self):
         from src.tools.live_readiness_gate import collect_top_blockers
         results = self._results(
-            shadow_preflight={"blockers": ["very verbose raw sizing detail A", "B"]},
-            shadow_review={"blockers": ["[live_sizing] compact summary"]},
+            shadow_preflight={"status": "FAIL", "blockers": ["very verbose raw sizing detail A", "B"]},
+            shadow_review={"status": "FAIL", "blockers": ["[live_sizing] compact summary"]},
         )
         blockers = collect_top_blockers(results)
         assert any("shadow_review" in b for b in blockers)
         assert not any("shadow_preflight" in b for b in blockers)
         assert any("compact summary" in b for b in blockers)
 
-    def test_raw_shadow_preflight_used_when_review_has_no_blockers(self):
+    def test_raw_shadow_preflight_used_when_review_passes(self):
         from src.tools.live_readiness_gate import collect_top_blockers
         results = self._results(
-            shadow_preflight={"blockers": ["preflight blocker"]},
-            shadow_review={"blockers": []},
+            shadow_preflight={"status": "FAIL", "blockers": ["preflight blocker"]},
+            shadow_review={"status": "PASS", "blockers": []},
         )
         blockers = collect_top_blockers(results)
         assert any("shadow_preflight" in b for b in blockers)
         assert any("preflight blocker" in b for b in blockers)
 
+    def test_shadow_preflight_skipped_when_review_is_blocking(self):
+        # review FAIL but empty blocker list — preflight fallback must not appear
+        from src.tools.live_readiness_gate import collect_top_blockers
+        results = self._results(
+            shadow_preflight={"status": "FAIL", "blockers": ["preflight blocker"]},
+            shadow_review={"status": "FAIL", "blockers": []},
+        )
+        blockers = collect_top_blockers(results)
+        assert not any("shadow_preflight" in b for b in blockers)
+
     def test_symbol_screen_review_preferred_over_symbol_screen(self):
         from src.tools.live_readiness_gate import collect_top_blockers
         results = self._results(
-            symbol_screen={"blockers": ["SPY: verbose per-symbol blocker A", "QQQ: verbose B"]},
-            symbol_screen_review={"blockers": ["No symbols currently suitable."]},
+            symbol_screen={"status": "FAIL", "blockers": ["SPY: verbose per-symbol blocker A", "QQQ: verbose B"]},
+            symbol_screen_review={"status": "FAIL", "blockers": ["No symbols currently suitable."]},
         )
         blockers = collect_top_blockers(results)
         assert any("symbol_screen_review" in b for b in blockers)
@@ -289,11 +318,11 @@ class TestCollectTopBlockers:
                        for b in blockers)
         assert any("No symbols currently suitable" in b for b in blockers)
 
-    def test_raw_symbol_screen_used_when_review_has_no_blockers(self):
+    def test_raw_symbol_screen_used_when_review_passes(self):
         from src.tools.live_readiness_gate import collect_top_blockers
         results = self._results(
-            symbol_screen={"blockers": ["SPY: no candidates"]},
-            symbol_screen_review={"blockers": []},
+            symbol_screen={"status": "FAIL", "blockers": ["SPY: no candidates"]},
+            symbol_screen_review={"status": "PASS", "blockers": []},
         )
         blockers = collect_top_blockers(results)
         assert any("symbol_screen" in b for b in blockers)
@@ -301,17 +330,23 @@ class TestCollectTopBlockers:
     def test_capped_at_five(self):
         from src.tools.live_readiness_gate import collect_top_blockers
         results = self._results(
-            account_check={"blockers": ["acct error"]},
-            shadow_review={"blockers": ["r1", "r2"]},
-            symbol_screen_review={"blockers": ["s1", "s2"]},
+            account_check={"status": "FAIL", "blockers": ["acct error"]},
+            shadow_review={"status": "FAIL", "blockers": ["r1", "r2"]},
+            symbol_screen_review={"status": "FAIL", "blockers": ["s1", "s2"]},
         )
         assert len(collect_top_blockers(results)) <= 5
 
-    def test_skips_empty_blockers(self):
+    def test_skips_empty_blocker_strings(self):
         from src.tools.live_readiness_gate import collect_top_blockers
-        results = self._results(account_check={"blockers": ["", "real error"]})
+        results = self._results(account_check={"status": "WARN", "blockers": ["", "real error"]})
         blockers = collect_top_blockers(results)
         assert not any(b.endswith("] ") for b in blockers)
+
+    def test_warn_stage_contributes_blockers(self):
+        from src.tools.live_readiness_gate import collect_top_blockers
+        results = self._results(account_check={"status": "WARN", "blockers": ["warn detail"]})
+        blockers = collect_top_blockers(results)
+        assert any("warn detail" in b for b in blockers)
 
 
 # ---------------------------------------------------------------------------
@@ -350,6 +385,13 @@ class TestMain:
         assert code in (0, None)
         report = json.loads((tmp_path / "live_readiness_gate_report.json").read_text(encoding="utf-8"))
         assert report["decision"] == "GO"
+
+    def test_go_report_has_empty_top_blockers(self, tmp_path):
+        code, _ = _run_main(tmp_path)
+        assert code in (0, None)
+        report = json.loads((tmp_path / "live_readiness_gate_report.json").read_text(encoding="utf-8"))
+        assert report["decision"] == "GO"
+        assert report["top_blockers"] == []
 
     def test_account_warn_exits_1_no_go(self, tmp_path):
         code, _ = _run_main(tmp_path, account_raw=_mock_account_raw(buying_power="0"))

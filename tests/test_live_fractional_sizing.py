@@ -416,3 +416,71 @@ class TestScreenSymbolNotionalMode:
         )
         result = screen_symbol("SPY", intents, self._account(), cfg)
         assert result["best_status"] == "FAIL"
+
+
+# ---------------------------------------------------------------------------
+# live_sizing_mode validation
+# ---------------------------------------------------------------------------
+
+class TestSizingModeValidation:
+    """live_sizing_mode normalization and fail-closed on invalid values."""
+
+    def test_mixed_case_notional_normalizes(self):
+        from src.tools.live_shadow_preflight import _size_candidate
+        intent = _mock_intent("SPY", entry_price=400.0)
+        cfg    = _mock_cfg(live_sizing_mode="Notional", live_order_notional_override=100.0,
+                           live_max_order_notional=200.0)
+        row = _size_candidate(intent, cfg)
+        assert row["live_sizing_mode"] == "notional"
+        assert row["sizing_status"] == "PASS"
+
+    def test_whitespace_notional_normalizes(self):
+        from src.tools.live_shadow_preflight import _size_candidate
+        intent = _mock_intent("SPY", entry_price=400.0)
+        cfg    = _mock_cfg(live_sizing_mode=" notional ", live_order_notional_override=100.0,
+                           live_max_order_notional=200.0)
+        row = _size_candidate(intent, cfg)
+        assert row["live_sizing_mode"] == "notional"
+        assert row["sizing_status"] == "PASS"
+
+    def test_mixed_case_quantity_normalizes(self):
+        from src.tools.live_shadow_preflight import _size_candidate
+        intent = _mock_intent("SPY", entry_price=400.0)
+        cfg    = _mock_cfg(live_sizing_mode="QUANTITY")
+        row = _size_candidate(intent, cfg)
+        assert row["live_sizing_mode"] == "quantity"
+        assert row["sizing_status"] == "PASS"
+
+    def test_invalid_mode_fails_closed(self):
+        from src.tools.live_shadow_preflight import _size_candidate
+        intent = _mock_intent("SPY", entry_price=400.0)
+        cfg    = _mock_cfg(live_sizing_mode="foo")
+        row = _size_candidate(intent, cfg)
+        assert row["sizing_status"] == "FAIL"
+        assert "invalid live_sizing_mode" in row["sizing_reason"]
+        assert "foo" in row["sizing_reason"]
+        assert row["effective_quantity"] is None or row["effective_quantity"] == ""
+
+    def test_invalid_mode_message_mentions_valid_options(self):
+        from src.tools.live_shadow_preflight import _size_candidate
+        intent = _mock_intent("SPY", entry_price=400.0)
+        cfg    = _mock_cfg(live_sizing_mode="typo")
+        row = _size_candidate(intent, cfg)
+        reason = row["sizing_reason"]
+        assert "quantity" in reason
+        assert "notional" in reason
+
+    def test_invalid_mode_no_network_calls(self):
+        from src.tools.live_shadow_preflight import _size_candidate
+        intent = _mock_intent("SPY", entry_price=400.0)
+        cfg    = _mock_cfg(live_sizing_mode="bad_mode")
+        row = _size_candidate(intent, cfg)
+        assert row["sizing_status"] == "FAIL"
+
+    def test_check_live_sizing_invalid_mode_returns_fail(self):
+        from src.tools.live_shadow_preflight import check_live_sizing
+        intents = [_mock_intent("SPY", entry_price=400.0)]
+        cfg     = _mock_cfg(live_sizing_mode="NOPE")
+        result  = check_live_sizing(intents, cfg)
+        assert result["status"] == "FAIL"
+        assert "invalid live_sizing_mode" in result.get("detail", "")

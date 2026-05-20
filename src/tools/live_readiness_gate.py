@@ -252,35 +252,39 @@ def collect_top_blockers(
     """Return up to 5 blockers, preferring compacted review-stage summaries.
 
     Priority rules:
+    - Only stages with status WARN or FAIL contribute blockers.
     - shadow_review blockers outrank raw shadow_preflight sizing detail.
     - symbol_screen_review suggested actions outrank raw symbol_screen detail.
     - account_check detail is trimmed to its meaningful suffix (after " — ").
+    - If all stages PASS, returns [].
     """
+    def _is_blocking(stage_name: str) -> bool:
+        return stage_results.get(stage_name, {}).get("status", "") in ("WARN", "FAIL")
+
     out: list[str] = []
 
     # Stage 1: account_check — trim to meaningful part
-    for b in stage_results.get("account_check", {}).get("blockers", [])[:1]:
-        if b:
-            out.append(f"[account_check] {_trim_blocker(b)}")
+    if _is_blocking("account_check"):
+        for b in stage_results.get("account_check", {}).get("blockers", [])[:1]:
+            if b:
+                out.append(f"[account_check] {_trim_blocker(b)}")
 
     # Stages 2+3: shadow_review preferred; fall back to trimmed shadow_preflight
-    review_bs = stage_results.get("shadow_review", {}).get("blockers", [])
-    if review_bs:
-        for b in review_bs[:2]:
+    if _is_blocking("shadow_review"):
+        for b in stage_results.get("shadow_review", {}).get("blockers", [])[:2]:
             if b:
                 out.append(f"[shadow_review] {b}")
-    else:
+    elif _is_blocking("shadow_preflight"):
         for b in stage_results.get("shadow_preflight", {}).get("blockers", [])[:1]:
             if b:
                 out.append(f"[shadow_preflight] {_trim_blocker(b)}")
 
     # Stages 4+5: symbol_screen_review preferred; fall back to trimmed symbol_screen
-    screen_review_bs = stage_results.get("symbol_screen_review", {}).get("blockers", [])
-    if screen_review_bs:
-        for b in screen_review_bs[:2]:
+    if _is_blocking("symbol_screen_review"):
+        for b in stage_results.get("symbol_screen_review", {}).get("blockers", [])[:2]:
             if b:
                 out.append(f"[symbol_screen_review] {b}")
-    else:
+    elif _is_blocking("symbol_screen"):
         for b in stage_results.get("symbol_screen", {}).get("blockers", [])[:1]:
             if b:
                 out.append(f"[symbol_screen] {_trim_blocker(b)}")
