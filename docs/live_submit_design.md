@@ -240,6 +240,7 @@ is manual and operator-driven.
 | `python -m src.tools.live_operator_release_checklist` | Offline release gate; reads 3 artifacts; produces RELEASE_READY verdict with manual approval fields |
 | `python -m src.tools.live_real_submit_pr_approval` | Offline approval artifact CLI; reads release checklist; produces explicit human sign-off for opening the real-submit PR only; does NOT approve live trading |
 | `src.execution.live_submit_executor` | Guarded executor skeleton; `maybe_execute_live_submit()` runs all 18 guards; `submit_order` is unreachable with current defaults; writes `live_submit_blocked_report.json` on blocked path |
+| `python -m src.tools.live_submit_executor_check` | CLI wrapper for guarded executor; invokes `maybe_execute_live_submit()`; exits 0 only when `blocked=true` and `submit_order_called=false` and report exists; never calls `submit_order`; never writes ledger |
 | `python -m src.tools.live_submit_blocked_review` | Read-only review of `live_submit_blocked_report.json`; verifies executor failed closed safely (`blocked=true`, `submit_order_called=false`, non-empty `block_guard` and `violations`); never writes files; never calls Alpaca |
 
 ---
@@ -538,3 +539,39 @@ python -m src.tools.live_submit_blocked_review \
 FAIL if any field is in an unsafe state, or if the report is missing or malformed.
 
 PASS exits 0.  FAIL exits 1.  Never writes files.  Never calls Alpaca.
+
+---
+
+## Implemented: Executor Check CLI (`live_submit_executor_check.py`)
+
+`src/tools/live_submit_executor_check.py` is a CLI wrapper that invokes
+`maybe_execute_live_submit()` and writes `live_submit_blocked_report.json`.
+
+```bash
+python -m src.tools.live_submit_executor_check \
+    --config      config/settings.paper.local.yaml \
+    --symbol      SPY \
+    --confirm     "REAL-LIVE-SUBMIT-AUTHORIZED" \
+    --approval    output/live_real_submit_pr_approval.json \
+    --pre-submit  output/live_pre_submit_checklist/live_pre_submit_checklist.json \
+    --plan-review output/live_submit_dry_run/live_submit_plan_review.json \
+    --output-dir  output/live_submit_executor \
+    [--plan       output/live_submit_dry_run/live_submit_dry_run_plan.json]
+```
+
+`--plan` is optional.  When provided, `effective_notional`, `live_max_order_notional`,
+and `client_order_id` are read from the plan artifact.  When omitted, config
+defaults are used and a stable sentinel `client_order_id` is substituted.
+
+### Exit codes
+
+| Code | Condition |
+|---|---|
+| 0 | `blocked=true`, `submit_order_called=false`, report file exists |
+| 1 | Any other outcome (unexpected `blocked=false`, missing report, etc.) |
+
+### What it never does
+
+- Never calls `submit_order` or `cancel_order`.
+- Never writes the live ledger.
+- Never reads paper credentials.
