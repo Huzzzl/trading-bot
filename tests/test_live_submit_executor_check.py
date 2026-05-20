@@ -152,15 +152,17 @@ def _setup_files(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path, Path]:
 
 class TestMain:
     def _mock_config(self):
+        ex = MagicMock()
+        ex.live_trading_enabled = False
+        ex.live_submit_dry_run = True
+        ex.live_kill_switch_enabled = True
+        ex.live_require_human_confirm = True
+        ex.live_max_order_notional = 100.0
+        ex.live_max_orders_per_day = 1
+        ex.live_max_notional_per_day = 100.0
+        ex.live_ledger_path = "output/live_execution_ledger.csv"
         cfg = MagicMock()
-        cfg.live_trading_enabled = False
-        cfg.live_submit_dry_run = True
-        cfg.live_kill_switch_enabled = True
-        cfg.live_require_human_confirm = True
-        cfg.live_max_order_notional = 100.0
-        cfg.live_max_orders_per_day = 1
-        cfg.live_max_notional_per_day = 100.0
-        cfg.live_ledger_path = "output/live_execution_ledger.csv"
+        cfg.execution = ex
         return cfg
 
     def test_default_config_produces_blocked_report_exits_0(self, tmp_path):
@@ -253,7 +255,7 @@ class TestMain:
         config_path, approval, pre_submit, plan_review, output_dir, _ = _setup_files(tmp_path)
         ledger = tmp_path / "live_execution_ledger.csv"
         cfg = self._mock_config()
-        cfg.live_ledger_path = str(ledger)
+        cfg.execution.live_ledger_path = str(ledger)
         args = _base_args(tmp_path, config_path, approval, pre_submit, plan_review, output_dir)
         report = _blocked_report()
         with patch(f"{_MODULE}.load_config", return_value=cfg), \
@@ -317,3 +319,37 @@ class TestMain:
             _write_report_to_dir(output_dir, report)
             code = _run_main(args)
         assert code in (0, None)
+
+    def test_execution_config_fields_passed_to_executor(self, tmp_path):
+        """Integration-style: executor receives fields from cfg.execution, not cfg directly."""
+        from src.config.loader import ExecutionConfig
+        config_path, approval, pre_submit, plan_review, output_dir, _ = _setup_files(tmp_path)
+        args = _base_args(tmp_path, config_path, approval, pre_submit, plan_review, output_dir)
+        report = _blocked_report()
+        ex = ExecutionConfig(
+            live_trading_enabled=False,
+            live_kill_switch_enabled=True,
+            live_submit_dry_run=True,
+            live_require_human_confirm=True,
+            live_max_order_notional=123.0,
+            live_max_orders_per_day=2,
+            live_max_notional_per_day=246.0,
+            live_ledger_path="output/live_execution_ledger.csv",
+        )
+        cfg = MagicMock()
+        cfg.execution = ex
+        captured = {}
+        def _capture(**kwargs):
+            captured.update(kwargs)
+            return report
+        with patch(f"{_MODULE}.load_config", return_value=cfg), \
+             patch(f"{_MODULE}.maybe_execute_live_submit", side_effect=_capture):
+            _write_report_to_dir(output_dir, report)
+            _run_main(args)
+        assert captured["live_trading_enabled"] is False
+        assert captured["live_kill_switch_enabled"] is True
+        assert captured["live_submit_dry_run"] is True
+        assert captured["live_require_human_confirm"] is True
+        assert captured["live_max_order_notional"] == 123.0
+        assert captured["live_max_orders_per_day"] == 2
+        assert captured["live_max_notional_per_day"] == 246.0

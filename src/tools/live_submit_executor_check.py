@@ -114,18 +114,19 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     try:
-        config = load_config(args.config)
+        cfg = load_config(args.config)
+        ex = cfg.execution
     except Exception as exc:
         print(f"\n  [FAIL] config load error: {exc}")
         sys.exit(1)
 
     plan_path = Path(args.plan) if args.plan else None
     intended_notional, live_max_order_notional, client_order_id = _load_plan_fields(
-        plan_path, config.live_max_order_notional
+        plan_path, ex.live_max_order_notional
     )
 
     output_dir = Path(args.output_dir)
-    ledger_path = Path(config.live_ledger_path)
+    ledger_path = Path(ex.live_ledger_path)
 
     result = maybe_execute_live_submit(
         confirm_token=              args.confirm,
@@ -135,13 +136,13 @@ def main(argv: list[str] | None = None) -> None:
         symbol=                     args.symbol,
         intended_notional=          intended_notional,
         client_order_id=            client_order_id,
-        live_trading_enabled=       config.live_trading_enabled,
-        live_submit_dry_run=        config.live_submit_dry_run,
-        live_kill_switch_enabled=   config.live_kill_switch_enabled,
-        live_require_human_confirm= config.live_require_human_confirm,
+        live_trading_enabled=       ex.live_trading_enabled,
+        live_submit_dry_run=        ex.live_submit_dry_run,
+        live_kill_switch_enabled=   ex.live_kill_switch_enabled,
+        live_require_human_confirm= ex.live_require_human_confirm,
         live_max_order_notional=    live_max_order_notional,
-        live_max_orders_per_day=    config.live_max_orders_per_day,
-        live_max_notional_per_day=  config.live_max_notional_per_day,
+        live_max_orders_per_day=    ex.live_max_orders_per_day,
+        live_max_notional_per_day=  ex.live_max_notional_per_day,
         ledger_path=                ledger_path,
         output_dir=                 output_dir,
         broker_client=              None,
