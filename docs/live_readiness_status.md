@@ -1,7 +1,7 @@
 # Live Readiness Status
 
 Current operational status of the live-readiness gate baseline.
-Last updated: 2026-05-20. live_submit_executor_check CLI wrapper added.
+Last updated: 2026-05-20. Full pre-submit pipeline complete through PR #98.
 
 ---
 
@@ -10,13 +10,143 @@ Last updated: 2026-05-20. live_submit_executor_check CLI wrapper added.
 | Item | Value |
 |------|-------|
 | Gate baseline | Complete |
-| Current decision | **NO-GO** |
-| Approx readiness | ~78% |
-| Live submit | Not allowed. Not implemented. |
-| Release checklist | RELEASE_READY verdict available; manual operator approval required before any real-submit PR |
+| Current decision | **NO-GO** (account not funded) |
+| Approx readiness | ~99% |
+| Pre-submit checklist | READY |
+| Operator release checklist | RELEASE_READY |
+| Real-submit PR approval artifact | Complete — `approval_scope=OPEN_REAL_SUBMIT_IMPLEMENTATION_PR_ONLY` |
+| Executor check | Blocks safely — `blocked=true`, `submit_order_called=false` |
+| Blocked report review | PASS |
+| `submit_order` | Unreachable — no call path exists in current codebase |
+| Real live submit | **Not implemented. Not approved.** |
 
+`live_trading_approved=false` and `live_order_submission_approved=false` in all
+approval artifacts. The executor blocks at `approval_artifact` on every run.
 No live order submission is possible or planned in the current codebase.
-The gate is read-only infrastructure only.
+
+---
+
+## Safety State
+
+| Safety field | Current value | Meaning |
+|---|---|---|
+| `live_trading_enabled` | `false` | Live trading disabled |
+| `live_kill_switch_enabled` | `true` | Kill switch engaged |
+| `live_submit_dry_run` | `true` | Submit path in dry-run mode |
+| `live_require_human_confirm` | `true` | Human confirm token required |
+| `live_trading_approved` | `false` | Not approved in approval artifact |
+| `live_order_submission_approved` | `false` | Not approved in approval artifact |
+| `approval_scope` | `OPEN_REAL_SUBMIT_IMPLEMENTATION_PR_ONLY` | Authorizes opening a PR only — not live trading |
+| `submit_order_called` | `false` | Never called on any path |
+
+---
+
+## Pre-Submit Pipeline (Current)
+
+All seven steps below are implemented, tested, and offline-only.
+Running them end-to-end produces a blocked report confirming safe state.
+
+### Step 1 — Pre-submit checklist
+
+```bash
+python -m src.tools.live_pre_submit_checklist \
+    --config     config/settings.paper.local.yaml \
+    --output-dir output/live_pre_submit_checklist
+```
+
+Output: `output/live_pre_submit_checklist/live_pre_submit_checklist.json`
+
+### Step 2 — Dry-run submit plan
+
+```bash
+python -m src.tools.live_submit \
+    --config     config/settings.paper.local.yaml \
+    --symbol     SPY \
+    --output-dir output/live_submit_dry_run
+```
+
+Output: `output/live_submit_dry_run/live_submit_dry_run_plan.json`
+
+### Step 3 — Plan review
+
+```bash
+python -m src.tools.live_submit_plan_review \
+    --plan   output/live_submit_dry_run/live_submit_dry_run_plan.json \
+    --output output/live_submit_dry_run/live_submit_plan_review.json
+```
+
+Output: `output/live_submit_dry_run/live_submit_plan_review.json`
+
+### Step 4 — Operator release checklist
+
+```bash
+python -m src.tools.live_operator_release_checklist \
+    --config      config/settings.paper.local.yaml \
+    --pre-submit  output/live_pre_submit_checklist/live_pre_submit_checklist.json \
+    --submit-plan output/live_submit_dry_run/live_submit_dry_run_plan.json \
+    --plan-review output/live_submit_dry_run/live_submit_plan_review.json \
+    --output      output/live_operator_release_checklist.json
+```
+
+Output: `output/live_operator_release_checklist.json`
+
+### Step 5 — Real-submit PR approval artifact
+
+```bash
+python -m src.tools.live_real_submit_pr_approval \
+    --config        config/settings.paper.local.yaml \
+    --release-checklist output/live_operator_release_checklist.json \
+    --operator-name "Operator Name" \
+    --approval-note "Approving to open real-submit implementation PR only" \
+    --output        output/live_real_submit_pr_approval.json
+```
+
+Output: `output/live_real_submit_pr_approval.json`
+
+> This approval authorizes **opening a future implementation PR only**.
+> It does not authorize real live trading. `live_trading_approved=false`
+> and `live_order_submission_approved=false` are always written.
+
+### Step 6 — Executor check
+
+```bash
+python -m src.tools.live_submit_executor_check \
+    --config      config/settings.paper.local.yaml \
+    --symbol      SPY \
+    --confirm     "REAL-LIVE-SUBMIT-AUTHORIZED" \
+    --approval    output/live_real_submit_pr_approval.json \
+    --pre-submit  output/live_pre_submit_checklist/live_pre_submit_checklist.json \
+    --plan-review output/live_submit_dry_run/live_submit_plan_review.json \
+    --plan        output/live_submit_dry_run/live_submit_dry_run_plan.json \
+    --output-dir  output/live_submit_executor
+```
+
+Output: `output/live_submit_executor/live_submit_blocked_report.json`
+
+Expected result: `blocked=true`, `submit_order_called=false`,
+`block_guard=approval_artifact`. Exit code 0.
+
+### Step 7 — Blocked report review
+
+```bash
+python -m src.tools.live_submit_blocked_review \
+    --report output/live_submit_executor/live_submit_blocked_report.json
+```
+
+Expected result: `PASS`. Exit code 0.
+
+---
+
+## Artifact Summary
+
+| Artifact | Path |
+|----------|------|
+| Pre-submit checklist | `output/live_pre_submit_checklist/live_pre_submit_checklist.json` |
+| Dry-run submit plan | `output/live_submit_dry_run/live_submit_dry_run_plan.json` |
+| Plan review | `output/live_submit_dry_run/live_submit_plan_review.json` |
+| Operator release checklist | `output/live_operator_release_checklist.json` |
+| Real-submit PR approval | `output/live_real_submit_pr_approval.json` |
+| Executor blocked report | `output/live_submit_executor/live_submit_blocked_report.json` |
 
 ---
 
@@ -191,3 +321,9 @@ Remove-Item Env:\ALPACA_LIVE_SECRET_KEY -ErrorAction SilentlyContinue
 > **Do not add live submit in this phase.**
 > The current codebase has no live order submission path. Adding one requires
 > its own PR, its own safeguards, and explicit human sign-off as listed above.
+
+> **`live_real_submit_pr_approval` authorizes opening a PR only.**
+> `approval_scope=OPEN_REAL_SUBMIT_IMPLEMENTATION_PR_ONLY`. It does not authorize
+> real live trading. `live_trading_approved` and `live_order_submission_approved`
+> are always written as `false`. The executor blocks at `approval_artifact` on
+> every run. `submit_order` is never called.
