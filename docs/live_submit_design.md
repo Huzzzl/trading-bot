@@ -239,6 +239,7 @@ is manual and operator-driven.
 | `python -m src.tools.live_ledger_verify` | Validate live ledger schema |
 | `python -m src.tools.live_operator_release_checklist` | Offline release gate; reads 3 artifacts; produces RELEASE_READY verdict with manual approval fields |
 | `python -m src.tools.live_real_submit_pr_approval` | Offline approval artifact CLI; reads release checklist; produces explicit human sign-off for opening the real-submit PR only; does NOT approve live trading |
+| `src.execution.live_submit_executor` | Guarded executor skeleton; `maybe_execute_live_submit()` runs all 18 guards; `submit_order` is unreachable with current defaults; writes `live_submit_blocked_report.json` on blocked path |
 
 ---
 
@@ -449,3 +450,65 @@ It does **not** authorise live trading or live order submission.
 - Never writes the live ledger.
 - Never calls any Alpaca endpoint.
 - Never mutates the source release checklist file.
+
+---
+
+## Implemented: Guarded Submit Executor (`live_submit_executor.py`)
+
+`src/execution/live_submit_executor.py` contains `maybe_execute_live_submit()` —
+the single guarded entry point for real order submission.  This PR proves
+guarded evaluation only: there is **no return path with `blocked=False`**.
+Even if all 18 guards pass, a final `real_submit_not_implemented` block is
+returned instead of calling `submit_order`.  This PR does not contain
+executable real submit.
+
+### The 18 guards (in order)
+
+| # | Guard | Current default | Result |
+|---|---|---|---|
+| 1 | Confirmation token == `REAL-LIVE-SUBMIT-AUTHORIZED` | Wrong token | BLOCK |
+| 2 | Approval artifact exists | — | BLOCK if missing |
+| 3 | `approval_for_real_submit_pr == true` | From artifact | BLOCK if false |
+| 4 | `approval_scope == "OPEN_REAL_SUBMIT_IMPLEMENTATION_PR_ONLY"` | From artifact | BLOCK if wrong |
+| 5 | `live_trading_approved == true` | Always `false` in current tooling | **ALWAYS BLOCK** |
+| 6 | `live_order_submission_approved == true` | Always `false` in current tooling | **ALWAYS BLOCK** |
+| 7 | `live_trading_enabled == true` | Default `false` | BLOCK |
+| 8 | `live_submit_dry_run == false` | Default `true` | BLOCK |
+| 9 | `live_kill_switch_enabled == false` | Default `true` | BLOCK |
+| 10 | `live_require_human_confirm == true` | Default `true` | Pass |
+| 11 | Pre-submit checklist `READY` | — | BLOCK if not READY |
+| 12 | Plan review `PASS` | — | BLOCK if not PASS |
+| 13 | Daily order count < `live_max_orders_per_day` | — | BLOCK if exceeded |
+| 14 | Daily notional ≤ `live_max_notional_per_day` | — | BLOCK if exceeded |
+| 15 | No open position in target symbol | — | BLOCK if exists |
+| 16 | No open order for target symbol | — | BLOCK if exists |
+| 17 | `client_order_id` not in live ledger | — | BLOCK if duplicate |
+| 18 | `effective_notional ≤ live_max_order_notional` | — | BLOCK if exceeded |
+
+Guards 5 and 6 are permanent blocks under current tooling:
+`live_real_submit_pr_approval.py` always writes `live_trading_approved=false`
+and `live_order_submission_approved=false`.
+
+**Final fail-closed guard (guard 19):** if all 18 guards pass, execution still
+returns `blocked=true` with `block_guard="real_submit_not_implemented"`.
+There is no return path with `blocked=false` in this PR.
+
+### Blocked-path artifact
+
+On every exit path, `live_submit_blocked_report.json` is written with:
+
+```json
+{
+  "submit_order_called": false,
+  "blocked": true,
+  "block_guard": "<guard name>",
+  "violations": ["..."]
+}
+```
+
+### What it never does
+
+- Never calls `submit_order` with current defaults (unreachable).
+- Never writes the live ledger on the blocked path.
+- Never reads paper credentials.
+- Never cancels orders.
