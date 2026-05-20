@@ -1046,17 +1046,30 @@ in the config file (default: `output/live_execution_ledger.csv`).
 
 ---
 
-## Live Submit Design
+## Live Submit Design and Dry-Run Skeleton
 
-The proposed live submit architecture is documented separately.
+The proposed live submit architecture is documented in
+**[docs/live_submit_design.md](live_submit_design.md)**.
 
-See **[docs/live_submit_design.md](live_submit_design.md)** for:
+The dry-run skeleton (`src/tools/live_submit.py`) is implemented and validates
+all preconditions without ever calling `submit_order`.
 
-- Preconditions that must be satisfied before any implementation PR
+```bash
+python -m src.tools.live_submit \
+    --config     config/settings.paper.local.yaml \
+    --symbol     SPY \
+    --confirm    "DRY-RUN-LIVE-SUBMIT" \
+    --output-dir output/live_submit_dry_run
+```
+
+See the design document for:
+
+- Preconditions that must be satisfied before any real submit implementation
 - The full proposed submit flow (steps 1–12)
 - Hard safety constraints and non-goals
-- Required implementation components
+- Required implementation components for the real submit PR
 - Rollback and emergency procedures
 
-> **Live submit is not implemented.**  The design document is for planning
-> purposes only.  No `submit_order` call exists in the current codebase.
+> **Real live submit is not implemented.**  The skeleton enforces
+> `live_submit_dry_run=true` and writes a plan artifact only.
+> `submit_order` is never called.
