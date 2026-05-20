@@ -888,3 +888,70 @@ Both WARN and FAIL exit 1 so any deviation from the safe baseline is visible in 
 > All fields default to the safest possible values. No current tool submits
 > live orders. Adding a live submit path requires its own dedicated PR,
 > its own safeguards, and explicit human sign-off.
+
+---
+
+## Live Ledger Schema and Validator (`live_ledger_verify`)
+
+### What it does
+
+Validates the structure and safety invariants of the live execution ledger CSV.
+This is a **schema and constraint check only** — it never calls Alpaca, never
+reads credentials, and never submits or cancels orders.
+
+```bash
+python -m src.tools.live_ledger_verify \
+    --ledger output/live_execution_ledger.csv
+```
+
+### Ledger columns
+
+| Column | Description |
+|--------|-------------|
+| `run_id` | Identifies the run that produced this row |
+| `flow` | Intent flow label (e.g. `buy`, `close`) |
+| `client_order_id` | Operator-assigned order ID (required for every row) |
+| `alpaca_order_id` | Alpaca-assigned UUID (empty for dry-run rows) |
+| `symbol` | Ticker symbol |
+| `side` | `buy` or `sell` |
+| `order_type` | `market` or `limit` |
+| `live_sizing_mode` | `quantity` or `notional` |
+| `quantity` | Effective share quantity |
+| `notional` | Effective notional value (USD) |
+| `status` | Order status (required — must not be empty) |
+| `submitted_at` | Timestamp of submission (empty for dry-run rows) |
+| `checked_at_utc` | UTC timestamp when the intent was evaluated |
+| `dry_run_only` | `True` for all current rows — no live submit exists |
+| `submit_allowed` | `False` for all current rows — no live submit exists |
+| `notes` | Free-text notes |
+
+### Result logic
+
+| Result | Condition |
+|--------|-----------|
+| `PASS` | Ledger absent (not yet created) or all rows pass all checks |
+| `WARN` | `alpaca_order_id` is empty for a dry-run row (informational) |
+| `FAIL` | Missing required column; `submit_allowed=true` with `dry_run_only=true`; empty `client_order_id`; empty `status`; invalid `side` or `order_type` |
+
+Both WARN and FAIL exit 1.  A missing ledger exits 0 (PASS) — the ledger
+is written only when a live submit path is eventually implemented.
+
+### `append_live_ledger_row` write guard
+
+The `append_live_ledger_row()` helper in `src/execution/live_ledger.py` is
+write-guarded and will raise `RuntimeError` unless `allow_write=True` is
+explicitly passed.  No current code passes `allow_write=True`.  This guard
+ensures the ledger cannot be written accidentally before a live submit path
+is formally reviewed and approved.
+
+### What it never does
+
+- Never calls any Alpaca endpoint.
+- Never reads credentials.
+- Never calls `submit_order` or `cancel_order`.
+- Never writes any file.
+
+> **This is schema and validation infrastructure only.**
+> No live order submission path exists in this codebase.
+> Adding one requires its own dedicated PR, its own safeguards,
+> and explicit human sign-off as listed in the Prerequisites section.
