@@ -74,6 +74,7 @@ The following read-only checks and guards are implemented and tested:
 | `live_readiness_gate --append-history` | Optional per-run CSV snapshot for trend tracking (read-only) |
 | `live_readiness_history_review` | Trend review of history CSV: GO/NO-GO counts, recurring blockers (read-only) |
 | Fractional/notional shadow sizing | `live_sizing_mode=notional` + `live_order_notional_override` — shadow check only, no submit |
+| `live_dry_run_intents` | Dry-run intent audit: runs readiness checks, writes hypothetical intent artifacts, never submits |
 
 ---
 
@@ -151,6 +152,11 @@ Remove-Item Env:\ALPACA_LIVE_SECRET_KEY -ErrorAction SilentlyContinue
 > Switching to notional mode changes how the *preflight check* computes effective
 > notional. It does not add any live order submission path. No live orders are
 > ever submitted by any tool in this repository.
+
+> **`live_dry_run_intents` is an audit tool only.**
+> Every artifact it produces includes `dry_run_only=true` and `submit_allowed=false`.
+> Adding a live order submission path requires its own dedicated PR and explicit
+> human sign-off as listed in the Prerequisites section above.
 
 > **Do not bypass NO-GO.**
 > A NO-GO decision is not a configuration problem to be worked around.

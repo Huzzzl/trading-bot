@@ -670,3 +670,120 @@ One row per candidate intent:
 | `sizing_reason` | Human-readable explanation |
 
 No ledger rows are ever written. These files are audit artifacts only.
+
+
+---
+
+## Live Dry-Run Intent Audit (`live_dry_run_intents`)
+
+### What it does
+
+Produces hypothetical live order intent artifacts using the same live
+readiness and notional sizing logic as `live_readiness_gate` and
+`live_shadow_preflight`, without ever submitting or cancelling an order.
+
+1. Runs all live readiness checks: credentials, account health, candidates,
+   live sizing, open positions, open orders.
+2. If all checks PASS (GO): writes dry-run intent artifacts and exits 0.
+3. If any check fails (NO-GO): writes a summary-only artifact and exits 1.
+
+### What it never does
+
+- Never calls `submit_order` or `cancel_order`.
+- Never writes a ledger row.
+- Never reads paper credentials (`ALPACA_API_KEY` / `ALPACA_SECRET_KEY`).
+- Never modifies any live account state.
+
+> **Dry-run only.** Every artifact produced by this tool includes
+> `dry_run_only=true` and `submit_allowed=false`. These fields must never be
+> removed or overridden. Adding a live order submission path requires its own
+> dedicated PR and explicit human sign-off.
+
+### Usage
+
+```bash
+export ALPACA_LIVE_API_KEY="your-live-api-key"
+export ALPACA_LIVE_SECRET_KEY="your-live-secret-key"
+
+python -m src.tools.live_dry_run_intents \
+    --config    config/settings.paper.local.yaml \
+    --output-dir output/live_dry_run_intents \
+    --symbol    SPY
+```
+
+```powershell
+$env:ALPACA_LIVE_API_KEY    = "your-live-api-key"
+$env:ALPACA_LIVE_SECRET_KEY = "your-live-secret-key"
+
+python -m src.tools.live_dry_run_intents `
+    --config     config/settings.paper.local.yaml `
+    --output-dir output/live_dry_run_intents `
+    --symbol     SPY
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--config` | required | Path to YAML config |
+| `--output-dir` | required | Directory for output artifacts |
+| `--symbol` | `SPY` | Symbol to audit |
+
+### Readiness checks performed
+
+The same checks as `live_shadow_preflight` for the specified symbol:
+
+| Check | PASS | FAIL |
+|-------|------|------|
+| `config` | Loads and validates | Load or validation error |
+| `credentials` | Both `ALPACA_LIVE_*` vars present | Either missing |
+| `live_account` | Status `ACTIVE`, not blocked | Inactive, blocked, or API error |
+| `candidates` | ≥1 buy+market candidate for symbol | No candidates |
+| `live_sizing` | Sizing within all configured limits | Qty/notional/mode invalid |
+| `live_position` | No open position for symbol | Existing live position |
+| `live_orders` | No open orders for symbol | Existing live open order |
+
+### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | All checks PASS (GO) — dry-run artifacts written |
+| `1` | Any check fails (NO-GO) — summary only, no intent rows |
+
+### Output artifacts
+
+Three files are written to `--output-dir`:
+
+**`live_order_intents.csv`** / **`live_order_intents.json`**
+
+One row per candidate intent on GO runs (empty on NO-GO):
+
+| Field | Description |
+|-------|-------------|
+| `checked_at_utc` | ISO-8601 timestamp |
+| `symbol`, `side`, `order_type` | Order parameters |
+| `live_sizing_mode` | `"quantity"` or `"notional"` |
+| `effective_quantity` | Computed order quantity |
+| `effective_notional` | Computed order notional |
+| `entry_price` | From intent metadata |
+| `live_max_order_notional` | Per-order notional cap |
+| `live_max_notional` | Portfolio-level notional cap |
+| `readiness_decision` | `GO` or `NO-GO` |
+| `dry_run_only` | Always `true` |
+| `submit_allowed` | Always `false` |
+| `sizing_status` | `PASS` or `FAIL` per intent |
+| `sizing_reason` | Human-readable explanation |
+
+**`live_dry_run_summary.json`**
+
+| Field | Description |
+|-------|-------------|
+| `checked_at_utc` | ISO-8601 timestamp |
+| `symbol` | Symbol audited |
+| `decision` | `GO` or `NO-GO` |
+| `dry_run_only` | Always `true` |
+| `submit_allowed` | Always `false` |
+| `intent_count` | Number of intent rows written |
+| `pass_count` | Intents passing sizing |
+| `fail_count` | Intents failing sizing |
+| `top_blockers` | Up to 5 blocker messages |
+
+No live orders are ever submitted. These files are audit artifacts only.
