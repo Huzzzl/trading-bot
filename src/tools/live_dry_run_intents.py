@@ -233,6 +233,27 @@ def build_summary(
     }
 
 
+def _write_no_go_summary(
+    output_dir: Path,
+    checked_at_utc: str,
+    symbol: str,
+    blockers: list[str],
+) -> Path:
+    """Write live_dry_run_summary.json for early NO-GO paths (no intent files).
+
+    Used when config load, credential check, or client creation fails before
+    readiness checks can run.  Returns the summary path.
+    """
+    summary = build_summary(checked_at_utc, symbol, "NO-GO", blockers, [])
+    output_dir.mkdir(parents=True, exist_ok=True)
+    summary_path = output_dir / "live_dry_run_summary.json"
+    summary_path.write_text(
+        json.dumps(summary, indent=2, default=str),
+        encoding="utf-8",
+    )
+    return summary_path
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -259,19 +280,24 @@ def main(argv: list[str] | None = None) -> None:
     # Config
     cfg_result, cfg = check_config(args.config)
     if cfg_result["status"] == "FAIL" or cfg is None:
-        print(f"\n[FAIL] config: {cfg_result.get('detail', 'could not load config')}")
+        detail = cfg_result.get("detail", "could not load config")
+        _write_no_go_summary(output_dir, checked_at_utc, symbol, [f"[config] {detail}"])
+        print(f"\n[FAIL] config: {detail}")
         sys.exit(1)
 
     # Credentials
     cred_result, creds = check_credentials()
     if cred_result["status"] == "FAIL" or creds is None:
-        print(f"\n[FAIL] credentials: {cred_result.get('detail', 'missing live credentials')}")
+        detail = cred_result.get("detail", "missing live credentials")
+        _write_no_go_summary(output_dir, checked_at_utc, symbol, [f"[credentials] {detail}"])
+        print(f"\n[FAIL] credentials: {detail}")
         sys.exit(1)
 
     api_key, secret_key = creds
     try:
         client = _make_live_client(api_key, secret_key)
     except Exception as exc:
+        _write_no_go_summary(output_dir, checked_at_utc, symbol, [f"[client] {exc}"])
         print(f"\n[FAIL] could not create live client: {exc}")
         sys.exit(1)
 
