@@ -787,3 +787,55 @@ One row per candidate intent on GO runs (empty on NO-GO):
 | `top_blockers` | Up to 5 blocker messages |
 
 No live orders are ever submitted. These files are audit artifacts only.
+
+### Artifact review (`live_dry_run_review`)
+
+After running `live_dry_run_intents`, review the artifacts with the read-only review CLI:
+
+```bash
+python -m src.tools.live_dry_run_review \
+    --summary output/live_dry_run_intents/live_dry_run_summary.json \
+    --intents  output/live_dry_run_intents/live_order_intents.csv
+```
+
+Outputs a concise operator summary:
+
+```
+=== Live Dry-Run Review ===
+  decision              : GO
+  symbol                : SPY
+  intent_count          : 1
+  pass_count            : 1
+  fail_count            : 0
+  dry_run_only_all      : True
+  submit_allowed_any    : False
+  sizing_mode           : quantity
+  notional_per_order    : (none)
+  min_effective_quantity: 1.0
+  max_effective_quantity: 1.0
+
+  Top blockers: (none)
+
+  RESULT: PASS
+============================
+```
+
+#### Review result
+
+`review_result=PASS` requires **all** of:
+
+- `summary.decision == GO`
+- Every intent row: `dry_run_only` is truthy
+- Every intent row: `submit_allowed` is falsy
+- Every intent row: `sizing_status == PASS`
+- `summary.dry_run_only` is truthy
+- `summary.submit_allowed` is falsy
+
+Any inconsistency in safety flags (`submit_allowed=True`, `dry_run_only=False`) is treated as a dangerous artifact corruption and reported as a safety violation.
+
+| Exit code | Meaning |
+|-----------|---------|
+| `0` | `review_result=PASS` |
+| `1` | Any check fails — NO-GO decision, sizing failure, or safety flag violation |
+
+The review tool is strictly read-only: no credentials, no Alpaca calls, no file writes.
