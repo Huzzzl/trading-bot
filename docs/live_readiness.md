@@ -1157,6 +1157,23 @@ On every exit path, `live_submit_blocked_report.json` is written with
 > **`submit_order` is never called in this codebase.**
 > All 18 guards passing still ends at `real_submit_not_implemented`.
 
+### Step 5a — Run the CLI wrapper to generate the blocked report
+
+```bash
+python -m src.tools.live_submit_executor_check \
+    --config      config/settings.paper.local.yaml \
+    --symbol      SPY \
+    --confirm     "REAL-LIVE-SUBMIT-AUTHORIZED" \
+    --approval    output/live_real_submit_pr_approval.json \
+    --pre-submit  output/live_pre_submit_checklist/live_pre_submit_checklist.json \
+    --plan-review output/live_submit_dry_run/live_submit_plan_review.json \
+    --output-dir  output/live_submit_executor
+```
+
+Invokes `maybe_execute_live_submit()` and writes `live_submit_blocked_report.json`.
+Exits 0 only when `blocked=true` and `submit_order_called=false` and the report
+file exists.  Never calls `submit_order`.  Never writes the live ledger.
+
 ### Step 6 — Review the blocked report artifact
 
 ```bash
