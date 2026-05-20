@@ -456,9 +456,11 @@ It does **not** authorise live trading or live order submission.
 ## Implemented: Guarded Submit Executor (`live_submit_executor.py`)
 
 `src/execution/live_submit_executor.py` contains `maybe_execute_live_submit()` —
-the single guarded entry point for real order submission.  All 18 safety guards
-must pass before `submit_order` can be called.  With the current default config
-and approval artifacts, `submit_order` is permanently unreachable.
+the single guarded entry point for real order submission.  This PR proves
+guarded evaluation only: there is **no return path with `blocked=False`**.
+Even if all 18 guards pass, a final `real_submit_not_implemented` block is
+returned instead of calling `submit_order`.  This PR does not contain
+executable real submit.
 
 ### The 18 guards (in order)
 
@@ -487,10 +489,13 @@ Guards 5 and 6 are permanent blocks under current tooling:
 `live_real_submit_pr_approval.py` always writes `live_trading_approved=false`
 and `live_order_submission_approved=false`.
 
+**Final fail-closed guard (guard 19):** if all 18 guards pass, execution still
+returns `blocked=true` with `block_guard="real_submit_not_implemented"`.
+There is no return path with `blocked=false` in this PR.
+
 ### Blocked-path artifact
 
-When any guard fails, `live_submit_blocked_report.json` is written to the
-output directory with:
+On every exit path, `live_submit_blocked_report.json` is written with:
 
 ```json
 {

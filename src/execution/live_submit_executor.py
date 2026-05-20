@@ -362,18 +362,19 @@ def maybe_execute_live_submit(
     output_dir: Path,
     broker_client: Any = None,
 ) -> dict[str, Any]:
-    """Run all safety guards; call submit_order only if every guard passes.
+    """Run all safety guards in order; fail closed at every step.
 
-    With current default config and approval artifacts, submit_order is
-    permanently unreachable.  A ``live_submit_blocked_report.json`` is written
-    to ``output_dir`` whenever submission is blocked.
+    There is no return path with ``blocked=False`` in this PR.  If all 18
+    guards pass, a final ``real_submit_not_implemented`` block is returned
+    instead of calling ``submit_order``.  A ``live_submit_blocked_report.json``
+    is written to ``output_dir`` on every exit path.
 
     Returns
     -------
     dict with at minimum:
-        submit_order_called : bool  (always False with current tooling)
-        blocked             : bool
-        block_guard         : str | None
+        submit_order_called : bool  (always False in this PR)
+        blocked             : bool  (always True in this PR)
+        block_guard         : str
         violations          : list[str]
     """
     checked_at = datetime.now(tz=timezone.utc).isoformat()
@@ -471,21 +472,12 @@ def maybe_execute_live_submit(
         return _blocked("notional_cap", v)
 
     # -----------------------------------------------------------------------
-    # All guards passed — submit_order would be called here.
-    # Unreachable with current tooling (live_trading_approved=false,
-    # live_order_submission_approved=false, live_submit_dry_run=true,
-    # live_kill_switch_enabled=true, live_trading_enabled=false).
+    # All 18 guards passed — real submit execution would follow here.
+    # It is NOT implemented in this PR.  Fail closed: return a blocked report
+    # so there is no return path with blocked=False in the current codebase.
+    # submit_order is never called.
     # -----------------------------------------------------------------------
-    # broker_client.submit_order(...)  # NOT CALLED — guards prevent reaching here
-    return {
-        "checked_at_utc":      checked_at,
-        "symbol":              symbol,
-        "submit_order_called": False,
-        "blocked":             False,
-        "block_guard":         None,
-        "violations":          [],
-        "note": (
-            "All guards passed but submit_order was not called. "
-            "Real submit requires a future implementation step."
-        ),
-    }
+    return _blocked(
+        "real_submit_not_implemented",
+        ["real submit execution is not implemented in this PR"],
+    )

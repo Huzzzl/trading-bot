@@ -418,3 +418,100 @@ class TestMaybeExecuteLiveSubmit:
         with _patch.dict(os.environ, env, clear=True):
             result = _run(**_default_kwargs(tmp_path))
         assert result["submit_order_called"] is False
+
+
+# ---------------------------------------------------------------------------
+# All-guards-passing path still fails closed
+# ---------------------------------------------------------------------------
+
+class TestAllGuardsPassingFailsClosed:
+    """Prove that even when all 18 guards pass, blocked=True and submit_order
+    is never called.  This verifies the fail-closed invariant for this PR."""
+
+    def _all_passing_kwargs(self, tmp_path: Path) -> dict:
+        """Build kwargs where every guard would pass — except the final
+        real_submit_not_implemented guard which always blocks."""
+        approval = _write(tmp_path, "full_approval.json", _valid_approval(
+            live_trading_approved=True,
+            live_order_submission_approved=True,
+        ))
+        checklist = _write(tmp_path, "full_checklist.json", _valid_checklist())
+        review = _write(tmp_path, "full_review.json", _valid_review())
+        output_dir = tmp_path / "full_output"
+        return dict(
+            confirm_token=              "REAL-LIVE-SUBMIT-AUTHORIZED",
+            approval_path=              approval,
+            checklist_path=             checklist,
+            review_path=                review,
+            symbol=                     "SPY",
+            intended_notional=          95.0,
+            client_order_id=            "all-pass-order-001",
+            live_trading_enabled=       True,
+            live_submit_dry_run=        False,
+            live_kill_switch_enabled=   False,
+            live_require_human_confirm= True,
+            live_max_order_notional=    100.0,
+            live_max_orders_per_day=    1,
+            live_max_notional_per_day=  100.0,
+            ledger_path=                tmp_path / "full_ledger.csv",
+            output_dir=                 output_dir,
+            broker_client=              None,
+        )
+
+    def test_all_guards_pass_still_blocked(self, tmp_path):
+        with patch(f"{_MODULE}._count_today_orders", return_value=(0, 0.0)), \
+             patch(f"{_MODULE}._is_client_order_id_used", return_value=False):
+            result = _run(**self._all_passing_kwargs(tmp_path))
+        assert result["blocked"] is True
+
+    def test_all_guards_pass_block_guard_is_not_implemented(self, tmp_path):
+        with patch(f"{_MODULE}._count_today_orders", return_value=(0, 0.0)), \
+             patch(f"{_MODULE}._is_client_order_id_used", return_value=False):
+            result = _run(**self._all_passing_kwargs(tmp_path))
+        assert result["block_guard"] == "real_submit_not_implemented"
+
+    def test_all_guards_pass_submit_order_called_false(self, tmp_path):
+        with patch(f"{_MODULE}._count_today_orders", return_value=(0, 0.0)), \
+             patch(f"{_MODULE}._is_client_order_id_used", return_value=False):
+            result = _run(**self._all_passing_kwargs(tmp_path))
+        assert result["submit_order_called"] is False
+
+    def test_all_guards_pass_broker_submit_order_not_called(self, tmp_path):
+        broker = MagicMock()
+        kwargs = self._all_passing_kwargs(tmp_path)
+        kwargs["broker_client"] = broker
+        with patch(f"{_MODULE}._count_today_orders", return_value=(0, 0.0)), \
+             patch(f"{_MODULE}._is_client_order_id_used", return_value=False), \
+             patch(f"{_MODULE}._check_broker_position", return_value=False), \
+             patch(f"{_MODULE}._check_broker_open_order", return_value=False):
+            _run(**kwargs)
+        broker.submit_order.assert_not_called()
+
+    def test_all_guards_pass_blocked_report_written(self, tmp_path):
+        with patch(f"{_MODULE}._count_today_orders", return_value=(0, 0.0)), \
+             patch(f"{_MODULE}._is_client_order_id_used", return_value=False):
+            _run(**self._all_passing_kwargs(tmp_path))
+        report_path = tmp_path / "full_output" / "live_submit_blocked_report.json"
+        assert report_path.exists()
+        data = json.loads(report_path.read_text(encoding="utf-8"))
+        assert data["submit_order_called"] is False
+        assert data["blocked"] is True
+        assert data["block_guard"] == "real_submit_not_implemented"
+
+    def test_all_guards_pass_no_ledger_write(self, tmp_path):
+        ledger = tmp_path / "full_ledger.csv"
+        kwargs = self._all_passing_kwargs(tmp_path)
+        kwargs["ledger_path"] = ledger
+        with patch(f"{_MODULE}._count_today_orders", return_value=(0, 0.0)), \
+             patch(f"{_MODULE}._is_client_order_id_used", return_value=False):
+            _run(**kwargs)
+        assert not ledger.exists()
+
+    def test_no_return_path_with_blocked_false(self, tmp_path):
+        """Prove there is no blocked=False return path in this PR."""
+        with patch(f"{_MODULE}._count_today_orders", return_value=(0, 0.0)), \
+             patch(f"{_MODULE}._is_client_order_id_used", return_value=False):
+            result = _run(**self._all_passing_kwargs(tmp_path))
+        assert result.get("blocked") is not False, (
+            "blocked=False must not be returned — fail-closed invariant violated"
+        )

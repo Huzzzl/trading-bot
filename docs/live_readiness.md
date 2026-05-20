@@ -1135,11 +1135,15 @@ It does **not** authorise live trading or live order submission.
 Never calls Alpaca.  Never reads credentials.  Never submits orders.
 Never mutates the source release checklist file.
 
-### Step 5 — Guarded submit executor (skeleton — submit unreachable)
+### Step 5 — Guarded submit executor (skeleton — fail-closed, submit unreachable)
 
 `src/execution/live_submit_executor.py` contains `maybe_execute_live_submit()`,
-which runs all 18 safety guards before reaching `submit_order`.  With current
-defaults and approval artifacts, `submit_order` is permanently unreachable:
+which runs all 18 safety guards.  **There is no return path with `blocked=False`
+in this PR.**  Even if all 18 guards pass, a final `real_submit_not_implemented`
+block is returned instead of calling `submit_order`.  This PR proves guarded
+evaluation only — it does not contain executable real submit.
+
+Current defaults and approval artifacts block at guards 5–9:
 
 - Guards 5–6: `live_trading_approved=false` and `live_order_submission_approved=false`
   are always written by current approval tooling → **always block**
@@ -1147,8 +1151,8 @@ defaults and approval artifacts, `submit_order` is permanently unreachable:
 - Guard 8: `live_submit_dry_run=true` (default) → blocks
 - Guard 9: `live_kill_switch_enabled=true` (default) → blocks
 
-On any blocked path, `live_submit_blocked_report.json` is written with
+On every exit path, `live_submit_blocked_report.json` is written with
 `submit_order_called=false` and the blocking guard identified.
 
 > **`submit_order` is never called in this codebase.**
-> All 18 guards must pass simultaneously — impossible with current tooling.
+> All 18 guards passing still ends at `real_submit_not_implemented`.
