@@ -839,3 +839,52 @@ Any inconsistency in safety flags (`submit_allowed=True`, `dry_run_only=False`) 
 | `1` | Any check fails — NO-GO decision, sizing failure, or safety flag violation |
 
 The review tool is strictly read-only: no credentials, no Alpaca calls, no file writes.
+
+
+---
+
+## Live Safety Config Baseline (`live_safety_status`)
+
+### What it does
+
+Reads config and reports the current state of all live safety locks.
+No Alpaca connection, no credentials, no file writes.
+
+```bash
+python -m src.tools.live_safety_status \
+    --config config/settings.paper.local.yaml
+```
+
+### Safety fields (under `execution:`)
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `live_trading_enabled` | `false` | Master switch — must remain `false` until live trading is fully designed and reviewed |
+| `live_kill_switch_enabled` | `true` | Kill switch must be enabled at all times |
+| `live_submit_dry_run` | `true` | Dry-run gate — prevents any real submit even if enabled |
+| `live_require_human_confirm` | `true` | Requires explicit human confirmation before any live submit |
+| `live_max_orders_per_day` | `1` | Daily order count cap |
+| `live_max_notional_per_day` | `100.0` | Daily notional cap (USD) |
+| `live_ledger_path` | `output/live_execution_ledger.csv` | Path for future live ledger (not written by any current tool) |
+
+### Result logic
+
+| Result | Condition |
+|--------|-----------|
+| `PASS` | `live_trading_enabled=false`, `live_kill_switch_enabled=true`, `live_submit_dry_run=true`, `live_require_human_confirm=true` |
+| `WARN` | `live_trading_enabled=true` but `live_submit_dry_run=true` (dry-run gate still engaged) |
+| `FAIL` | `live_trading_enabled=true` and `live_submit_dry_run=false`; or `live_kill_switch_enabled=false`; or `live_require_human_confirm=false` |
+
+Both WARN and FAIL exit 1 so any deviation from the safe baseline is visible in CI.
+
+### What it never does
+
+- Never calls any Alpaca endpoint.
+- Never reads credentials.
+- Never calls `submit_order` or `cancel_order`.
+- Never writes any file — including `live_ledger_path`.
+
+> **These fields are a prerequisite baseline, not a live trading gate.**
+> All fields default to the safest possible values. No current tool submits
+> live orders. Adding a live submit path requires its own dedicated PR,
+> its own safeguards, and explicit human sign-off.

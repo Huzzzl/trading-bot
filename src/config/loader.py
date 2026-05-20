@@ -86,6 +86,13 @@ class ExecutionConfig:
     live_max_order_notional:                 float        = 100.0
     live_max_daily_notional:                 float        = 200.0
     live_max_account_notional_fraction:      float        = 0.1
+    live_trading_enabled:                    bool         = False
+    live_kill_switch_enabled:                bool         = True
+    live_submit_dry_run:                     bool         = True
+    live_require_human_confirm:              bool         = True
+    live_max_orders_per_day:                 int          = 1
+    live_max_notional_per_day:               float        = 100.0
+    live_ledger_path:                        str          = "output/live_execution_ledger.csv"
 
 
 @dataclass
@@ -316,6 +323,13 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
         live_max_order_notional=float(ex.get("live_max_order_notional", 100.0)),
         live_max_daily_notional=float(ex.get("live_max_daily_notional", 200.0)),
         live_max_account_notional_fraction=float(ex.get("live_max_account_notional_fraction", 0.1)),
+        live_trading_enabled=bool(ex.get("live_trading_enabled", False)),
+        live_kill_switch_enabled=bool(ex.get("live_kill_switch_enabled", True)),
+        live_submit_dry_run=bool(ex.get("live_submit_dry_run", True)),
+        live_require_human_confirm=bool(ex.get("live_require_human_confirm", True)),
+        live_max_orders_per_day=int(ex.get("live_max_orders_per_day", 1)),
+        live_max_notional_per_day=float(ex.get("live_max_notional_per_day", 100.0)),
+        live_ledger_path=str(ex.get("live_ledger_path", "output/live_execution_ledger.csv")),
     )
 
     app_cfg = AppConfig(
