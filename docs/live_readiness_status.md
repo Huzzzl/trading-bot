@@ -1,7 +1,7 @@
 # Live Readiness Status
 
 Current operational status of the live-readiness gate baseline.
-Last updated: 2026-05-20. Live pre-submit checklist CLI added.
+Last updated: 2026-05-20. Live submit design document added.
 
 ---
 
@@ -81,6 +81,18 @@ The following read-only checks and guards are implemented and tested:
 | `live_ledger_verify` | Read-only live ledger schema validator; checks required columns and safety invariants; PASS on missing ledger (not yet created) |
 | Live ledger schema | 16-column schema defined in `src/execution/live_ledger.py`; `append_live_ledger_row()` write-guarded — raises unless `allow_write=True` explicitly passed |
 | `live_pre_submit_checklist` | Unified operator checklist; runs all 5 checks in sequence and produces READY/NOT READY; no live submit, no credentials for offline checks |
+
+---
+
+## Live Submit Design
+
+The proposed live submit architecture is documented in
+**[docs/live_submit_design.md](live_submit_design.md)**.
+
+The design covers the full proposed submit flow (steps 1–12), hard safety
+constraints, required implementation components, rollback procedures, and
+open questions.  **Live submit is not implemented.** The design document is
+for planning purposes only — no `submit_order` call exists in the codebase.
 
 ---
 
