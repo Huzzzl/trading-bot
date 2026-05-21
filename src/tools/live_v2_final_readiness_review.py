@@ -141,7 +141,22 @@ def run_review(
     try:
         executor_report = parse_blocked_report(executor_report_path)
     except (FileNotFoundError, ValueError) as exc:
-        return _fail_early(checked_at, f"executor report: {exc}", symbol, approved_max_notional)
+        # Approvals sub-review already ran; preserve its result rather than
+        # collapsing everything to _fail_early which would report FAIL for approvals.
+        return {
+            "checked_at_utc":                    checked_at,
+            "review_result":                     "FAIL",
+            "approvals_review_result":           approvals_result,
+            "executor_readiness_review_result":  "FAIL",
+            "symbol":                            symbol,
+            "approved_max_notional":             approved_max_notional,
+            "block_guard":                       None,
+            "submit_order_called":               None,
+            "live_submit_enabled":               False,
+            "real_submit_implemented":           False,
+            "final_blocker":                     "unknown",
+            "violations":                        all_violations + [f"executor report: {exc}"],
+        }
 
     e_result, e_violations = validate_readiness(executor_report)
     executor_result = e_result

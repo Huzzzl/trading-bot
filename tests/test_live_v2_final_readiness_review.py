@@ -254,6 +254,59 @@ class TestRunReview:
         assert result["review_result"] == "FAIL"
         assert any("executor report" in v for v in result["violations"])
 
+    def test_valid_approvals_missing_executor_preserves_approvals_pass(self, tmp_path):
+        """Approvals pass; executor report missing -> approvals_review_result stays PASS."""
+        ta_path, sa_path, _ = _write_artifacts(tmp_path)
+        result = _run_review(tmp_path,
+                             ta_path=ta_path,
+                             sa_path=sa_path,
+                             exec_path=tmp_path / "nonexistent_exec.json")
+        assert result["review_result"] == "FAIL"
+        assert result["approvals_review_result"] == "PASS"
+        assert result["executor_readiness_review_result"] == "FAIL"
+
+    def test_valid_approvals_missing_executor_preserves_symbol_and_notional(self, tmp_path):
+        ta_path, sa_path, _ = _write_artifacts(tmp_path)
+        result = _run_review(tmp_path,
+                             ta_path=ta_path,
+                             sa_path=sa_path,
+                             exec_path=tmp_path / "nonexistent_exec.json")
+        assert result["symbol"] == "SPY"
+        assert result["approved_max_notional"] == 100.0
+
+    def test_valid_approvals_missing_executor_fixed_fields(self, tmp_path):
+        ta_path, sa_path, _ = _write_artifacts(tmp_path)
+        result = _run_review(tmp_path,
+                             ta_path=ta_path,
+                             sa_path=sa_path,
+                             exec_path=tmp_path / "nonexistent_exec.json")
+        assert result["live_submit_enabled"] is False
+        assert result["real_submit_implemented"] is False
+        assert result["final_blocker"] == "unknown"
+
+    def test_valid_approvals_malformed_executor_preserves_approvals_pass(self, tmp_path):
+        """Approvals pass; executor report malformed -> approvals_review_result stays PASS."""
+        ta_path, sa_path, _ = _write_artifacts(tmp_path)
+        bad_exec = tmp_path / "bad_exec.json"
+        bad_exec.write_text("{bad json", encoding="utf-8")
+        result = _run_review(tmp_path,
+                             ta_path=ta_path,
+                             sa_path=sa_path,
+                             exec_path=bad_exec)
+        assert result["review_result"] == "FAIL"
+        assert result["approvals_review_result"] == "PASS"
+        assert result["executor_readiness_review_result"] == "FAIL"
+
+    def test_valid_approvals_malformed_executor_violation_tagged(self, tmp_path):
+        ta_path, sa_path, _ = _write_artifacts(tmp_path)
+        bad_exec = tmp_path / "bad_exec.json"
+        bad_exec.write_text("{bad json", encoding="utf-8")
+        result = _run_review(tmp_path,
+                             ta_path=ta_path,
+                             sa_path=sa_path,
+                             exec_path=bad_exec)
+        assert any("executor report" in v for v in result["violations"])
+
     def test_malformed_ta_fails(self, tmp_path):
         ta_path = tmp_path / "bad_ta.json"
         ta_path.write_text("{bad json", encoding="utf-8")
