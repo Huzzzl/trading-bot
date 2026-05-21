@@ -1262,6 +1262,7 @@ Writes under ``--output-dir``:
 - ``live_v2_approvals_review.json``
 - ``live_v2_executor_readiness_review.json``
 - ``live_v2_final_readiness_review.json``
+- ``live_v2_readiness_bundle.json`` (top-level audit summary)
 
 All three artifacts are always written regardless of earlier step failures.
 If a later review's inputs exist, it runs even if an earlier review failed.

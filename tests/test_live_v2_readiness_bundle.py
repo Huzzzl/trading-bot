@@ -119,6 +119,14 @@ def _run_main(tmp_path: Path, *,
 
 
 # ---------------------------------------------------------------------------
+# Bundle summary artifact helpers
+# ---------------------------------------------------------------------------
+
+def _bundle_summary(out: Path) -> dict:
+    return json.loads((out / "live_v2_readiness_bundle.json").read_text(encoding="utf-8"))
+
+
+# ---------------------------------------------------------------------------
 # run_bundle unit tests
 # ---------------------------------------------------------------------------
 
@@ -272,6 +280,51 @@ class TestRunBundle:
         assert data["live_submit_enabled"] is False
         assert data["real_submit_implemented"] is False
 
+    # --- Bundle summary artifact tests ---
+
+    def test_run_bundle_writes_bundle_summary_artifact(self, tmp_path):
+        _, out = _run_bundle(tmp_path)
+        assert (out / "live_v2_readiness_bundle.json").exists()
+
+    def test_bundle_summary_contains_bundle_result(self, tmp_path):
+        _, out = _run_bundle(tmp_path)
+        data = _bundle_summary(out)
+        assert "bundle_result" in data
+        assert data["bundle_result"] == "PASS"
+
+    def test_bundle_summary_contains_all_artifact_paths(self, tmp_path):
+        _, out = _run_bundle(tmp_path)
+        data = _bundle_summary(out)
+        assert "approvals_review_path" in data
+        assert "executor_readiness_review_path" in data
+        assert "final_readiness_review_path" in data
+
+    def test_bundle_summary_contains_checked_at_utc(self, tmp_path):
+        _, out = _run_bundle(tmp_path)
+        data = _bundle_summary(out)
+        assert "checked_at_utc" in data
+        assert data["checked_at_utc"]
+
+    def test_bundle_summary_written_on_fail(self, tmp_path):
+        """Bundle summary artifact is written even when bundle_result is FAIL."""
+        ta_path = _write(tmp_path / "bad_ta.json",
+                         _valid_ta(live_trading_approved=False))
+        sa_path = _write(tmp_path / "sa.json", _valid_sa(ta_path))
+        exec_path = _write(tmp_path / "exec.json", _valid_executor_report())
+        bundle, out = _run_bundle(tmp_path,
+                                  ta_path=ta_path, sa_path=sa_path, exec_path=exec_path)
+        assert bundle["bundle_result"] == "FAIL"
+        assert (out / "live_v2_readiness_bundle.json").exists()
+        data = _bundle_summary(out)
+        assert data["bundle_result"] == "FAIL"
+
+    def test_bundle_summary_paths_point_to_existing_files(self, tmp_path):
+        _, out = _run_bundle(tmp_path)
+        data = _bundle_summary(out)
+        assert Path(data["approvals_review_path"]).exists()
+        assert Path(data["executor_readiness_review_path"]).exists()
+        assert Path(data["final_readiness_review_path"]).exists()
+
 
 # ---------------------------------------------------------------------------
 # main() integration tests
@@ -388,7 +441,6 @@ class TestMain:
         assert ledger_files == []
 
     def test_no_alpaca_import(self):
-        import importlib
         import sys
         # Ensure alpaca_trade_api is not imported by the bundle module
         bundle_mod = sys.modules.get("src.tools.live_v2_readiness_bundle")
@@ -399,3 +451,34 @@ class TestMain:
         with open(src, encoding="utf-8") as f:
             content = f.read()
         assert "alpaca" not in content.lower() or "Never calls" in content
+
+    # --- Bundle summary artifact tests (main) ---
+
+    def test_main_writes_bundle_summary_artifact(self, tmp_path):
+        _, out = _run_main(tmp_path)
+        assert (out / "live_v2_readiness_bundle.json").exists()
+
+    def test_main_bundle_summary_contains_bundle_result(self, tmp_path):
+        _, out = _run_main(tmp_path)
+        data = _bundle_summary(out)
+        assert data["bundle_result"] == "PASS"
+
+    def test_main_bundle_summary_contains_all_artifact_paths(self, tmp_path):
+        _, out = _run_main(tmp_path)
+        data = _bundle_summary(out)
+        assert "approvals_review_path" in data
+        assert "executor_readiness_review_path" in data
+        assert "final_readiness_review_path" in data
+
+    def test_main_bundle_summary_written_on_fail(self, tmp_path):
+        """Bundle summary is written even when the run fails."""
+        ta_path = _write(tmp_path / "bad_ta.json",
+                         _valid_ta(live_trading_approved=False))
+        sa_path = _write(tmp_path / "sa.json", _valid_sa(ta_path))
+        exec_path = _write(tmp_path / "exec.json", _valid_executor_report())
+        code, out = _run_main(tmp_path,
+                              ta_path=ta_path, sa_path=sa_path, exec_path=exec_path)
+        assert code == 1
+        assert (out / "live_v2_readiness_bundle.json").exists()
+        data = _bundle_summary(out)
+        assert data["bundle_result"] == "FAIL"

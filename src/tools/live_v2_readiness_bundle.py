@@ -147,13 +147,21 @@ def run_bundle(
     exec_path: Path,
     output_dir: Path,
 ) -> dict[str, Any]:
-    """Run all three reviews, write artifacts, return bundle summary dict."""
+    """Run all three reviews, write artifacts, return bundle summary dict.
+
+    Artifacts written under output_dir:
+        live_v2_approvals_review.json
+        live_v2_executor_readiness_review.json
+        live_v2_final_readiness_review.json
+        live_v2_readiness_bundle.json  (top-level audit summary)
+    """
     checked_at = datetime.now(tz=timezone.utc).isoformat()
     output_dir.mkdir(parents=True, exist_ok=True)
 
     approvals_out = output_dir / "live_v2_approvals_review.json"
     executor_out = output_dir / "live_v2_executor_readiness_review.json"
     final_out = output_dir / "live_v2_final_readiness_review.json"
+    bundle_out = output_dir / "live_v2_readiness_bundle.json"
 
     # Step 1 — approvals review
     approvals_review = _step_approvals(ta_path, sa_path)
@@ -169,13 +177,15 @@ def run_bundle(
 
     bundle_result = "PASS" if final_review.get("review_result") == "PASS" else "FAIL"
 
-    return {
-        "checked_at_utc":               checked_at,
-        "bundle_result":                bundle_result,
-        "approvals_review_path":        str(approvals_out),
+    summary = {
+        "checked_at_utc":                 checked_at,
+        "bundle_result":                  bundle_result,
+        "approvals_review_path":          str(approvals_out),
         "executor_readiness_review_path": str(executor_out),
-        "final_readiness_review_path":  str(final_out),
+        "final_readiness_review_path":    str(final_out),
     }
+    _write_json(bundle_out, summary)
+    return summary
 
 
 # ---------------------------------------------------------------------------
@@ -248,38 +258,24 @@ def main(argv: list[str] | None = None) -> None:
     exec_path = Path(args.executor_readiness_report)
     output_dir = Path(args.output_dir)
 
-    # Run all three steps and collect reviews for printing.
-    # We run them twice only in main() (once to get review dicts for printing,
-    # once inside run_bundle).  To avoid double I/O, run each step independently
-    # here and pass results into a lightweight summary writer.
-    output_dir.mkdir(parents=True, exist_ok=True)
+    bundle = run_bundle(
+        ta_path=ta_path,
+        sa_path=sa_path,
+        exec_path=exec_path,
+        output_dir=output_dir,
+    )
 
-    approvals_out = output_dir / "live_v2_approvals_review.json"
-    executor_out = output_dir / "live_v2_executor_readiness_review.json"
-    final_out = output_dir / "live_v2_final_readiness_review.json"
-    checked_at = datetime.now(tz=timezone.utc).isoformat()
-
-    approvals_review = _step_approvals(ta_path, sa_path)
-    _write_json(approvals_out, approvals_review)
-
-    executor_review = _step_executor(exec_path)
-    _write_json(executor_out, executor_review)
-
-    final_review = _step_final(ta_path, sa_path, exec_path)
-    _write_json(final_out, final_review)
-
-    bundle_result = "PASS" if final_review.get("review_result") == "PASS" else "FAIL"
-    bundle = {
-        "checked_at_utc":                 checked_at,
-        "bundle_result":                  bundle_result,
-        "approvals_review_path":          str(approvals_out),
-        "executor_readiness_review_path": str(executor_out),
-        "final_readiness_review_path":    str(final_out),
-    }
+    # Read the written review files to pass their dicts to the printer.
+    approvals_review = json.loads(
+        Path(bundle["approvals_review_path"]).read_text(encoding="utf-8"))
+    executor_review = json.loads(
+        Path(bundle["executor_readiness_review_path"]).read_text(encoding="utf-8"))
+    final_review = json.loads(
+        Path(bundle["final_readiness_review_path"]).read_text(encoding="utf-8"))
 
     print_bundle(bundle, approvals_review, executor_review, final_review)
 
-    if bundle_result != "PASS":
+    if bundle["bundle_result"] != "PASS":
         sys.exit(1)
 
 
