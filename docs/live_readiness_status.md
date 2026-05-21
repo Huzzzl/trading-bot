@@ -232,6 +232,10 @@ constraints, required implementation components, rollback procedures, and
 open questions.  **Live submit is not implemented.** The design document is
 for planning purposes only — no `submit_order` call exists in the codebase.
 
+The next-phase enablement design — required approvals, config changes, runtime
+guards, ledger behavior, and first-submit constraints — is documented in
+**[docs/live_submit_enablement_v2.md](live_submit_enablement_v2.md)**.
+
 ---
 
 ## Required Conditions Before Considering Live Submit Design

@@ -35,6 +35,8 @@ and will not consume any of your daily order limits.
 
 Future live trading submission support (if ever added) would be a separate,
 explicitly gated tool — not an extension of this one.
+The next-phase enablement design is documented in
+**[docs/live_submit_enablement_v2.md](live_submit_enablement_v2.md)**.
 
 ---
 
