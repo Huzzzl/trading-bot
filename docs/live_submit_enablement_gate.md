@@ -427,6 +427,74 @@ decides to abort:
 
 ---
 
+## Credential Presence Guard CLI
+
+`src/tools/live_credential_presence_guard.py` is an offline, read-only guard
+that checks only that the required environment variables exist and are
+non-empty before any future single live order attempt.
+
+```bash
+python -m src.tools.live_credential_presence_guard \
+    --required-env ALPACA_LIVE_API_KEY \
+    --required-env ALPACA_LIVE_SECRET_KEY \
+    --output output/live_credential_presence_guard.json
+```
+
+**PASS does not validate credentials against Alpaca.**
+**PASS does not connect to Alpaca.**
+**PASS does not remove `config_safety` and does not approve real trading.**
+PASS only means the named environment variables are set and non-empty in
+the current process environment.
+
+The tool blocks (`result="BLOCKED"`) when:
+- no `--required-env` keys are provided
+- a required environment variable is not set
+- a required environment variable is set but empty or whitespace-only
+
+The tool never reads, stores, or logs the actual credential values.
+The `redacted_preview` field in each per-key check is always the fixed
+literal string `"<redacted>"` — it is never derived from, prefixed from,
+or suffixed from the real secret value.
+
+Example output JSON (all keys present and non-empty):
+
+```json
+{
+  "result": "PASS",
+  "credentials_present": true,
+  "credentials_read": false,
+  "credential_values_exposed": false,
+  "broker_calls_made": false,
+  "live_submit_enabled": false,
+  "real_submit_implemented": false,
+  "submit_order_reachable": false,
+  "required_keys": ["ALPACA_LIVE_API_KEY", "ALPACA_LIVE_SECRET_KEY"],
+  "checks": [
+    {
+      "key": "ALPACA_LIVE_API_KEY",
+      "present": true,
+      "non_empty": true,
+      "redacted_preview": "<redacted>"
+    },
+    {
+      "key": "ALPACA_LIVE_SECRET_KEY",
+      "present": true,
+      "non_empty": true,
+      "redacted_preview": "<redacted>"
+    }
+  ],
+  "violations": [],
+  "blocker": null
+}
+```
+
+Exit 0 on PASS; exit 1 on BLOCKED.  Always writes output JSON.
+Never calls Alpaca.  Never reads, stores, or exposes credential values.
+Never instantiates a broker client.  Never writes the live ledger.
+Never enables live trading.  Never removes `config_safety`.
+
+---
+
 ## Operator Config Override Review CLI
 
 `src/tools/live_operator_config_override_review.py` is an offline read-only
