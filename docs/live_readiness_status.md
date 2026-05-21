@@ -712,3 +712,109 @@ python -m src.tools.live_credential_presence_guard \
 > Real live trading requires a funded account, a broker API preflight,
 > and explicitly overriding the three `config_safety` flags in a local
 > operator config — changes that must not be made in `settings.yaml`.
+
+---
+
+## Milestone: Broker Preflight Mock-Only Core Complete
+
+### Recommended git tag
+
+```
+live-broker-preflight-readonly-core-mock-complete
+```
+
+### What this milestone means
+
+| Item | State |
+|------|-------|
+| v2 approvals | Complete |
+| Enablement gate | Complete |
+| Ledger dry-run lifecycle | Complete |
+| `live_operator_config_override_review` | Complete |
+| `live_credential_presence_guard` | Complete |
+| Broker preflight design | Complete — `docs/live_broker_preflight_design.md` |
+| `live_broker_preflight_readonly` mock-only core | Complete — prerequisite gating, parameter validation, endpoint allowlist, exception redaction, output invariants |
+| Real Alpaca read-only adapter | **Not implemented** |
+| Real broker preflight run | **Not performed** |
+| Real live submit | **Not implemented** |
+| Automated live trading | **Not implemented** |
+| `submit_order` | Unreachable — no call path exists in current codebase |
+| `config_safety` | Still the hard blocker |
+| Alpaca endpoint called | **No** |
+| Credentials read or printed | **No** |
+| Real order submitted | **No** |
+
+### `live_broker_preflight_readonly` — current state
+
+| Property | Value |
+|----------|-------|
+| CLI always produces | `result="BLOCKED"` — "real broker adapter not yet implemented" |
+| PASS possible via | Injected mock broker in unit tests only |
+| Alpaca SDK imported | No |
+| `requests` / `httpx` / `aiohttp` / `urllib.request` imported | No |
+| `submit_order` reference | Absent — source-scanned in tests |
+| `cancel_order` / `replace_order` reference | Absent |
+| Endpoint allowlist enforced | Yes — exact-match `/v2/account`, `/v2/clock`; prefix-match `/v2/assets/` |
+| Broker exception messages in output | No — redacted to `"details redacted"` in all output fields |
+| Calls Alpaca | No |
+| Writes live ledger | No |
+| Removes `config_safety` | No |
+| Approves real trading | No |
+
+### Hardcoded output invariants (every result, PASS or BLOCKED)
+
+| Field | Invariant value |
+|-------|----------------|
+| `broker_mutation_calls_made` | `false` always |
+| `credential_values_exposed` | `false` always |
+| `live_submit_enabled` | `false` always |
+| `real_submit_implemented` | `false` always |
+| `submit_order_reachable` | `false` always |
+| `config_safety_still_blocks` | `true` always |
+| `broker_calls_readonly` | `true` always |
+
+### Fail-closed conditions confirmed working in mock tests
+
+- Missing or malformed prerequisite artifact → BLOCKED before any broker call
+- Prerequisite artifact `result != "PASS"` → BLOCKED before any broker call
+- Symbol not `SPY` → BLOCKED
+- Side not `buy` → BLOCKED
+- `notional_cap > 100.0` → BLOCKED
+- Account status not `"ACTIVE"` → BLOCKED
+- Insufficient buying power → BLOCKED
+- SPY not tradable → BLOCKED
+- Any broker exception → BLOCKED, exception message redacted from all output
+- Disallowed endpoint path → BLOCKED (allowlist enforced before request)
+
+### Test coverage
+
+78 unit tests in `tests/test_live_broker_preflight_readonly.py`.
+All tests use a mock broker — no real Alpaca calls in any test.
+
+### CLI (future — currently always BLOCKED)
+
+```bash
+python -m src.tools.live_broker_preflight_readonly \
+    --credential-guard output/live_credential_presence_guard.json \
+    --operator-override output/live_operator_config_override_review.json \
+    --symbol SPY \
+    --side buy \
+    --notional-cap 100.0 \
+    --output output/live_broker_preflight_readonly.json
+```
+
+Exit 0 on PASS; exit 1 on BLOCKED. Always writes output JSON.
+Currently exits 1 — real Alpaca adapter not yet implemented.
+
+### Warning
+
+> **This milestone does not approve real trading.**
+> **This milestone does not approve live order submission.**
+> **The real Alpaca broker adapter is not implemented.**
+> **No real Alpaca endpoint has been called.**
+> The mock-only core proves the framework is correct: gating, allowlist,
+> exception redaction, and output invariants all work as specified.
+> A PASS in any unit test does not constitute a real broker preflight.
+> Real live trading requires a funded account, a real broker preflight PASS,
+> and explicitly overriding the three `config_safety` flags in a local
+> operator config — changes that must not be made in `settings.yaml`.
