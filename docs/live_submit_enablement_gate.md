@@ -446,8 +446,18 @@ python -m src.tools.live_credential_presence_guard \
 PASS only means the named environment variables are set and non-empty in
 the current process environment.
 
+Each `--required-env` argument must be a valid environment variable name
+matching `^[A-Z_][A-Z0-9_]*$` (uppercase letters, digits, underscores,
+starting with a letter or underscore).  If an argument fails this check
+the tool treats it as BLOCKED and replaces the raw value with the fixed
+placeholder `<invalid-env-key>` in all output — the raw string is never
+written to stdout or the JSON artifact.  This guards against accidental
+shell expansion such as `--required-env $ALPACA_LIVE_API_KEY` expanding
+the secret value into the key name argument.
+
 The tool blocks (`result="BLOCKED"`) when:
 - no `--required-env` keys are provided
+- a `--required-env` argument is not a valid env var name (see pattern above)
 - a required environment variable is not set
 - a required environment variable is set but empty or whitespace-only
 

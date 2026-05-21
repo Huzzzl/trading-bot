@@ -34,6 +34,8 @@ import pytest
 
 from src.tools.live_credential_presence_guard import (
     _check_key,
+    _is_valid_key_name,
+    _INVALID_KEY_PLACEHOLDER,
     _REDACTED_PREVIEW,
     run_guard,
     main,
@@ -54,7 +56,8 @@ def _output_path(tmp_path: Path) -> Path:
 class TestCheckKey:
     def test_present_non_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(_KEY_A, "supersecret")
-        check = _check_key(_KEY_A)
+        check, valid = _check_key(_KEY_A)
+        assert valid is True
         assert check["key"] == _KEY_A
         assert check["present"] is True
         assert check["non_empty"] is True
@@ -62,21 +65,24 @@ class TestCheckKey:
 
     def test_present_empty_string(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(_KEY_A, "")
-        check = _check_key(_KEY_A)
+        check, valid = _check_key(_KEY_A)
+        assert valid is True
         assert check["present"] is True
         assert check["non_empty"] is False
         assert check["redacted_preview"] is None
 
     def test_present_whitespace_only(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(_KEY_A, "   ")
-        check = _check_key(_KEY_A)
+        check, valid = _check_key(_KEY_A)
+        assert valid is True
         assert check["present"] is True
         assert check["non_empty"] is False
         assert check["redacted_preview"] is None
 
     def test_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(_KEY_A, raising=False)
-        check = _check_key(_KEY_A)
+        check, valid = _check_key(_KEY_A)
+        assert valid is True
         assert check["present"] is False
         assert check["non_empty"] is False
         assert check["redacted_preview"] is None
@@ -86,7 +92,7 @@ class TestCheckKey:
     ) -> None:
         secret = "my-super-secret-key-value-12345"
         monkeypatch.setenv(_KEY_A, secret)
-        check = _check_key(_KEY_A)
+        check, _ = _check_key(_KEY_A)
         assert secret not in str(check["redacted_preview"])
         assert check["redacted_preview"] == "<redacted>"
 
@@ -94,8 +100,59 @@ class TestCheckKey:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv(_KEY_A, "any-value")
-        check = _check_key(_KEY_A)
+        check, _ = _check_key(_KEY_A)
         assert check["redacted_preview"] == "<redacted>"
+
+    def test_invalid_key_returns_false(self) -> None:
+        check, valid = _check_key("sk-live-abcdef123456")
+        assert valid is False
+        assert check["key"] == _INVALID_KEY_PLACEHOLDER
+        assert check["present"] is False
+        assert check["non_empty"] is False
+        assert check["redacted_preview"] is None
+
+    def test_invalid_key_not_passed_to_environ(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Put a value under this exact string in environ to prove it's never read
+        monkeypatch.setenv("sk-live-abcdef123456", "should-not-appear")
+        check, valid = _check_key("sk-live-abcdef123456")
+        assert valid is False
+        assert "should-not-appear" not in str(check)
+
+
+# ---------------------------------------------------------------------------
+# _is_valid_key_name
+# ---------------------------------------------------------------------------
+
+class TestIsValidKeyName:
+    @pytest.mark.parametrize("key", [
+        "ALPACA_LIVE_API_KEY",
+        "ALPACA_LIVE_SECRET_KEY",
+        "MY_KEY",
+        "A",
+        "_PRIVATE",
+        "KEY123",
+        "A_B_C_1",
+    ])
+    def test_valid_names_accepted(self, key: str) -> None:
+        assert _is_valid_key_name(key) is True
+
+    @pytest.mark.parametrize("key", [
+        "sk-live-abcdef123456",
+        "Bearer token value",
+        "abc123/secret+value",
+        "lowercase_key",
+        "123START",
+        "",
+        "KEY NAME",
+        "KEY=VALUE",
+        "KEY\nINJECT",
+        "$KEY",
+        "sk_live_1234abcd",
+    ])
+    def test_invalid_names_rejected(self, key: str) -> None:
+        assert _is_valid_key_name(key) is False
 
 
 # ---------------------------------------------------------------------------
@@ -183,6 +240,99 @@ class TestRunGuardBlocked:
         monkeypatch.delenv(_KEY_A, raising=False)
         result = run_guard(required_keys=[_KEY_A])
         assert result["blocker"] == result["violations"][0]
+
+
+# ---------------------------------------------------------------------------
+# Invalid key name hardening
+# ---------------------------------------------------------------------------
+
+class TestInvalidKeyNames:
+    @pytest.mark.parametrize("bad_key", [
+        "sk-live-abcdef123456",
+        "Bearer token value",
+        "abc123/secret+value",
+        "lowercase_key",
+        "123_START",
+        "KEY=VALUE",
+        "KEY NAME",
+    ])
+    def test_invalid_key_is_blocked(self, bad_key: str) -> None:
+        result = run_guard(required_keys=[bad_key])
+        assert result["result"] == "BLOCKED"
+
+    @pytest.mark.parametrize("bad_key", [
+        "sk-live-abcdef123456",
+        "Bearer token value",
+        "abc123/secret+value",
+    ])
+    def test_raw_invalid_key_not_in_output_json(self, bad_key: str) -> None:
+        result = run_guard(required_keys=[bad_key])
+        serialised = json.dumps(result)
+        assert bad_key not in serialised
+
+    @pytest.mark.parametrize("bad_key", [
+        "sk-live-abcdef123456",
+        "Bearer token value",
+        "abc123/secret+value",
+    ])
+    def test_raw_invalid_key_not_in_stdout(
+        self, bad_key: str, capsys: pytest.CaptureFixture
+    ) -> None:
+        from src.tools.live_credential_presence_guard import print_guard
+        result = run_guard(required_keys=[bad_key])
+        print_guard(result)
+        captured = capsys.readouterr()
+        assert bad_key not in captured.out
+        assert bad_key not in captured.err
+
+    def test_placeholder_used_in_required_keys(self) -> None:
+        result = run_guard(required_keys=["sk-live-abcdef"])
+        assert _INVALID_KEY_PLACEHOLDER in result["required_keys"]
+        assert "sk-live-abcdef" not in result["required_keys"]
+
+    def test_placeholder_used_in_checks(self) -> None:
+        result = run_guard(required_keys=["sk-live-abcdef"])
+        assert result["checks"][0]["key"] == _INVALID_KEY_PLACEHOLDER
+
+    def test_placeholder_used_in_violations(self) -> None:
+        result = run_guard(required_keys=["sk-live-abcdef"])
+        assert any(_INVALID_KEY_PLACEHOLDER in v for v in result["violations"])
+
+    def test_valid_key_alongside_invalid_still_blocked(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(_KEY_A, "val")
+        result = run_guard(required_keys=[_KEY_A, "sk-live-bad"])
+        assert result["result"] == "BLOCKED"
+        # Valid key must still appear correctly
+        assert any(c["key"] == _KEY_A for c in result["checks"])
+        # Invalid key must be placeholder in checks
+        assert any(c["key"] == _INVALID_KEY_PLACEHOLDER for c in result["checks"])
+
+    def test_environ_not_queried_for_invalid_key(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Even if the exact bad_key string happened to be set in environ,
+        # run_guard must not return it as present/non_empty
+        bad_key = "sk-live-abcdef123456"
+        monkeypatch.setenv(bad_key, "should-not-be-seen")
+        result = run_guard(required_keys=[bad_key])
+        assert result["result"] == "BLOCKED"
+        check = result["checks"][0]
+        assert check["present"] is False
+        assert check["non_empty"] is False
+        assert check["redacted_preview"] is None
+
+    def test_main_invalid_key_writes_blocked_output(
+        self, tmp_path: Path
+    ) -> None:
+        out = _output_path(tmp_path)
+        with pytest.raises(SystemExit) as exc_info:
+            main(["--required-env", "sk-live-bad", "--output", str(out)])
+        assert exc_info.value.code == 1
+        data = json.loads(out.read_text())
+        assert data["result"] == "BLOCKED"
+        assert "sk-live-bad" not in json.dumps(data)
 
 
 # ---------------------------------------------------------------------------
@@ -333,7 +483,7 @@ class TestSecretNotExposed:
     ) -> None:
         for secret in ["abc", "XYZ789", "sk-live-abcdefg", "Bearer token"]:
             monkeypatch.setenv(_KEY_A, secret)
-            check = _check_key(_KEY_A)
+            check, _ = _check_key(_KEY_A)
             assert check["redacted_preview"] == "<redacted>"
             assert secret not in check["redacted_preview"]
 

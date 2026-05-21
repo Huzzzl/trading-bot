@@ -65,27 +65,54 @@ What it never does
 * Never modifies or writes live ledger files.
 * Never enables live trading.
 * Never removes the config_safety blocker.
-* Fails closed: missing key, empty value, or no keys provided → BLOCKED.
+* Fails closed: no keys provided, invalid key name, missing key, or
+  empty value → BLOCKED.
+* Invalid key names are sanitized to ``"<invalid-env-key>"`` in all
+  output — the raw invalid string is never written to stdout or JSON.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 _REDACTED_PREVIEW = "<redacted>"
+_INVALID_KEY_PLACEHOLDER = "<invalid-env-key>"
+
+# Env var names must match the POSIX convention: uppercase letters, digits,
+# and underscores only, starting with a letter or underscore.
+# This rejects shell-expanded secret values that appear as key arguments.
+_VALID_KEY_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
+
+
+def _is_valid_key_name(key: str) -> bool:
+    """Return True only when key looks like a safe env var name."""
+    return bool(_VALID_KEY_RE.match(key))
 
 
 # ---------------------------------------------------------------------------
 # Per-key check
 # ---------------------------------------------------------------------------
 
-def _check_key(key: str) -> dict[str, Any]:
-    """Return a per-key presence check dict.  Never exposes the value."""
+def _check_key(key: str) -> tuple[dict[str, Any], bool]:
+    """Return (per-key check dict, key_was_valid).
+
+    When the key name is invalid the raw value is never passed to
+    os.environ.get() and is never written to the returned dict.
+    """
+    if not _is_valid_key_name(key):
+        return {
+            "key":              _INVALID_KEY_PLACEHOLDER,
+            "present":          False,
+            "non_empty":        False,
+            "redacted_preview": None,
+        }, False
+
     raw = os.environ.get(key)
     present = raw is not None
     non_empty = present and bool(raw.strip())
@@ -94,7 +121,7 @@ def _check_key(key: str) -> dict[str, Any]:
         "present":          present,
         "non_empty":        non_empty,
         "redacted_preview": _REDACTED_PREVIEW if non_empty else None,
-    }
+    }, True
 
 
 # ---------------------------------------------------------------------------
@@ -106,6 +133,7 @@ def run_guard(*, required_keys: list[str]) -> dict[str, Any]:
 
     Never raises.  All errors are captured as violations → BLOCKED.
     Never reads, stores, or exposes credential values.
+    Invalid key names are sanitized and never echoed into output.
     """
     checked_at = datetime.now(tz=timezone.utc).isoformat()
     violations: list[str] = []
@@ -118,9 +146,15 @@ def run_guard(*, required_keys: list[str]) -> dict[str, Any]:
         )
 
     for key in required_keys:
-        check = _check_key(key)
+        check, valid = _check_key(key)
         checks.append(check)
-        if not check["present"]:
+        if not valid:
+            violations.append(
+                f"{_INVALID_KEY_PLACEHOLDER}: invalid environment variable name -- "
+                "must match ^[A-Z_][A-Z0-9_]*$ "
+                "(possible shell expansion of a secret value)"
+            )
+        elif not check["present"]:
             violations.append(
                 f"{key}: environment variable is not set"
             )
@@ -143,7 +177,10 @@ def run_guard(*, required_keys: list[str]) -> dict[str, Any]:
         "live_submit_enabled":      False,
         "real_submit_implemented":  False,
         "submit_order_reachable":   False,
-        "required_keys":            list(required_keys),
+        "required_keys":            [
+            k if _is_valid_key_name(k) else _INVALID_KEY_PLACEHOLDER
+            for k in required_keys
+        ],
         "checks":                   checks,
         "violations":               violations,
         "blocker":                  blocker,
