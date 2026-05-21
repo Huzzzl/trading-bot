@@ -54,6 +54,10 @@ The executor (`src/execution/live_submit_executor.py`) now accepts optional
 `live_trading_approval_path` and `live_order_submission_approval_path` parameters;
 when provided it validates both v2 artifacts before continuing; `submit_order` remains
 unreachable and all exit paths remain `blocked=true`.
+The offline GO/NO_GO gate checker (`live_submit_enablement_gate`) is implemented in
+`src/tools/live_submit_enablement_gate.py`; it evaluates all conditions required before
+the `config_safety` blocker can be removed and writes a `live_submit_enablement_gate.json`
+artifact; GO means config_safety is the only remaining blocker — GO does not submit an order.
 
 ---
 

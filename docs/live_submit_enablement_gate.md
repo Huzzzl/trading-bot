@@ -10,6 +10,31 @@ attempted.
 
 ---
 
+## Gate Checker CLI
+
+`src/tools/live_submit_enablement_gate.py` is a read-only GO/NO_GO checker that
+evaluates all conditions listed in this document.
+
+```bash
+python -m src.tools.live_submit_enablement_gate \
+    --readiness-bundle output/live_v2_bundle/live_v2_readiness_bundle.json \
+    --live-trading-approval output/live_trading_approval.json \
+    --live-order-submission-approval output/live_order_submission_approval.json \
+    --executor-readiness-report output/live_submit_executor/live_submit_blocked_report.json \
+    --output output/live_submit_enablement_gate.json
+```
+
+**GO does not submit an order.**
+GO only means `config_safety` is the remaining blocker and all documented
+preconditions are satisfied.  The operator must still explicitly change the
+three config flags (`live_trading_enabled`, `live_submit_dry_run`,
+`live_kill_switch_enabled`) before a real order attempt can be made.
+
+The checker never calls Alpaca, never reads credentials, and never writes
+the live ledger.  Exit 0 on GO; exit 1 on NO_GO.  Always writes output JSON.
+
+---
+
 ## Current Status
 
 | Item | State |

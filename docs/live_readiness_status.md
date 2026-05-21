@@ -283,6 +283,7 @@ The following read-only checks and guards are implemented and tested:
 | `live_v2_executor_readiness_review` | Offline review of executor blocked report after v2 approvals are provided; PASS only if `blocked=true`, `submit_order_called=false`, `block_guard=config_safety`, and violations include at least one default config-safety flag; FAIL if any v2 approval guard blocked; never writes files; never calls Alpaca |
 | `live_v2_final_readiness_review` | Offline combined summary CLI; runs v2 approvals review and executor readiness review together; PASS only when both sub-reviews pass; writes `live_v2_final_readiness_review.json` with `review_result`, `final_blocker`, `live_submit_enabled=false`, `real_submit_implemented=false`; never calls Alpaca; never submits orders |
 | `live_v2_readiness_bundle` | Offline bundle runner; runs all three v2 reviews in sequence and writes all artifacts under `--output-dir` including a top-level `live_v2_readiness_bundle.json` audit summary; always writes all available artifacts regardless of earlier failures; exit 0 only on final PASS; never calls Alpaca; never submits orders |
+| `live_submit_enablement_gate` | Offline GO/NO_GO gate checker; reads readiness bundle, both v2 approval artifacts, and executor blocked report; GO only when all conditions are satisfied and `config_safety` is the only remaining blocker; GO does not submit an order; writes `live_submit_enablement_gate.json`; exit 0 on GO, exit 1 on NO_GO; never calls Alpaca; never reads credentials; never submits orders |
 
 ---
 

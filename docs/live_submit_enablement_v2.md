@@ -227,3 +227,6 @@ The real-submit implementation PR must include all of the following:
 
 The exact conditions that must all be satisfied before the `config_safety` blocker can be removed
 are defined in **[docs/live_submit_enablement_gate.md](live_submit_enablement_gate.md)**.
+The offline GO/NO_GO checker (`src/tools/live_submit_enablement_gate.py`) evaluates all those
+conditions in one command.  GO does not submit an order; it only means `config_safety` is the
+remaining blocker and all preconditions are satisfied.
