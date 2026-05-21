@@ -389,6 +389,97 @@ class TestIdempotency:
         assert all(r["status"] == "attempting" for r in rows)
 
 
+
+# ---------------------------------------------------------------------------
+# Ledger schema validation hardening
+# ---------------------------------------------------------------------------
+
+def _write_ledger_with_header(path: Path, columns: list[str],
+                               rows: list[dict] | None = None) -> Path:
+    """Write a CSV ledger with the given header and optional rows."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=columns)
+        writer.writeheader()
+        for row in (rows or []):
+            writer.writerow({c: row.get(c, "") for c in columns})
+    return path
+
+
+class TestLedgerSchemaValidation:
+    def test_missing_client_order_id_column_blocks(self, tmp_path):
+        bad_cols = [c for c in _LEDGER_COLUMNS if c != "client_order_id"]
+        ledger = _write_ledger_with_header(tmp_path / "ledger.csv", bad_cols)
+        result = _run(tmp_path, ledger_path=ledger)
+        assert result["result"] == "BLOCKED"
+
+    def test_missing_client_order_id_column_violation_listed(self, tmp_path):
+        bad_cols = [c for c in _LEDGER_COLUMNS if c != "client_order_id"]
+        ledger = _write_ledger_with_header(tmp_path / "ledger.csv", bad_cols)
+        result = _run(tmp_path, ledger_path=ledger)
+        assert any("ledger" in v for v in result["violations"])
+
+    def test_wrong_column_order_blocks(self, tmp_path):
+        shuffled = list(reversed(_LEDGER_COLUMNS))
+        ledger = _write_ledger_with_header(tmp_path / "ledger.csv", shuffled)
+        result = _run(tmp_path, ledger_path=ledger)
+        assert result["result"] == "BLOCKED"
+
+    def test_wrong_column_order_violation_listed(self, tmp_path):
+        shuffled = list(reversed(_LEDGER_COLUMNS))
+        ledger = _write_ledger_with_header(tmp_path / "ledger.csv", shuffled)
+        result = _run(tmp_path, ledger_path=ledger)
+        assert any("ledger" in v for v in result["violations"])
+
+    def test_extra_column_blocks(self, tmp_path):
+        extra_cols = _LEDGER_COLUMNS + ["unexpected_column"]
+        ledger = _write_ledger_with_header(tmp_path / "ledger.csv", extra_cols)
+        result = _run(tmp_path, ledger_path=ledger)
+        assert result["result"] == "BLOCKED"
+
+    def test_extra_column_violation_listed(self, tmp_path):
+        extra_cols = _LEDGER_COLUMNS + ["unexpected_column"]
+        ledger = _write_ledger_with_header(tmp_path / "ledger.csv", extra_cols)
+        result = _run(tmp_path, ledger_path=ledger)
+        assert any("ledger" in v for v in result["violations"])
+
+    def test_schema_mismatch_does_not_append_row(self, tmp_path):
+        bad_cols = [c for c in _LEDGER_COLUMNS if c != "status"]
+        ledger = _write_ledger_with_header(tmp_path / "ledger.csv", bad_cols)
+        row_count_before = sum(1 for _ in ledger.open(encoding="utf-8")) - 1
+        _run(tmp_path, ledger_path=ledger)
+        row_count_after = sum(1 for _ in ledger.open(encoding="utf-8")) - 1
+        assert row_count_after == row_count_before
+
+    def test_schema_mismatch_writes_output_json_via_main(self, tmp_path):
+        bad_cols = [c for c in _LEDGER_COLUMNS if c != "broker_order_id"]
+        ledger = _write_ledger_with_header(tmp_path / "ledger.csv", bad_cols)
+        code, out, _ = _run_main(tmp_path, ledger_path=ledger)
+        assert code == 1
+        assert out.exists()
+        data = json.loads(out.read_text())
+        assert data["result"] == "BLOCKED"
+
+    def test_valid_schema_allows_append_with_different_id(self, tmp_path):
+        ledger = _write_ledger_with_header(tmp_path / "ledger.csv", _LEDGER_COLUMNS,
+                                            rows=[{
+                                                "client_order_id": "LIVE-001",
+                                                "status": "attempting",
+                                            }])
+        result = _run(tmp_path, client_order_id="LIVE-002", ledger_path=ledger)
+        assert result["result"] == "LEDGER_DRY_RUN_WRITTEN"
+
+    def test_valid_schema_duplicate_id_still_blocks(self, tmp_path):
+        ledger = _write_ledger_with_header(tmp_path / "ledger.csv", _LEDGER_COLUMNS,
+                                            rows=[{
+                                                "client_order_id": "LIVE-001",
+                                                "status": "attempting",
+                                            }])
+        result = _run(tmp_path, client_order_id="LIVE-001", ledger_path=ledger)
+        assert result["result"] == "BLOCKED"
+        assert any("already present" in v for v in result["violations"])
+
+
 # ---------------------------------------------------------------------------
 # Output JSON structure
 # ---------------------------------------------------------------------------

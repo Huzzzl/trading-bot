@@ -107,14 +107,22 @@ def _read_ledger_ids(path: Path) -> set[str]:
     Raises
     ------
     ValueError
-        When the file exists but cannot be read as CSV.
+        When the file exists but cannot be read as CSV, or when the header
+        does not exactly match LEDGER_COLUMNS (schema mismatch).
     """
     if not path.exists():
         return set()
     try:
         with path.open(encoding="utf-8", newline="") as fh:
             reader = csv.DictReader(fh)
+            if list(reader.fieldnames or []) != LEDGER_COLUMNS:
+                raise ValueError(
+                    f"ledger schema mismatch: expected {LEDGER_COLUMNS}, "
+                    f"got {list(reader.fieldnames or [])}"
+                )
             return {row.get("client_order_id", "") for row in reader}
+    except ValueError:
+        raise
     except Exception as exc:
         raise ValueError(f"could not read ledger {path}: {exc}") from exc
 
