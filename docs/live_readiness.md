@@ -1243,6 +1243,33 @@ Output JSON includes: ``review_result``, ``approvals_review_result``,
 Never calls Alpaca.  Never reads credentials.  Never calls ``submit_order``.
 Never writes the live ledger.
 
+### Step 5d — Optional: run the bundle command to regenerate all offline readiness artifacts
+
+Steps 5b and 5c can also be run together as a single bundle command that
+executes all three v2 reviews in sequence and writes all artifacts under one
+output directory:
+
+```bash
+python -m src.tools.live_v2_readiness_bundle \
+    --live-trading-approval output/live_trading_approval.json \
+    --live-order-submission-approval output/live_order_submission_approval.json \
+    --executor-readiness-report output/live_submit_executor/live_submit_blocked_report.json \
+    --output-dir output/live_v2_bundle
+```
+
+Writes under ``--output-dir``:
+
+- ``live_v2_approvals_review.json``
+- ``live_v2_executor_readiness_review.json``
+- ``live_v2_final_readiness_review.json``
+
+All three artifacts are always written regardless of earlier step failures.
+If a later review's inputs exist, it runs even if an earlier review failed.
+Exit 0 only when the final readiness review result is PASS.
+
+Never calls Alpaca.  Never reads credentials.  Never calls ``submit_order``.
+Never writes the live ledger.
+
 ### Step 6 — Review the blocked report artifact
 
 ```bash

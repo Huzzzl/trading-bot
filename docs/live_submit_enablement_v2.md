@@ -206,6 +206,7 @@ The real-submit implementation PR must include all of the following:
 - [ ] Updated executor guards — consume both new approval artifacts ✓ **implemented (PR #105)**
 - [ ] `live_v2_executor_readiness_review` — verify executor reached config_safety after v2 approvals ✓ **implemented**
 - [ ] `live_v2_final_readiness_review` — single offline summary artifact: v2 approval layer complete, executor accepts v2, config_safety is remaining blocker ✓ **implemented**
+- [ ] `live_v2_readiness_bundle` — optional: run the bundle command to regenerate all offline readiness artifacts in one command ✓ **implemented**
 - [ ] `submit_order` call path — gated behind all guards listed above
 - [ ] Pre-submit ledger write — row written before `submit_order`
 - [ ] Post-submit ledger update — row updated for submitted / rejected / exception
