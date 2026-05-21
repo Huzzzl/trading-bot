@@ -194,9 +194,21 @@ def run_gate(
         config_safety_is_final_blocker = executor_ready and (block_guard == "config_safety")
 
     # ------------------------------------------------------------------
-    # Decision
+    # Decision — explicit AND of all core booleans plus empty violations.
+    # Defense-in-depth: a validator that returns FAIL with an empty
+    # violations list would still produce NO_GO here.
     # ------------------------------------------------------------------
-    decision = "GO" if not violations else "NO_GO"
+    decision = (
+        "GO"
+        if (
+            bundle_result_str == "PASS"
+            and approvals_valid is True
+            and executor_ready is True
+            and config_safety_is_final_blocker is True
+            and not violations
+        )
+        else "NO_GO"
+    )
 
     return {
         "checked_at_utc":                checked_at,

@@ -566,3 +566,102 @@ class TestSecurityProperties:
         # GO result explicitly does not set live_submit_enabled
         assert result["live_submit_enabled"] is False
         assert result["real_submit_implemented"] is False
+
+
+# ---------------------------------------------------------------------------
+# Decision hardening: explicit boolean checks are defense-in-depth
+# ---------------------------------------------------------------------------
+
+class TestDecisionHardening:
+    """
+    Verify that run_gate() requires all core booleans to be True, not just
+    an empty violations list.  These tests patch validate_approvals and
+    validate_readiness to return FAIL with an *empty* violations list, which
+    would leave violations==[] while the corresponding boolean stays False.
+    The decision must still be NO_GO.
+    """
+
+    def test_validate_approvals_fail_empty_violations_produces_no_go(self, tmp_path, monkeypatch):
+        """If validate_approvals returns ('FAIL', []) the decision is NO_GO."""
+        import src.tools.live_submit_enablement_gate as gate_mod
+        monkeypatch.setattr(gate_mod, "validate_approvals",
+                            lambda ta, sa, ta_path, sa_path: ("FAIL", []))
+        result = _run_gate(tmp_path)
+        assert result["decision"] == "NO_GO"
+
+    def test_validate_approvals_fail_empty_violations_approvals_valid_false(
+            self, tmp_path, monkeypatch):
+        import src.tools.live_submit_enablement_gate as gate_mod
+        monkeypatch.setattr(gate_mod, "validate_approvals",
+                            lambda ta, sa, ta_path, sa_path: ("FAIL", []))
+        result = _run_gate(tmp_path)
+        assert result["approvals_valid"] is False
+
+    def test_validate_readiness_fail_empty_violations_produces_no_go(self, tmp_path, monkeypatch):
+        """If validate_readiness returns ('FAIL', []) the decision is NO_GO."""
+        import src.tools.live_submit_enablement_gate as gate_mod
+        monkeypatch.setattr(gate_mod, "validate_readiness",
+                            lambda report: ("FAIL", []))
+        result = _run_gate(tmp_path)
+        assert result["decision"] == "NO_GO"
+
+    def test_validate_readiness_fail_empty_violations_executor_ready_false(
+            self, tmp_path, monkeypatch):
+        import src.tools.live_submit_enablement_gate as gate_mod
+        monkeypatch.setattr(gate_mod, "validate_readiness",
+                            lambda report: ("FAIL", []))
+        result = _run_gate(tmp_path)
+        assert result["executor_ready"] is False
+
+    def test_validate_readiness_fail_empty_violations_config_safety_false(
+            self, tmp_path, monkeypatch):
+        import src.tools.live_submit_enablement_gate as gate_mod
+        monkeypatch.setattr(gate_mod, "validate_readiness",
+                            lambda report: ("FAIL", []))
+        result = _run_gate(tmp_path)
+        assert result["config_safety_is_final_blocker"] is False
+
+    def test_bundle_result_not_pass_with_no_violation_produces_no_go(self, tmp_path):
+        """bundle_result != 'PASS' produces NO_GO regardless of violations list."""
+        # Simulate a bundle where bundle_result is wrong but _check_safety_flags
+        # adds no violation (i.e. the bundle_result violation is the only one).
+        # We verify the explicit boolean check catches it even without violations.
+        from src.tools.live_submit_enablement_gate import run_gate
+        # Write a bundle that has bundle_result != PASS
+        import json
+        _bp, _ta, _sa, _ex = _write_all(tmp_path,
+                                         bundle_overrides={"bundle_result": "FAIL"})
+        result = run_gate(
+            bundle_path=_bp, ta_path=_ta, sa_path=_sa, exec_path=_ex
+        )
+        # The violation is present — but also verify the explicit boolean catches it
+        assert result["readiness_bundle_result"] == "FAIL"
+        assert result["decision"] == "NO_GO"
+
+    def test_both_validators_fail_empty_violations_no_go(self, tmp_path, monkeypatch):
+        """Both validators return FAIL with empty violations — still NO_GO."""
+        import src.tools.live_submit_enablement_gate as gate_mod
+        monkeypatch.setattr(gate_mod, "validate_approvals",
+                            lambda ta, sa, ta_path, sa_path: ("FAIL", []))
+        monkeypatch.setattr(gate_mod, "validate_readiness",
+                            lambda report: ("FAIL", []))
+        result = _run_gate(tmp_path)
+        assert result["decision"] == "NO_GO"
+        assert result["violations"] == []  # violations list is empty — hardening caught it
+
+    def test_existing_go_path_still_go(self, tmp_path):
+        """Hardening does not break the valid GO path."""
+        result = _run_gate(tmp_path)
+        assert result["decision"] == "GO"
+
+    def test_existing_no_go_paths_still_no_go_blocked_false(self, tmp_path):
+        result = _run_gate(tmp_path, exec_overrides={"blocked": False})
+        assert result["decision"] == "NO_GO"
+
+    def test_existing_no_go_paths_still_no_go_bundle_fail(self, tmp_path):
+        result = _run_gate(tmp_path, bundle_overrides={"bundle_result": "FAIL"})
+        assert result["decision"] == "NO_GO"
+
+    def test_existing_no_go_paths_still_no_go_bad_approval(self, tmp_path):
+        result = _run_gate(tmp_path, ta_overrides={"live_trading_approved": False})
+        assert result["decision"] == "NO_GO"
