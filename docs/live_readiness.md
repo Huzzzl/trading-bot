@@ -37,6 +37,9 @@ Future live trading submission support (if ever added) would be a separate,
 explicitly gated tool — not an extension of this one.
 The next-phase enablement design is documented in
 **[docs/live_submit_enablement_v2.md](live_submit_enablement_v2.md)**.
+The first v2 approval artifact CLI (`live_trading_approval`) is implemented in
+`src/tools/live_trading_approval.py`; it produces `live_trading_approval.json`
+with `live_trading_approved=true` and `live_order_submission_approved=false`.
 
 ---
 
