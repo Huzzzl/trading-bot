@@ -201,7 +201,7 @@ decides to abort:
 The real-submit implementation PR must include all of the following:
 
 - [ ] New `live_trading_approval` CLI — produces `live_trading_approval.json` ✓ **implemented (PR #102)**
-- [ ] New `live_order_submission_approval` CLI — produces `live_order_submission_approval.json`
+- [ ] New `live_order_submission_approval` CLI — produces `live_order_submission_approval.json` ✓ **implemented (PR #103)**
 - [ ] Updated executor guards — consume both new approval artifacts
 - [ ] `submit_order` call path — gated behind all guards listed above
 - [ ] Pre-submit ledger write — row written before `submit_order`
