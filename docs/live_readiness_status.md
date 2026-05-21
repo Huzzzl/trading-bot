@@ -581,3 +581,134 @@ python -m src.tools.live_ledger_verify \
 > Real live trading requires explicitly overriding `live_trading_enabled`,
 > `live_submit_dry_run`, and `live_kill_switch_enabled` in a local operator config —
 > changes that are not made here and must not be made in `settings.yaml`.
+
+---
+
+## Milestone: Pre-Broker Live Readiness Guards Complete
+
+### Recommended git tag
+
+```
+pre-broker-live-readiness-guards-complete
+```
+
+### What this milestone means
+
+| Item | State |
+|------|-------|
+| v2 approvals | Complete |
+| Enablement gate | Complete — `decision="GO"` |
+| Ledger dry-run lifecycle | Complete — pre-submit write → verify → post-submit update → final verify |
+| `live_operator_config_override_review` | Complete — `result="PASS"` |
+| `live_credential_presence_guard` | Complete — `result="PASS"` |
+| Broker live API preflight | **Not implemented** |
+| Real submit | **Not implemented** |
+| `submit_order` | Unreachable — no call path exists in current codebase |
+| `config_safety` | Still the hard blocker |
+| Alpaca live endpoint called by new guards | **No** |
+| Credentials read or printed by new guards | **No** |
+| Real order submitted | **No** |
+
+### New guards completed in this phase
+
+#### `live_operator_config_override_review`
+
+Offline, read-only validator for a manually produced local operator override
+artifact.  Requires strict JSON boolean acknowledgements (Python `is True` /
+`is False` exactly — string values like `"true"`, `"false"`, `"1"` are
+rejected).
+
+| Property | Value |
+|----------|-------|
+| Calls Alpaca | No |
+| Reads credentials | No |
+| Calls `submit_order` or `cancel_order` | No |
+| Writes live ledger | No |
+| Removes `config_safety` on PASS | No |
+| Approves real trading on PASS | No |
+
+Required acknowledgements in the artifact:
+- `config_safety_acknowledged: true` (JSON boolean exactly)
+- `submit_order_unreachable_acknowledged: true` (JSON boolean exactly)
+- `real_live_submit_unimplemented_acknowledged: true` (JSON boolean exactly)
+- `recurring_trading_approved: false` (JSON boolean exactly, field must be present)
+- `automated_trading_approved: false` (JSON boolean exactly, field must be present)
+- `symbol: "SPY"`, `side: "buy"`, `notional_cap` in (0, 100.0]
+- `approval_scope: "AUTHORIZE_SINGLE_LIVE_ORDER_ATTEMPT_ONLY"`
+- Non-empty `operator_name` and `approval_note`
+
+```bash
+python -m src.tools.live_operator_config_override_review \
+    --override-artifact output/live_operator_config_override.json \
+    --output output/live_operator_config_override_review.json
+# Expected: result="PASS", exit 0
+```
+
+#### `live_credential_presence_guard`
+
+Offline, read-only presence checker.  Validates env var name format and checks
+only that required variables exist and are non-empty.  Never reads, stores, or
+exposes actual credential values.
+
+| Property | Value |
+|----------|-------|
+| Validates credentials against Alpaca | No |
+| Connects to Alpaca | No |
+| Instantiates broker client | No |
+| Exposes credential values | No |
+| Calls `submit_order` or `cancel_order` | No |
+| Writes live ledger | No |
+| Removes `config_safety` on PASS | No |
+| Approves real trading on PASS | No |
+
+Key safety detail: `--required-env` arguments are validated against
+`^[A-Z_][A-Z0-9_]*$` before any `os.environ` lookup.  Invalid names
+(e.g. a shell-expanded secret value such as `sk-live-abc123`) are
+sanitized to `<invalid-env-key>` in all output and never passed to
+`os.environ.get()`.  `redacted_preview` is always the fixed literal
+`"<redacted>"`, never derived from the actual secret.
+
+```bash
+python -m src.tools.live_credential_presence_guard \
+    --required-env ALPACA_LIVE_API_KEY \
+    --required-env ALPACA_LIVE_SECRET_KEY \
+    --output output/live_credential_presence_guard.json
+# Expected: result="PASS", exit 0
+```
+
+### Current state after this phase
+
+| Component | Status |
+|-----------|--------|
+| v2 approvals (`live_trading_approval` + `live_order_submission_approval`) | Complete |
+| `live_v2_approvals_review` | Complete |
+| `live_v2_executor_readiness_review` | Complete |
+| `live_v2_final_readiness_review` | Complete |
+| `live_v2_readiness_bundle` | Complete |
+| `live_submit_enablement_gate` | Complete |
+| Ledger dry-run lifecycle | Complete |
+| `live_operator_config_override_review` | Complete |
+| `live_credential_presence_guard` | Complete |
+| Broker live API preflight | **Not implemented** |
+| Real submit | **Not implemented** |
+| `submit_order` | Unreachable |
+| `config_safety` | Still the hard blocker |
+
+### Safety invariants confirmed at this milestone
+
+- `submit_order` was never called by any guard in this phase
+- No Alpaca endpoint was contacted by any guard in this phase
+- No credential values were read, stored, printed, or written to any artifact
+- No real order was submitted
+- `config_safety` remains the final blocker with safe defaults:
+  `live_trading_enabled=false`, `live_submit_dry_run=true`, `live_kill_switch_enabled=true`
+
+### Warning
+
+> **This milestone does not approve real trading.**
+> **This milestone does not approve live order submission.**
+> **Broker live API preflight is not implemented.**
+> PASS from any guard in this phase is a precondition check only.
+> Real live trading requires a funded account, a broker API preflight,
+> and explicitly overriding the three `config_safety` flags in a local
+> operator config — changes that must not be made in `settings.yaml`.
