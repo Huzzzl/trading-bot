@@ -2,7 +2,7 @@
 tools/live_v2_readiness_bundle.py
 ------------------------------------
 Offline bundle runner that executes the full Live V2 readiness review
-sequence in one command and writes all three review artifacts under a
+sequence in one command and writes all four review artifacts under a
 single output directory.
 
 Usage::
@@ -15,9 +15,9 @@ Usage::
 
 Sequence
 --------
-1. ``live_v2_approvals_review``        -- validates both v2 approval artifacts
+1. ``live_v2_approvals_review``          -- validates both v2 approval artifacts
 2. ``live_v2_executor_readiness_review`` -- verifies executor reached config_safety
-3. ``live_v2_final_readiness_review``  -- combined summary
+3. ``live_v2_final_readiness_review``    -- combined summary
 
 All three reviews run regardless of earlier failures, provided their input
 files are accessible.  All available artifacts are written before exit.
@@ -29,8 +29,9 @@ Under ``--output-dir``:
     live_v2_approvals_review.json
     live_v2_executor_readiness_review.json
     live_v2_final_readiness_review.json
+    live_v2_readiness_bundle.json          (top-level audit summary)
 
-Plus a bundle summary written to stdout.
+Also prints a human-readable summary to stdout.
 
 Exit codes
 ----------
