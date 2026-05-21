@@ -70,6 +70,10 @@ implemented in `src/tools/live_post_submit_ledger_update_dry_run.py`; it locates
 (`submitted`, `rejected`, or `exception`); it proves the same pre-submit row can be updated
 after a hypothetical submit outcome without submitting any order; future real submit must update
 the same `client_order_id` row with the actual `broker_order_id`, `error`, and outcome.
+`src/tools/live_ledger_verify.py` (with `--output`) is an offline live submit ledger verifier;
+it validates the dry-run submit ledger CSV schema, checks all per-row invariants, and requires
+every row to have left `attempting` status unless `--allow-attempting` is passed; future real
+submit must leave `live_ledger_verify` PASS after every attempt.
 
 ---
 

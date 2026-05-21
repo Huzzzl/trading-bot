@@ -97,6 +97,41 @@ output JSON.  Never calls Alpaca.  Never reads credentials.
 
 ---
 
+## Ledger Verifier CLI
+
+`src/tools/live_ledger_verify.py` (with ``--output``) is an offline validator
+for the live submit ledger CSV after pre- and post-submit dry-run operations.
+
+```bash
+python -m src.tools.live_ledger_verify \
+    --ledger output/live_submit_ledger.csv \
+    --output output/live_ledger_verify.json
+
+# allow in-progress attempting rows during a dry-run sequence:
+python -m src.tools.live_ledger_verify \
+    --ledger output/live_submit_ledger.csv \
+    --output output/live_ledger_verify.json \
+    --allow-attempting
+```
+
+The verifier checks:
+- Exact schema match against ``LEDGER_COLUMNS``
+- Non-empty, unique ``client_order_id`` for every row
+- Valid ``status`` (attempting / submitted / rejected / exception)
+- ``submitted`` rows: non-empty ``broker_order_id``, empty ``error``
+- ``rejected`` / ``exception`` rows: non-empty ``error``
+- ``attempting`` rows only permitted with ``--allow-attempting``
+- Non-empty ``source_enablement_gate``, ``symbol``; ``side=="buy"``; ``notional > 0``
+
+**Without ``--allow-attempting``, any row with ``status="attempting"`` is a
+violation.** Future real submit must leave ``live_ledger_verify`` PASS after
+every submit attempt (i.e. no row may remain in ``attempting`` status).
+
+Exit 0 on PASS; exit 1 on FAIL.  Always writes output JSON.  Offline only —
+never calls Alpaca, never reads credentials, never submits orders.
+
+---
+
 ## Current Status
 
 | Item | State |

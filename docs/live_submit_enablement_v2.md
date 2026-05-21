@@ -240,3 +240,7 @@ The offline post-submit ledger update dry-run tool
 updated with a hypothetical outcome (`submitted`, `rejected`, `exception`).  It does not submit
 orders and makes no real broker calls.  Future real submit must update the same
 `client_order_id` row with the actual `broker_order_id`, `error`, and outcome.
+`src/tools/live_ledger_verify.py` (with `--output`) validates the dry-run submit ledger after
+pre- and post-submit dry-run operations.  Without `--allow-attempting`, no row may remain in
+`status="attempting"`.  Future real submit must leave `live_ledger_verify` PASS after every
+submit attempt.  It is offline — never calls Alpaca, never reads credentials.
