@@ -749,8 +749,10 @@ live-broker-preflight-readonly-core-mock-complete
 | Property | Value |
 |----------|-------|
 | CLI without `--allow-live-broker-api-readonly` | `result="BLOCKED"` — "live broker API access not enabled"; zero broker calls |
-| CLI with flag + credentials | Runs real read-only checks via `AlpacaLiveReadOnlyBroker`; PASS or BLOCKED |
-| CLI with flag but missing credentials | `result="BLOCKED"` — "credentials not available"; zero broker calls |
+| CLI with flag + valid artifacts/params + credentials | Runs real read-only checks via `AlpacaLiveReadOnlyBroker`; PASS or BLOCKED |
+| CLI with flag but missing/non-PASS artifacts | `result="BLOCKED"` — fails before env var read; zero broker calls |
+| CLI with flag but invalid parameters | `result="BLOCKED"` — fails before env var read; zero broker calls |
+| CLI with flag but missing credentials | `result="BLOCKED"` — env vars read after validation, adapter not constructed; zero broker calls |
 | Alpaca SDK import | Lazy — inside `AlpacaLiveReadOnlyBroker.__init__` only; no module-level import |
 | `requests` / `httpx` / `aiohttp` / `urllib.request` imported | No |
 | `submit_order` reference | Absent — source-scanned in tests |

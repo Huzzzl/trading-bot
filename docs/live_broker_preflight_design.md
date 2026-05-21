@@ -261,7 +261,8 @@ and does not authorize a live order.
 - No write or mutation methods are called; `submit_order`, `cancel_order`, `replace_order` are never referenced
 - Credential values consumed during construction; never stored as attributes, logged, or included in any output
 - Lazy import: `from alpaca.trading.client import TradingClient` is inside `__init__` only — no module-level alpaca import
-- `--allow-live-broker-api-readonly` flag is required for any live API contact; without it, zero broker calls are made
+- **Env vars are never read and `TradingClient` is never imported or constructed until ALL of the following have passed:** credential guard artifact exists and `result="PASS"`, operator override artifact exists and `result="PASS"`, `symbol="SPY"`, `side="buy"`, `0 < notional_cap ≤ 100.0`, and `--allow-live-broker-api-readonly` is present. Any failure before that point returns BLOCKED immediately with `broker_calls_made=false` and without touching env vars.
+- `--allow-live-broker-api-readonly` flag is required for any live API contact; without it, zero broker calls are made and no env vars are read
 - `ALPACA_LIVE_API_KEY` and `ALPACA_LIVE_SECRET_KEY` must be set and non-empty; otherwise BLOCKED before any request
 - All seven output invariants still hardcoded: `broker_mutation_calls_made=false`, `credential_values_exposed=false`, `live_submit_enabled=false`, `real_submit_implemented=false`, `submit_order_reachable=false`, `config_safety_still_blocks=true`, `broker_calls_readonly=true`
 - Exception details from broker calls remain redacted — raw exception text never appears in output

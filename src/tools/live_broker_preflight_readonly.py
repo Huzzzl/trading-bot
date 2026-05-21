@@ -468,18 +468,30 @@ def run_preflight(
     notional_cap: float,
     broker: BrokerClient | None = None,
     allow_live_readonly: bool = False,
+    _trading_client_cls: Any = None,
 ) -> dict[str, Any]:
     """Run the full read-only broker preflight.
 
     Never raises.  All errors are captured as violations → BLOCKED.
 
-    When ``broker`` is None and ``allow_live_readonly`` is False the tool
-    returns BLOCKED with ``"live broker API access not enabled"``.
+    Env vars are never read and ``AlpacaLiveReadOnlyBroker`` is never
+    constructed until ALL of the following pass:
 
-    When ``broker`` is None and ``allow_live_readonly`` is True the tool
-    returns BLOCKED with ``"live broker credentials not available"``.
+    * credential_guard artifact exists and ``result == "PASS"``
+    * operator_override artifact exists and ``result == "PASS"``
+    * ``symbol == "SPY"``
+    * ``side == "buy"``
+    * ``0 < notional_cap <= 100.0``
+    * ``allow_live_readonly is True``
 
-    Never reads, stores, or exposes credential values.
+    If any check fails before that point, the function returns BLOCKED
+    immediately with ``broker_calls_made=false`` and without touching env vars.
+
+    When ``broker`` is supplied (mock path for tests), it is used directly
+    and no env var read or adapter construction takes place.
+
+    ``_trading_client_cls`` is a test-only injection hook forwarded to
+    ``AlpacaLiveReadOnlyBroker``; pass ``None`` (default) in production.
     """
     checked_at = datetime.now(tz=timezone.utc).isoformat()
     violations: list[str] = []
@@ -487,7 +499,8 @@ def run_preflight(
     broker_calls_made = False
 
     # ------------------------------------------------------------------
-    # Step 1 — prerequisite artifacts (no broker call)
+    # Step 1 — prerequisite artifacts
+    # No env var reads, no broker construction, no broker calls.
     # ------------------------------------------------------------------
     cg_data, cg_err = _read_artifact(credential_guard_path, "credential_guard")
     if cg_err:
@@ -506,7 +519,8 @@ def run_preflight(
         )
 
     # ------------------------------------------------------------------
-    # Step 2 — parameter validation (no broker call)
+    # Step 2 — parameter validation
+    # No env var reads, no broker construction, no broker calls.
     # ------------------------------------------------------------------
     if str(symbol).strip().upper() != _REQUIRED_SYMBOL:
         violations.append(
@@ -532,25 +546,20 @@ def run_preflight(
         )
 
     # ------------------------------------------------------------------
-    # Step 3 — broker client availability
+    # Step 3 — explicit allow flag check (no env var read yet)
     # ------------------------------------------------------------------
-    if broker is None:
-        if not allow_live_readonly:
-            violations.append(
-                "live broker API access not enabled — "
-                "pass --allow-live-broker-api-readonly to use the live "
-                "read-only adapter; no broker calls will be made without "
-                "this explicit opt-in flag"
-            )
-        else:
-            violations.append(
-                "live broker credentials not available — "
-                f"{_LIVE_API_KEY_ENV} and {_LIVE_SECRET_KEY_ENV} must be "
-                "set and non-empty; no broker calls were made"
-            )
+    if broker is None and not allow_live_readonly:
+        violations.append(
+            "live broker API access not enabled — "
+            "pass --allow-live-broker-api-readonly to use the live "
+            "read-only adapter; no broker calls will be made without "
+            "this explicit opt-in flag"
+        )
 
     # ------------------------------------------------------------------
-    # Fail early if any prerequisite or parameter violation
+    # Fail early if any prerequisite, parameter, or flag violation.
+    # Env vars are never read before this point.
+    # AlpacaLiveReadOnlyBroker is never constructed before this point.
     # ------------------------------------------------------------------
     if violations:
         return _build_result(
@@ -561,7 +570,25 @@ def run_preflight(
         )
 
     # ------------------------------------------------------------------
-    # Step 4 — broker checks (real or mock)
+    # Step 4 — live adapter construction (env vars read here, and only here,
+    # after all prerequisite and parameter checks have passed).
+    # Skipped entirely when a broker is already provided (mock/test path).
+    # ------------------------------------------------------------------
+    if broker is None:
+        broker, broker_err = _build_alpaca_live_broker(
+            _trading_client_cls=_trading_client_cls,
+        )
+        if broker_err:
+            violations.append(broker_err)
+            return _build_result(
+                checked_at=checked_at,
+                violations=violations,
+                checks=checks,
+                broker_calls_made=broker_calls_made,
+            )
+
+    # ------------------------------------------------------------------
+    # Step 5 — broker checks (real adapter or injected mock)
     # ------------------------------------------------------------------
     broker_calls_made = True
 
@@ -690,20 +717,15 @@ def main(argv: list[str] | None = None) -> None:
     )
     args = parser.parse_args(argv)
 
-    broker: BrokerClient | None = None
-    if args.allow_live_broker_api_readonly:
-        broker, broker_err = _build_alpaca_live_broker()
-        if broker_err:
-            # broker remains None; run_preflight emits "credentials not available"
-            pass
-
+    # Broker construction, env var reads, and TradingClient import happen
+    # inside run_preflight — only after all prerequisite/parameter checks pass.
     result = run_preflight(
         credential_guard_path=Path(args.credential_guard),
         operator_override_path=Path(args.operator_override),
         symbol=args.symbol,
         side=args.side,
         notional_cap=args.notional_cap,
-        broker=broker,
+        broker=None,
         allow_live_readonly=args.allow_live_broker_api_readonly,
     )
 

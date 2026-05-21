@@ -40,6 +40,7 @@ from src.tools.live_broker_preflight_readonly import (
     _REQUIRED_SIDE,
     _MAX_NOTIONAL_CAP,
     AlpacaLiveReadOnlyBroker,
+    _build_alpaca_live_broker,
     run_preflight,
     main,
 )
@@ -393,7 +394,11 @@ class TestCLIMode:
         assert result["broker_calls_made"] is False
         assert any("allow-live-broker-api-readonly" in v for v in result["violations"])
 
-    def test_no_broker_allow_flag_true_blocked(self, tmp_path: Path) -> None:
+    def test_no_broker_allow_flag_true_blocked(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv(_LIVE_API_KEY_ENV, raising=False)
+        monkeypatch.delenv(_LIVE_SECRET_KEY_ENV, raising=False)
         cg = _write_cg(tmp_path)
         oo = _write_oo(tmp_path)
         result = run_preflight(
@@ -403,7 +408,9 @@ class TestCLIMode:
         )
         assert result["result"] == "BLOCKED"
         assert result["broker_calls_made"] is False
-        assert any("credentials not available" in v for v in result["violations"])
+        # With flag present but env vars absent, _build_alpaca_live_broker
+        # reports the missing variable names (never their values)
+        assert any(_LIVE_API_KEY_ENV in v for v in result["violations"])
 
     def test_main_no_broker_exits_one(self, tmp_path: Path) -> None:
         cg = _write_cg(tmp_path)
@@ -1328,3 +1335,258 @@ class TestAdapterConstructionGating:
         assert result["result"] == "PASS"
         assert result["broker_calls_made"] is True
         assert len(broker.calls) > 0
+
+
+# ---------------------------------------------------------------------------
+# Env var reads and TradingClient construction are gated behind all checks
+# ---------------------------------------------------------------------------
+
+class _ConstructionTracker:
+    """A TradingClient stand-in that records whether its constructor ran."""
+
+    instances: list["_ConstructionTracker"] = []
+
+    def __init__(
+        self,
+        api_key: str,
+        secret_key: str,
+        paper: bool,
+        raw_data: bool,
+    ) -> None:
+        _ConstructionTracker.instances.append(self)
+
+    def get_account(self) -> _MockAccount:
+        return _MockAccount()
+
+    def get_clock(self) -> _MockClock:
+        return _MockClock()
+
+    def get_asset(self, symbol: str) -> _MockAsset:
+        return _MockAsset()
+
+
+def _reset_tracker() -> None:
+    _ConstructionTracker.instances.clear()
+
+
+def _run_with_tracker(
+    *,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cg_path: Path | None = None,
+    oo_path: Path | None = None,
+    symbol: str = "SPY",
+    side: str = "buy",
+    notional_cap: float = 100.0,
+    allow_live_readonly: bool = True,
+    fake_key: str = "FAKE-KEY-ZZZ",
+    fake_secret: str = "FAKE-SECRET-ZZZ",
+) -> dict[str, Any]:
+    """Run run_preflight with a ConstructionTracker and fake env vars set."""
+    _reset_tracker()
+    monkeypatch.setenv(_LIVE_API_KEY_ENV, fake_key)
+    monkeypatch.setenv(_LIVE_SECRET_KEY_ENV, fake_secret)
+    return run_preflight(
+        credential_guard_path=cg_path or (tmp_path / "missing_cg.json"),
+        operator_override_path=oo_path or (tmp_path / "missing_oo.json"),
+        symbol=symbol,
+        side=side,
+        notional_cap=notional_cap,
+        broker=None,
+        allow_live_readonly=allow_live_readonly,
+        _trading_client_cls=_ConstructionTracker,
+    )
+
+
+class TestEnvVarAndConstructionGating:
+    """Prove that env vars are not read and TradingClient is not constructed
+    until ALL prerequisite artifact and parameter checks pass.
+
+    Each test sets fake env vars so that IF the code reads them and attempts
+    construction, ``_ConstructionTracker.instances`` will be non-empty.  An
+    empty list proves construction was never attempted.
+    """
+
+    # --- credential guard failures ---
+
+    def test_cg_missing_no_construction(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        oo = _write_oo(tmp_path)
+        result = _run_with_tracker(tmp_path=tmp_path, monkeypatch=monkeypatch, oo_path=oo)
+        assert result["result"] == "BLOCKED"
+        assert result["broker_calls_made"] is False
+        assert _ConstructionTracker.instances == []
+
+    def test_cg_malformed_no_construction(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cg = tmp_path / "bad.json"
+        cg.write_text("{broken", encoding="utf-8")
+        oo = _write_oo(tmp_path)
+        result = _run_with_tracker(tmp_path=tmp_path, monkeypatch=monkeypatch, cg_path=cg, oo_path=oo)
+        assert result["result"] == "BLOCKED"
+        assert _ConstructionTracker.instances == []
+
+    def test_cg_non_pass_no_construction(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cg = _write_cg(tmp_path, {"result": "BLOCKED"})
+        oo = _write_oo(tmp_path)
+        result = _run_with_tracker(tmp_path=tmp_path, monkeypatch=monkeypatch, cg_path=cg, oo_path=oo)
+        assert result["result"] == "BLOCKED"
+        assert _ConstructionTracker.instances == []
+
+    # --- operator override failures ---
+
+    def test_oo_missing_no_construction(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cg = _write_cg(tmp_path)
+        result = _run_with_tracker(tmp_path=tmp_path, monkeypatch=monkeypatch, cg_path=cg)
+        assert result["result"] == "BLOCKED"
+        assert _ConstructionTracker.instances == []
+
+    def test_oo_malformed_no_construction(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cg = _write_cg(tmp_path)
+        oo = tmp_path / "bad_oo.json"
+        oo.write_text("{broken", encoding="utf-8")
+        result = _run_with_tracker(tmp_path=tmp_path, monkeypatch=monkeypatch, cg_path=cg, oo_path=oo)
+        assert result["result"] == "BLOCKED"
+        assert _ConstructionTracker.instances == []
+
+    def test_oo_non_pass_no_construction(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cg = _write_cg(tmp_path)
+        oo = _write_oo(tmp_path, {"result": "BLOCKED"})
+        result = _run_with_tracker(tmp_path=tmp_path, monkeypatch=monkeypatch, cg_path=cg, oo_path=oo)
+        assert result["result"] == "BLOCKED"
+        assert _ConstructionTracker.instances == []
+
+    # --- parameter failures ---
+
+    def test_wrong_symbol_no_construction(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cg = _write_cg(tmp_path)
+        oo = _write_oo(tmp_path)
+        result = _run_with_tracker(
+            tmp_path=tmp_path, monkeypatch=monkeypatch,
+            cg_path=cg, oo_path=oo, symbol="AAPL",
+        )
+        assert result["result"] == "BLOCKED"
+        assert _ConstructionTracker.instances == []
+
+    def test_wrong_side_no_construction(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cg = _write_cg(tmp_path)
+        oo = _write_oo(tmp_path)
+        result = _run_with_tracker(
+            tmp_path=tmp_path, monkeypatch=monkeypatch,
+            cg_path=cg, oo_path=oo, side="sell",
+        )
+        assert result["result"] == "BLOCKED"
+        assert _ConstructionTracker.instances == []
+
+    def test_notional_cap_too_high_no_construction(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cg = _write_cg(tmp_path)
+        oo = _write_oo(tmp_path)
+        result = _run_with_tracker(
+            tmp_path=tmp_path, monkeypatch=monkeypatch,
+            cg_path=cg, oo_path=oo, notional_cap=200.0,
+        )
+        assert result["result"] == "BLOCKED"
+        assert _ConstructionTracker.instances == []
+
+    def test_notional_cap_zero_no_construction(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cg = _write_cg(tmp_path)
+        oo = _write_oo(tmp_path)
+        result = _run_with_tracker(
+            tmp_path=tmp_path, monkeypatch=monkeypatch,
+            cg_path=cg, oo_path=oo, notional_cap=0.0,
+        )
+        assert result["result"] == "BLOCKED"
+        assert _ConstructionTracker.instances == []
+
+    # --- flag absent ---
+
+    def test_no_flag_no_construction(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cg = _write_cg(tmp_path)
+        oo = _write_oo(tmp_path)
+        result = _run_with_tracker(
+            tmp_path=tmp_path, monkeypatch=monkeypatch,
+            cg_path=cg, oo_path=oo,
+            allow_live_readonly=False,
+        )
+        assert result["result"] == "BLOCKED"
+        assert _ConstructionTracker.instances == []
+
+    def test_main_without_flag_no_construction(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Calling main() without --allow-live-broker-api-readonly must never
+        construct AlpacaLiveReadOnlyBroker regardless of env var state."""
+        import src.tools.live_broker_preflight_readonly as _mod
+        constructed: list[bool] = []
+        original_build = _mod._build_alpaca_live_broker
+
+        def _tracking_build(**kw: Any) -> Any:
+            constructed.append(True)
+            return original_build(**kw)
+
+        monkeypatch.setattr(_mod, "_build_alpaca_live_broker", _tracking_build)
+        monkeypatch.setenv(_LIVE_API_KEY_ENV, "fake-key")
+        monkeypatch.setenv(_LIVE_SECRET_KEY_ENV, "fake-secret")
+
+        cg = _write_cg(tmp_path)
+        oo = _write_oo(tmp_path)
+        out = _output_path(tmp_path)
+        with pytest.raises(SystemExit):
+            main([
+                "--credential-guard", str(cg),
+                "--operator-override", str(oo),
+                "--symbol", "SPY",
+                "--side", "buy",
+                "--notional-cap", "100.0",
+                "--output", str(out),
+                # no --allow-live-broker-api-readonly
+            ])
+        assert constructed == [], "_build_alpaca_live_broker must not be called without the flag"
+
+    # --- construction succeeds only when all checks pass ---
+
+    def test_construction_only_when_all_checks_pass(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cg = _write_cg(tmp_path)
+        oo = _write_oo(tmp_path)
+        result = _run_with_tracker(
+            tmp_path=tmp_path, monkeypatch=monkeypatch,
+            cg_path=cg, oo_path=oo,
+            symbol="SPY", side="buy", notional_cap=100.0,
+            allow_live_readonly=True,
+        )
+        assert result["result"] == "PASS"
+        assert result["broker_calls_made"] is True
+        assert len(_ConstructionTracker.instances) == 1
+
+    def test_broker_calls_made_false_until_construction(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cg = _write_cg(tmp_path, {"result": "BLOCKED"})
+        oo = _write_oo(tmp_path)
+        result = _run_with_tracker(
+            tmp_path=tmp_path, monkeypatch=monkeypatch, cg_path=cg, oo_path=oo,
+        )
+        assert result["broker_calls_made"] is False
+        assert _ConstructionTracker.instances == []
