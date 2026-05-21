@@ -456,3 +456,128 @@ git push origin live-readiness-pre-submit-complete
 > It only marks the pre-submit safety baseline complete.
 > Real live trading requires its own dedicated PR, explicit human sign-off,
 > a funded live account, and a GO decision from `live_readiness_gate`.
+
+---
+
+## Milestone: Live V2 Enablement + Ledger Dry-Run Complete
+
+### Recommended git tag
+
+```
+live-v2-enable-gate-ledger-dryrun-complete
+```
+
+### What this milestone means
+
+| Item | State |
+|------|-------|
+| `live_v2_readiness_bundle` | `bundle_result="PASS"` |
+| `live_submit_enablement_gate` | Decision: `GO` |
+| `live_pre_submit_ledger_dry_run` | Result: `LEDGER_DRY_RUN_WRITTEN` |
+| `live_ledger_verify --allow-attempting` | Result: `PASS` |
+| `live_post_submit_ledger_update_dry_run` | Result: `LEDGER_DRY_RUN_UPDATED` |
+| Final `live_ledger_verify` | Result: `PASS` |
+| Current hard blocker | `config_safety` (`live_trading_enabled=false`, `live_submit_dry_run=true`, `live_kill_switch_enabled=true`) |
+| `submit_order` | Unreachable — no call path exists in current codebase |
+| Real live submit | **Not implemented** |
+| Alpaca live endpoint | Not called |
+| Credentials | Not read |
+| Real order submitted | **No** |
+
+The GO decision from `live_submit_enablement_gate` means only that all documented
+preconditions are satisfied and `config_safety` is the sole remaining blocker.
+It does not submit an order and does not authorize live trading.
+The operator must still explicitly set `live_trading_enabled=true`,
+`live_submit_dry_run=false`, and `live_kill_switch_enabled=false` in a local config
+before any real order attempt can be made — and those changes are not made here.
+
+### Verification command sequence
+
+```bash
+# 1. Generate v2 approval artifacts (offline — no Alpaca calls)
+python -m src.tools.live_trading_approval \
+    --operator-name "operator" \
+    --approval-note "Authorizing live trading mode only" \
+    --risk-acknowledge \
+    --output output/live_trading_approval.json
+
+python -m src.tools.live_order_submission_approval \
+    --operator-name "operator" \
+    --approval-note "Authorizing single live order attempt" \
+    --risk-acknowledge \
+    --source-live-trading-approval output/live_trading_approval.json \
+    --output output/live_order_submission_approval.json
+
+# 2. Run executor readiness check (produces blocked_report)
+python -m src.tools.live_submit_executor_check \
+    --live-trading-approval output/live_trading_approval.json \
+    --live-order-submission-approval output/live_order_submission_approval.json \
+    --output output/live_submit_executor/live_submit_blocked_report.json
+
+# 3. Build v2 readiness bundle
+python -m src.tools.live_v2_readiness_bundle \
+    --live-trading-approval output/live_trading_approval.json \
+    --live-order-submission-approval output/live_order_submission_approval.json \
+    --executor-readiness-report output/live_submit_executor/live_submit_blocked_report.json \
+    --output-dir output/live_v2_bundle
+
+# 4. Run enablement gate (GO/NO_GO)
+python -m src.tools.live_submit_enablement_gate \
+    --readiness-bundle output/live_v2_bundle/live_v2_readiness_bundle.json \
+    --live-trading-approval output/live_trading_approval.json \
+    --live-order-submission-approval output/live_order_submission_approval.json \
+    --executor-readiness-report output/live_submit_executor/live_submit_blocked_report.json \
+    --output output/live_submit_enablement_gate.json
+# Expected: decision="GO", exit 0
+
+# 5. Pre-submit ledger dry-run
+python -m src.tools.live_pre_submit_ledger_dry_run \
+    --enablement-gate output/live_submit_enablement_gate.json \
+    --symbol SPY \
+    --side buy \
+    --notional 100.0 \
+    --client-order-id LIVE-TEST-000001 \
+    --ledger output/live_submit_ledger.csv \
+    --output output/live_pre_submit_ledger_dry_run.json
+# Expected: result="LEDGER_DRY_RUN_WRITTEN", exit 0
+
+# 6. Verify ledger with attempting row allowed
+python -m src.tools.live_ledger_verify \
+    --ledger output/live_submit_ledger.csv \
+    --output output/live_ledger_verify.json \
+    --allow-attempting
+# Expected: result="PASS", exit 0
+
+# 7. Post-submit ledger update dry-run (simulate submitted outcome)
+python -m src.tools.live_post_submit_ledger_update_dry_run \
+    --ledger output/live_submit_ledger.csv \
+    --client-order-id LIVE-TEST-000001 \
+    --outcome submitted \
+    --broker-order-id ALPACA-ORDER-123 \
+    --output output/live_post_submit_ledger_update_dry_run.json
+# Expected: result="LEDGER_DRY_RUN_UPDATED", exit 0
+
+# 8. Final ledger verify (no attempting rows)
+python -m src.tools.live_ledger_verify \
+    --ledger output/live_submit_ledger.csv \
+    --output output/live_ledger_verify.json
+# Expected: result="PASS", exit 0
+```
+
+### Safety invariants confirmed at this milestone
+
+- `submit_order` was never called during any of the above commands
+- No Alpaca endpoint was contacted
+- No credentials were read
+- No real order was submitted
+- The live ledger CSV is a dry-run artifact only (`status` transitions: `attempting` → `submitted`)
+- `config_safety` remains the final blocker; the three config flags retain their safe defaults
+
+### Warning
+
+> **This milestone does not approve real trading.**
+> **This milestone does not approve live order submission.**
+> GO from `live_submit_enablement_gate` is a precondition check only.
+> Real live trading requires explicitly overriding `live_trading_enabled`,
+> `live_submit_dry_run`, and `live_kill_switch_enabled` in a local operator config —
+> changes that are not made here and must not be made in `settings.yaml`.
