@@ -327,3 +327,57 @@ Remove-Item Env:\ALPACA_LIVE_SECRET_KEY -ErrorAction SilentlyContinue
 > real live trading. `live_trading_approved` and `live_order_submission_approved`
 > are always written as `false`. The executor blocks at `approval_artifact` on
 > every run. `submit_order` is never called.
+
+---
+
+## Milestone: live-readiness-pre-submit-complete
+
+### Recommended git tag
+
+```
+live-readiness-pre-submit-complete
+```
+
+### What this milestone means
+
+| Item | State |
+|------|-------|
+| Approx readiness | ~99% |
+| Full pre-submit pipeline | Implemented and tested |
+| Dry-run submit plan | Implemented — writes plan artifact, never calls `submit_order` |
+| Guarded executor | Implemented — `maybe_execute_live_submit()` runs 18 guards, all paths return `blocked=true` |
+| Blocked report review | PASS — `blocked=true`, `submit_order_called=false`, non-empty `block_guard` and `violations` |
+| `submit_order` | Unreachable — no call path exists in current codebase |
+| Real live submit | Not implemented |
+| Live trading | Not approved — `live_trading_approved=false` |
+| Live order submission | Not approved — `live_order_submission_approved=false` |
+
+### Required verification before tagging
+
+All of the following must pass on a clean checkout of `main`:
+
+- [ ] `python -m pytest` — full suite passes, zero failures
+- [ ] `live_pre_submit_checklist` → `final_result=READY`
+- [ ] `live_submit_plan_review` → `review_result=PASS`
+- [ ] `live_operator_release_checklist` → `release_result=RELEASE_READY`
+- [ ] `live_submit_executor_check` → `blocked=true`, `submit_order_called=false`, exit 0
+- [ ] `live_submit_blocked_review` → `PASS`, exit 0
+
+### Commands to create the tag
+
+```bash
+git checkout main
+git pull
+python -m pytest
+git tag -a live-readiness-pre-submit-complete \
+    -m "Live readiness pre-submit pipeline complete; submit_order unreachable"
+git push origin live-readiness-pre-submit-complete
+```
+
+### Warning
+
+> **This tag does not approve real trading.**
+> **This tag does not approve live order submission.**
+> It only marks the pre-submit safety baseline complete.
+> Real live trading requires its own dedicated PR, explicit human sign-off,
+> a funded live account, and a GO decision from `live_readiness_gate`.
