@@ -66,7 +66,7 @@ which only authorized opening a PR. These artifacts authorize a single live orde
 | `approval_timestamp_utc` | ISO-8601 UTC timestamp |
 | `approval_note` | Non-empty string |
 | `risk_acknowledged` | `true` |
-| `live_order_submission_approved` | `false` — set by this artifact only if split from below, or `true` if combined |
+| `live_order_submission_approved` | `false` — this artifact must not authorize order submission |
 
 ### Artifact 2 — `live_order_submission_approval.json`
 
@@ -78,6 +78,12 @@ which only authorized opening a PR. These artifacts authorize a single live orde
 | `approval_timestamp_utc` | ISO-8601 UTC timestamp |
 | `approval_note` | Non-empty string |
 | `risk_acknowledged` | `true` |
+
+### Separation requirement
+
+- `live_trading_approval.json` authorizes enabling live trading mode only. It must not authorize order submission. `live_order_submission_approved` must be `false` or absent.
+- `live_order_submission_approval.json` is a separate artifact. It must be produced independently and consumed by the executor as a distinct input.
+- Combined approval artifacts are not allowed. A single artifact may not set both `live_trading_approved=true` and `live_order_submission_approved=true`.
 
 Both artifacts must:
 - Be produced by offline CLI tools (no Alpaca calls during approval generation)
