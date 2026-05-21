@@ -44,6 +44,9 @@ The second v2 approval artifact CLI (`live_order_submission_approval`) is implem
 `src/tools/live_order_submission_approval.py`; it reads `live_trading_approval.json`
 and produces `live_order_submission_approval.json` with `live_order_submission_approved=true`
 and `order_submission_approval_for_single_attempt=true`; the two artifacts are always separate.
+The combined review CLI (`live_v2_approvals_review`) is implemented in
+`src/tools/live_v2_approvals_review.py`; it verifies both artifacts are consistent,
+separate, and scoped to a single live order attempt; PASS on exit 0, FAIL on exit 1.
 
 ---
 
