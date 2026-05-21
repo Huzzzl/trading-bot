@@ -68,6 +68,35 @@ output JSON.  Never calls Alpaca.  Never reads credentials.
 
 ---
 
+## Post-Submit Ledger Update Dry-Run CLI
+
+`src/tools/live_post_submit_ledger_update_dry_run.py` is an offline dry-run
+updater that proves the same pre-submit ledger row can be updated with a
+hypothetical submit outcome.  It requires the existing ledger to contain
+exactly one ``attempting`` row matching the provided ``client_order_id``.
+
+```bash
+python -m src.tools.live_post_submit_ledger_update_dry_run \
+    --ledger output/live_submit_ledger.csv \
+    --client-order-id LIVE-TEST-000001 \
+    --outcome submitted \
+    --broker-order-id ALPACA-ORDER-123 \
+    --output output/live_post_submit_ledger_update_dry_run.json
+```
+
+**This tool does not submit orders and makes no real broker calls.**
+It rewrites the ledger CSV in place, updating only the matching row.
+Future real submit must update the same ``client_order_id`` row with the
+actual ``broker_order_id``, ``error``, and outcome after the order attempt.
+
+Valid outcomes: ``submitted`` (requires ``--broker-order-id``),
+``rejected`` (requires ``--error``), ``exception`` (requires ``--error``).
+
+Exit 0 on ``LEDGER_DRY_RUN_UPDATED``; exit 1 on ``BLOCKED``.  Always writes
+output JSON.  Never calls Alpaca.  Never reads credentials.
+
+---
+
 ## Current Status
 
 | Item | State |

@@ -64,6 +64,12 @@ order metadata (symbol, buy-only side, notional, unique client_order_id), and ap
 with `status="attempting"` to the live submit ledger CSV; it proves the required pre-submit
 ledger row can be written without submitting any order; future real submit must reuse the same
 ledger schema and update the same `client_order_id` row after the order attempt.
+The offline post-submit ledger update dry-run tool (`live_post_submit_ledger_update_dry_run`) is
+implemented in `src/tools/live_post_submit_ledger_update_dry_run.py`; it locates an existing
+`attempting` row by `client_order_id` and updates it with a hypothetical outcome
+(`submitted`, `rejected`, or `exception`); it proves the same pre-submit row can be updated
+after a hypothetical submit outcome without submitting any order; future real submit must update
+the same `client_order_id` row with the actual `broker_order_id`, `error`, and outcome.
 
 ---
 

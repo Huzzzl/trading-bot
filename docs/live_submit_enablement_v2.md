@@ -235,3 +235,8 @@ proves the required pre-submit ledger row can be written.  It requires a GO gate
 and writes one CSV row with `status="attempting"`.  It does not submit orders and makes no
 real broker calls.  Future real submit must reuse the same ledger schema and update the same
 `client_order_id` row after the order attempt.
+The offline post-submit ledger update dry-run tool
+(`src/tools/live_post_submit_ledger_update_dry_run.py`) proves the same pre-submit row can be
+updated with a hypothetical outcome (`submitted`, `rejected`, `exception`).  It does not submit
+orders and makes no real broker calls.  Future real submit must update the same
+`client_order_id` row with the actual `broker_order_id`, `error`, and outcome.
