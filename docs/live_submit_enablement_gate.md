@@ -427,6 +427,66 @@ decides to abort:
 
 ---
 
+## Operator Config Override Review CLI
+
+`src/tools/live_operator_config_override_review.py` is an offline read-only
+reviewer that validates a locally-produced operator config override artifact.
+The artifact is a JSON file the operator manually writes to explicitly
+acknowledge all preconditions before a future single live order attempt.
+
+```bash
+python -m src.tools.live_operator_config_override_review \
+    --override-artifact output/live_operator_config_override.json \
+    --output output/live_operator_config_override_review.json
+```
+
+**PASS does not remove `config_safety` and does not approve real trading.**
+PASS only means the artifact is structurally valid and all required
+acknowledgements are present.
+
+The tool blocks (`result="BLOCKED"`) when:
+- the override artifact file is missing or cannot be parsed
+- `config_safety_acknowledged` is not `true`
+- `submit_order_unreachable_acknowledged` is not `true`
+- `real_live_submit_unimplemented_acknowledged` is not `true`
+- `approval_scope` is not `"AUTHORIZE_SINGLE_LIVE_ORDER_ATTEMPT_ONLY"`
+- `symbol` is not `"SPY"`
+- `side` is not `"buy"`
+- `notional_cap` is not in the range (0, 100.0]
+- `recurring_trading_approved` is `true`
+- `automated_trading_approved` is `true`
+- `operator_name` or `approval_note` is empty
+
+The override artifact must be produced manually by the operator.  It must
+not be generated autonomously or by any executor.  Example minimal artifact:
+
+```json
+{
+  "config_safety_acknowledged": true,
+  "submit_order_unreachable_acknowledged": true,
+  "real_live_submit_unimplemented_acknowledged": true,
+  "approval_scope": "AUTHORIZE_SINGLE_LIVE_ORDER_ATTEMPT_ONLY",
+  "symbol": "SPY",
+  "side": "buy",
+  "notional_cap": 100.0,
+  "recurring_trading_approved": false,
+  "automated_trading_approved": false,
+  "operator_name": "your-name",
+  "approval_note": "Single SPY buy market order, $100 cap, one attempt."
+}
+```
+
+Output JSON fields: `result`, `config_safety_override_reviewed`,
+`live_submit_enabled` (always `false`), `real_submit_implemented` (always
+`false`), `submit_order_reachable` (always `false`), `broker_calls_made`
+(always `false`), `credentials_read` (always `false`), `violations`, `blocker`.
+
+Exit 0 on PASS; exit 1 on BLOCKED.  Always writes output JSON.
+Never calls Alpaca.  Never reads credentials.  Never writes the live ledger.
+Never enables live trading.  Never removes `config_safety`.
+
+---
+
 ## References
 
 - [live_readiness.md](live_readiness.md) — full readiness pipeline
