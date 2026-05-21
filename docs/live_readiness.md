@@ -1190,6 +1190,32 @@ Invokes `maybe_execute_live_submit()` and writes `live_submit_blocked_report.jso
 Exits 0 only when `blocked=true` and `submit_order_called=false` and the report
 file exists.  Never calls `submit_order`.  Never writes the live ledger.
 
+### Step 5b — Review executor readiness after v2 approvals (optional)
+
+When v2 approval artifacts have been supplied to the executor via
+``--live-trading-approval`` and ``--live-order-submission-approval``, run the
+v2 executor readiness review to confirm the v2 guards passed and the executor
+is now blocked only by the three default config-safety flags:
+
+```bash
+python -m src.tools.live_v2_executor_readiness_review \
+    --blocked-report output/live_submit_executor/live_submit_blocked_report.json
+```
+
+PASS only when:
+
+- ``blocked=true``
+- ``submit_order_called=false``
+- ``block_guard == "config_safety"``
+- ``violations`` contains at least one of ``live_trading_enabled=false``,
+  ``live_submit_dry_run=true``, or ``live_kill_switch_enabled=true``
+
+FAIL when ``block_guard`` is ``approval_artifact``, ``v2_trading_approval``,
+``v2_submission_approval``, ``v2_cross_check``, or anything other than
+``config_safety`` — indicating a v2 artifact was rejected.
+
+Never calls Alpaca.  Never reads credentials.  Never writes files.
+
 ### Step 6 — Review the blocked report artifact
 
 ```bash

@@ -126,6 +126,24 @@ Output: `output/live_submit_executor/live_submit_blocked_report.json`
 Expected result: `blocked=true`, `submit_order_called=false`,
 `block_guard=approval_artifact`. Exit code 0.
 
+### Step 6b — V2 executor readiness review (after v2 approvals)
+
+When v2 approval artifacts are supplied to `live_submit_executor_check` via
+`--live-trading-approval` and `--live-order-submission-approval`, run the v2
+executor readiness review to confirm the v2 approval guards passed and the
+executor reached `config_safety`:
+
+```bash
+python -m src.tools.live_v2_executor_readiness_review \
+    --blocked-report output/live_submit_executor/live_submit_blocked_report.json
+```
+
+Expected result: `PASS` with `block_guard=config_safety`. Exit code 0.
+
+FAIL if `block_guard` is `approval_artifact`, `v2_trading_approval`,
+`v2_submission_approval`, or `v2_cross_check` — indicating a v2 artifact
+was rejected before reaching the config-safety guard.
+
 ### Step 7 — Blocked report review
 
 ```bash
@@ -223,6 +241,7 @@ The following read-only checks and guards are implemented and tested:
 | `live_order_submission_approval` | Offline approval artifact CLI; reads `live_trading_approval.json`; produces `live_order_submission_approval.json`; `live_order_submission_approved=true`, `order_submission_approval_for_single_attempt=true`; validates trading approval fields and symbol/notional match; separate artifact from trading approval; never calls Alpaca; never submits orders |
 | `live_v2_approvals_review` | Offline review of both v2 approval artifacts; PASS only if both artifacts are consistent, separate, correctly scoped, symbols match, and submission notional ≤ trading notional; never writes files; never calls Alpaca |
 | `live_submit_executor` v2 guards | `maybe_execute_live_submit()` accepts optional `live_trading_approval_path` and `live_order_submission_approval_path`; validates both v2 artifacts (symbol, notional cap, scope, risk_acknowledged) after existing approval_artifact guard; omitting v2 paths preserves original behavior; all exit paths still `blocked=true`; `submit_order` never called |
+| `live_v2_executor_readiness_review` | Offline review of executor blocked report after v2 approvals are provided; PASS only if `blocked=true`, `submit_order_called=false`, `block_guard=config_safety`, and violations include at least one default config-safety flag; FAIL if any v2 approval guard blocked; never writes files; never calls Alpaca |
 
 ---
 
