@@ -299,6 +299,9 @@ for planning purposes only — no `submit_order` call exists in the codebase.
 The next-phase enablement design — required approvals, config changes, runtime
 guards, ledger behavior, and first-submit constraints — is documented in
 **[docs/live_submit_enablement_v2.md](live_submit_enablement_v2.md)**.
+The exact conditions that must all be satisfied before the `config_safety`
+blocker can be removed are defined in
+**[docs/live_submit_enablement_gate.md](live_submit_enablement_gate.md)**.
 
 ---
 

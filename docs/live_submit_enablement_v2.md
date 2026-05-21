@@ -224,3 +224,6 @@ The real-submit implementation PR must include all of the following:
 - All existing pipeline artifacts and CLI tools remain unchanged
 - `live_real_submit_pr_approval` scope remains `OPEN_REAL_SUBMIT_IMPLEMENTATION_PR_ONLY` — it is not upgraded by this design
 - This document has no effect on the running system
+
+The exact conditions that must all be satisfied before the `config_safety` blocker can be removed
+are defined in **[docs/live_submit_enablement_gate.md](live_submit_enablement_gate.md)**.
