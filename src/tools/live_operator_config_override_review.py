@@ -18,15 +18,15 @@ Usage::
 PASS conditions (all must hold)
 ---------------------------------
 * Override artifact file exists and is valid JSON
-* ``config_safety_acknowledged`` is ``true``
-* ``submit_order_unreachable_acknowledged`` is ``true``
-* ``real_live_submit_unimplemented_acknowledged`` is ``true``
+* ``config_safety_acknowledged`` is JSON boolean ``true`` exactly
+* ``submit_order_unreachable_acknowledged`` is JSON boolean ``true`` exactly
+* ``real_live_submit_unimplemented_acknowledged`` is JSON boolean ``true`` exactly
 * ``approval_scope`` == ``"AUTHORIZE_SINGLE_LIVE_ORDER_ATTEMPT_ONLY"``
 * ``symbol`` == ``"SPY"``
 * ``side`` == ``"buy"``
 * ``notional_cap`` is a number in the range (0, 100.0] (inclusive of 100.0)
-* ``recurring_trading_approved`` is ``false`` (or absent, treated as false)
-* ``automated_trading_approved`` is ``false`` (or absent, treated as false)
+* ``recurring_trading_approved`` is JSON boolean ``false`` exactly (must be present)
+* ``automated_trading_approved`` is JSON boolean ``false`` exactly (must be present)
 * ``operator_name`` is a non-empty string
 * ``approval_note`` is a non-empty string
 
@@ -77,25 +77,6 @@ _MAX_NOTIONAL_CAP = 100.0
 
 
 # ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _is_truthy(value: Any) -> bool:
-    if isinstance(value, bool):
-        return value
-    return str(value).strip().lower() in ("true", "1", "yes")
-
-
-def _is_falsy(value: Any) -> bool:
-    """Return True when value is explicitly false/0/no or absent (None)."""
-    if value is None:
-        return True
-    if isinstance(value, bool):
-        return not value
-    return str(value).strip().lower() in ("false", "0", "no", "")
-
-
-# ---------------------------------------------------------------------------
 # Reader
 # ---------------------------------------------------------------------------
 
@@ -142,24 +123,24 @@ def validate_override(artifact: dict[str, Any]) -> tuple[str, list[str], bool]:
     """
     violations: list[str] = []
 
-    # --- Explicit acknowledgements ---
-    ack_config_safety = _is_truthy(artifact.get("config_safety_acknowledged"))
-    ack_unreachable   = _is_truthy(artifact.get("submit_order_unreachable_acknowledged"))
-    ack_unimplemented = _is_truthy(artifact.get("real_live_submit_unimplemented_acknowledged"))
+    # --- Explicit acknowledgements (must be JSON boolean true exactly) ---
+    ack_config_safety = artifact.get("config_safety_acknowledged") is True
+    ack_unreachable   = artifact.get("submit_order_unreachable_acknowledged") is True
+    ack_unimplemented = artifact.get("real_live_submit_unimplemented_acknowledged") is True
 
     if not ack_config_safety:
         violations.append(
-            "config_safety_acknowledged must be true -- "
+            "config_safety_acknowledged must be JSON boolean true -- "
             "operator must explicitly acknowledge that config_safety is the current hard blocker"
         )
     if not ack_unreachable:
         violations.append(
-            "submit_order_unreachable_acknowledged must be true -- "
+            "submit_order_unreachable_acknowledged must be JSON boolean true -- "
             "operator must explicitly acknowledge that submit_order remains unreachable"
         )
     if not ack_unimplemented:
         violations.append(
-            "real_live_submit_unimplemented_acknowledged must be true -- "
+            "real_live_submit_unimplemented_acknowledged must be JSON boolean true -- "
             "operator must explicitly acknowledge that real live submit is not implemented"
         )
 
@@ -210,18 +191,20 @@ def validate_override(artifact: dict[str, Any]) -> tuple[str, list[str], bool]:
                     f"notional_cap={notional} exceeds maximum permitted value of {_MAX_NOTIONAL_CAP}"
                 )
 
-    # --- No recurring or automated trading ---
+    # --- No recurring or automated trading (must be JSON boolean false exactly) ---
     recurring = artifact.get("recurring_trading_approved")
-    if not _is_falsy(recurring):
+    if recurring is not False:
         violations.append(
-            f"recurring_trading_approved={recurring!r} -- must be false; "
+            f"recurring_trading_approved={recurring!r} -- must be JSON boolean false "
+            "(field must be present and explicitly set to false); "
             "no recurring live trading is approved"
         )
 
     automated = artifact.get("automated_trading_approved")
-    if not _is_falsy(automated):
+    if automated is not False:
         violations.append(
-            f"automated_trading_approved={automated!r} -- must be false; "
+            f"automated_trading_approved={automated!r} -- must be JSON boolean false "
+            "(field must be present and explicitly set to false); "
             "no automated live trading is approved"
         )
 

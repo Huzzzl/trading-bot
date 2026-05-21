@@ -131,21 +131,15 @@ class TestValidateOverridePass:
         result, violations, _ = validate_override(a)
         assert result == "PASS"
 
-    def test_absent_recurring_treated_as_false(self) -> None:
+    def test_boolean_false_recurring_passes(self) -> None:
         a = _valid_artifact()
-        del a["recurring_trading_approved"]
+        a["recurring_trading_approved"] = False
         result, violations, _ = validate_override(a)
         assert result == "PASS"
 
-    def test_absent_automated_treated_as_false(self) -> None:
+    def test_boolean_false_automated_passes(self) -> None:
         a = _valid_artifact()
-        del a["automated_trading_approved"]
-        result, violations, _ = validate_override(a)
-        assert result == "PASS"
-
-    def test_string_false_for_recurring(self) -> None:
-        a = _valid_artifact()
-        a["recurring_trading_approved"] = "false"
+        a["automated_trading_approved"] = False
         result, violations, _ = validate_override(a)
         assert result == "PASS"
 
@@ -334,6 +328,79 @@ class TestFieldValidation:
         del a["approval_note"]
         result, violations, _ = validate_override(a)
         assert result == "BLOCKED"
+
+    # --- absent no-trading fields are now BLOCKED (not treated as false) ---
+
+    def test_absent_recurring_is_blocked(self) -> None:
+        a = _valid_artifact()
+        del a["recurring_trading_approved"]
+        result, violations, _ = validate_override(a)
+        assert result == "BLOCKED"
+        assert any("recurring_trading_approved" in v for v in violations)
+
+    def test_absent_automated_is_blocked(self) -> None:
+        a = _valid_artifact()
+        del a["automated_trading_approved"]
+        result, violations, _ = validate_override(a)
+        assert result == "BLOCKED"
+        assert any("automated_trading_approved" in v for v in violations)
+
+
+# ---------------------------------------------------------------------------
+# Boolean hardening — string values rejected for all five boolean fields
+# ---------------------------------------------------------------------------
+
+class TestBooleanHardening:
+    """String representations of booleans must be rejected.
+    Only JSON boolean true/false is accepted for safety-critical fields.
+    """
+
+    # acknowledgement fields — must be JSON boolean true exactly
+
+    @pytest.mark.parametrize("value", ["true", "True", "yes", "1", 1, "false", "0"])
+    def test_config_safety_ack_string_blocked(self, value: Any) -> None:
+        a = _valid_artifact()
+        a["config_safety_acknowledged"] = value
+        result, violations, reviewed = validate_override(a)
+        assert result == "BLOCKED"
+        assert any("config_safety_acknowledged" in v for v in violations)
+        assert reviewed is False
+
+    @pytest.mark.parametrize("value", ["true", "True", "yes", "1", 1, "false", "0"])
+    def test_submit_order_unreachable_ack_string_blocked(self, value: Any) -> None:
+        a = _valid_artifact()
+        a["submit_order_unreachable_acknowledged"] = value
+        result, violations, reviewed = validate_override(a)
+        assert result == "BLOCKED"
+        assert any("submit_order_unreachable_acknowledged" in v for v in violations)
+        assert reviewed is False
+
+    @pytest.mark.parametrize("value", ["true", "True", "yes", "1", 1, "false", "0"])
+    def test_real_live_submit_unimplemented_ack_string_blocked(self, value: Any) -> None:
+        a = _valid_artifact()
+        a["real_live_submit_unimplemented_acknowledged"] = value
+        result, violations, reviewed = validate_override(a)
+        assert result == "BLOCKED"
+        assert any("real_live_submit_unimplemented_acknowledged" in v for v in violations)
+        assert reviewed is False
+
+    # no-trading fields — must be JSON boolean false exactly
+
+    @pytest.mark.parametrize("value", ["false", "False", "no", "0", 0, "true", "1", None])
+    def test_recurring_trading_approved_string_blocked(self, value: Any) -> None:
+        a = _valid_artifact()
+        a["recurring_trading_approved"] = value
+        result, violations, _ = validate_override(a)
+        assert result == "BLOCKED"
+        assert any("recurring_trading_approved" in v for v in violations)
+
+    @pytest.mark.parametrize("value", ["false", "False", "no", "0", 0, "true", "1", None])
+    def test_automated_trading_approved_string_blocked(self, value: Any) -> None:
+        a = _valid_artifact()
+        a["automated_trading_approved"] = value
+        result, violations, _ = validate_override(a)
+        assert result == "BLOCKED"
+        assert any("automated_trading_approved" in v for v in violations)
 
 
 # ---------------------------------------------------------------------------
