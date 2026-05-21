@@ -40,6 +40,10 @@ The next-phase enablement design is documented in
 The first v2 approval artifact CLI (`live_trading_approval`) is implemented in
 `src/tools/live_trading_approval.py`; it produces `live_trading_approval.json`
 with `live_trading_approved=true` and `live_order_submission_approved=false`.
+The second v2 approval artifact CLI (`live_order_submission_approval`) is implemented in
+`src/tools/live_order_submission_approval.py`; it reads `live_trading_approval.json`
+and produces `live_order_submission_approval.json` with `live_order_submission_approved=true`
+and `order_submission_approval_for_single_attempt=true`; the two artifacts are always separate.
 
 ---
 

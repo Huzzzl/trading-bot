@@ -220,6 +220,7 @@ The following read-only checks and guards are implemented and tested:
 | `live_submit_blocked_review` | Read-only review of `live_submit_blocked_report.json`; PASS only if `blocked=true`, `submit_order_called=false`, non-empty `block_guard` and `violations`; never writes files; never calls Alpaca |
 | `live_submit_executor_check` | CLI wrapper for guarded executor; invokes `maybe_execute_live_submit()`; exits 0 only when `blocked=true` and `submit_order_called=false` and report exists; never calls `submit_order`; never writes ledger |
 | `live_trading_approval` | Offline approval artifact CLI; produces `live_trading_approval.json`; `live_trading_approved=true`, `live_order_submission_approved=false`; `approval_scope=AUTHORIZE_SINGLE_LIVE_ORDER_ATTEMPT_ONLY`; requires `--risk-acknowledge`; never calls Alpaca; never submits orders |
+| `live_order_submission_approval` | Offline approval artifact CLI; reads `live_trading_approval.json`; produces `live_order_submission_approval.json`; `live_order_submission_approved=true`, `order_submission_approval_for_single_attempt=true`; validates trading approval fields and symbol/notional match; separate artifact from trading approval; never calls Alpaca; never submits orders |
 
 ---
 
