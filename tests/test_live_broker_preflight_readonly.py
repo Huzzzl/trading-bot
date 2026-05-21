@@ -4,18 +4,21 @@ Tests for src/tools/live_broker_preflight_readonly.py
 Coverage:
 - Prerequisite artifact gating (missing, malformed, non-PASS)
 - Parameter validation (symbol, side, notional_cap)
-- CLI mode (no real broker) → BLOCKED, no broker calls
+- CLI mode without --allow-live-broker-api-readonly → BLOCKED, no broker calls
+- CLI mode with flag but missing env vars → BLOCKED, no raw values in output
 - Mock PASS path → result=PASS
 - Account checks (inactive, insufficient buying power, pattern day trader)
 - Clock check (market closed)
 - Asset checks (not tradable, not fractionable)
 - Broker exception → BLOCKED
 - Endpoint allowlist enforcement (non-GET path blocked, non-allowlisted blocked)
+- AlpacaLiveReadOnlyBroker adapter: response mapping, mock TradingClient
 - Output JSON never contains injected secret values
 - Stdout never contains injected secret values
 - All output invariants always correct
-- Source scans: no submit_order/cancel_order/replace_order, no Alpaca imports,
-  no network imports, no ledger writes
+- Source scans: no submit_order/cancel_order/replace_order, no module-level
+  alpaca imports, no network imports, no ledger writes, no orders endpoint,
+  no POST/PATCH/DELETE method usage
 """
 
 from __future__ import annotations
@@ -31,9 +34,12 @@ from src.tools.live_broker_preflight_readonly import (
     _ENDPOINT_ALLOWLIST,
     _guarded_get,
     _is_allowed_path,
+    _LIVE_API_KEY_ENV,
+    _LIVE_SECRET_KEY_ENV,
     _REQUIRED_SYMBOL,
     _REQUIRED_SIDE,
     _MAX_NOTIONAL_CAP,
+    AlpacaLiveReadOnlyBroker,
     run_preflight,
     main,
 )
@@ -385,7 +391,19 @@ class TestCLIMode:
         )
         assert result["result"] == "BLOCKED"
         assert result["broker_calls_made"] is False
-        assert any("not yet implemented" in v for v in result["violations"])
+        assert any("allow-live-broker-api-readonly" in v for v in result["violations"])
+
+    def test_no_broker_allow_flag_true_blocked(self, tmp_path: Path) -> None:
+        cg = _write_cg(tmp_path)
+        oo = _write_oo(tmp_path)
+        result = run_preflight(
+            credential_guard_path=cg, operator_override_path=oo,
+            symbol="SPY", side="buy", notional_cap=100.0,
+            broker=None, allow_live_readonly=True,
+        )
+        assert result["result"] == "BLOCKED"
+        assert result["broker_calls_made"] is False
+        assert any("credentials not available" in v for v in result["violations"])
 
     def test_main_no_broker_exits_one(self, tmp_path: Path) -> None:
         cg = _write_cg(tmp_path)
@@ -793,14 +811,17 @@ class TestSecurityProperties:
             if not line.strip().startswith(("#", '"""', "'''", "*"))
         ]
 
-    def test_no_alpaca_import(self) -> None:
-        import_lines = [
-            line for line in self._source().splitlines()
-            if line.strip().startswith(("import ", "from "))
-        ]
-        for line in import_lines:
-            assert "alpaca" not in line.lower(), (
-                f"alpaca found in import: {line!r}"
+    def test_no_toplevel_alpaca_import(self) -> None:
+        # alpaca is allowed only as a lazy import inside AlpacaLiveReadOnlyBroker.__init__
+        # No module-level (unindented) alpaca import is permitted.
+        for line in self._source().splitlines():
+            stripped = line.strip()
+            if not stripped.startswith(("import ", "from ")):
+                continue
+            if line and line[0] in (" ", "\t"):
+                continue  # indented (inside a function/class) — allowed
+            assert "alpaca" not in stripped.lower(), (
+                f"module-level alpaca import found: {line!r}"
             )
 
     def test_no_network_library_imports(self) -> None:
@@ -844,3 +865,466 @@ class TestSecurityProperties:
         assert _REQUIRED_SYMBOL == "SPY"
         assert _REQUIRED_SIDE == "buy"
         assert _MAX_NOTIONAL_CAP == 100.0
+
+    def test_no_orders_endpoint_in_source(self) -> None:
+        for line in self._code_lines():
+            assert "/v2/orders" not in line, f"/v2/orders found in: {line!r}"
+
+    def test_no_post_patch_delete_in_source(self) -> None:
+        for line in self._code_lines():
+            for method in (".post(", ".patch(", ".delete(", ".put("):
+                assert method not in line.lower(), (
+                    f"mutation method {method!r} found in: {line!r}"
+                )
+
+    def test_no_positions_endpoint_in_source(self) -> None:
+        for line in self._code_lines():
+            assert "/v2/positions" not in line, (
+                f"/v2/positions found in: {line!r}"
+            )
+
+
+# ---------------------------------------------------------------------------
+# CLI without --allow-live-broker-api-readonly flag
+# ---------------------------------------------------------------------------
+
+class TestCLIWithoutAllowFlag:
+    """Without --allow-live-broker-api-readonly, CLI must be BLOCKED with
+    zero broker calls and no broker construction."""
+
+    def test_main_without_flag_exits_one(self, tmp_path: Path) -> None:
+        cg = _write_cg(tmp_path)
+        oo = _write_oo(tmp_path)
+        out = _output_path(tmp_path)
+        with pytest.raises(SystemExit) as exc_info:
+            main([
+                "--credential-guard", str(cg),
+                "--operator-override", str(oo),
+                "--symbol", "SPY",
+                "--side", "buy",
+                "--notional-cap", "100.0",
+                "--output", str(out),
+            ])
+        assert exc_info.value.code == 1
+
+    def test_main_without_flag_writes_blocked(self, tmp_path: Path) -> None:
+        cg = _write_cg(tmp_path)
+        oo = _write_oo(tmp_path)
+        out = _output_path(tmp_path)
+        with pytest.raises(SystemExit):
+            main([
+                "--credential-guard", str(cg),
+                "--operator-override", str(oo),
+                "--symbol", "SPY",
+                "--side", "buy",
+                "--notional-cap", "100.0",
+                "--output", str(out),
+            ])
+        data = json.loads(out.read_text())
+        assert data["result"] == "BLOCKED"
+        assert data["broker_calls_made"] is False
+
+    def test_main_without_flag_violation_mentions_flag(
+        self, tmp_path: Path
+    ) -> None:
+        cg = _write_cg(tmp_path)
+        oo = _write_oo(tmp_path)
+        out = _output_path(tmp_path)
+        with pytest.raises(SystemExit):
+            main([
+                "--credential-guard", str(cg),
+                "--operator-override", str(oo),
+                "--symbol", "SPY",
+                "--side", "buy",
+                "--notional-cap", "100.0",
+                "--output", str(out),
+            ])
+        data = json.loads(out.read_text())
+        assert any(
+            "allow-live-broker-api-readonly" in v
+            for v in data["violations"]
+        )
+
+    def test_run_preflight_without_flag_zero_broker_calls(
+        self, tmp_path: Path
+    ) -> None:
+        cg = _write_cg(tmp_path)
+        oo = _write_oo(tmp_path)
+        broker = _good_broker()
+        result = run_preflight(
+            credential_guard_path=cg, operator_override_path=oo,
+            symbol="SPY", side="buy", notional_cap=100.0,
+            broker=None, allow_live_readonly=False,
+        )
+        assert result["result"] == "BLOCKED"
+        assert result["broker_calls_made"] is False
+        assert broker.calls == []
+
+
+# ---------------------------------------------------------------------------
+# AlpacaLiveReadOnlyBroker — mock TradingClient tests
+# ---------------------------------------------------------------------------
+
+class _MockStatus:
+    """Minimal stand-in for AccountStatus enum."""
+    def __init__(self, value: str) -> None:
+        self.value = value
+
+
+class _MockAccount:
+    def __init__(
+        self,
+        status: str = "ACTIVE",
+        buying_power: str = "500.00",
+        pattern_day_trader: bool = False,
+    ) -> None:
+        self.status = _MockStatus(status)
+        self.buying_power = buying_power
+        self.pattern_day_trader = pattern_day_trader
+
+
+class _MockClock:
+    def __init__(self, is_open: bool = True) -> None:
+        self.is_open = is_open
+
+
+class _MockAsset:
+    def __init__(self, tradable: bool = True, fractionable: bool = True) -> None:
+        self.tradable = tradable
+        self.fractionable = fractionable
+
+
+class _MockTradingClient:
+    """Fake TradingClient that never makes real network calls."""
+
+    def __init__(
+        self,
+        api_key: str,
+        secret_key: str,
+        paper: bool,
+        raw_data: bool,
+        *,
+        account: _MockAccount | None = None,
+        clock: _MockClock | None = None,
+        asset: _MockAsset | None = None,
+    ) -> None:
+        assert paper is False, "live adapter must use paper=False"
+        self._account = account or _MockAccount()
+        self._clock = clock or _MockClock()
+        self._asset = asset or _MockAsset()
+        self.constructed_with_api_key = bool(api_key)
+        self.constructed_with_secret_key = bool(secret_key)
+
+    def get_account(self) -> _MockAccount:
+        return self._account
+
+    def get_clock(self) -> _MockClock:
+        return self._clock
+
+    def get_asset(self, symbol: str) -> _MockAsset:
+        return self._asset
+
+
+def _make_adapter(
+    *,
+    account: _MockAccount | None = None,
+    clock: _MockClock | None = None,
+    asset: _MockAsset | None = None,
+) -> AlpacaLiveReadOnlyBroker:
+    """Create an AlpacaLiveReadOnlyBroker with a mock TradingClient."""
+
+    class _PartialClient(_MockTradingClient):
+        def __init__(self, api_key: str, secret_key: str, paper: bool, raw_data: bool) -> None:
+            super().__init__(
+                api_key=api_key, secret_key=secret_key, paper=paper, raw_data=raw_data,
+                account=account, clock=clock, asset=asset,
+            )
+
+    return AlpacaLiveReadOnlyBroker(
+        api_key="test-key",
+        secret_key="test-secret",
+        _trading_client_cls=_PartialClient,
+    )
+
+
+class TestAlpacaAdapterMapping:
+    """AlpacaLiveReadOnlyBroker maps SDK model attributes to the dict format
+    expected by the preflight check functions.  No real API calls."""
+
+    def test_get_account_returns_active_status(self) -> None:
+        adapter = _make_adapter(account=_MockAccount(status="ACTIVE"))
+        result = adapter.read_only_get("/v2/account")
+        assert result["status"] == "ACTIVE"
+
+    def test_get_account_returns_inactive_status(self) -> None:
+        adapter = _make_adapter(account=_MockAccount(status="INACTIVE"))
+        result = adapter.read_only_get("/v2/account")
+        assert result["status"] == "INACTIVE"
+
+    def test_get_account_buying_power_is_string(self) -> None:
+        adapter = _make_adapter(account=_MockAccount(buying_power="250.50"))
+        result = adapter.read_only_get("/v2/account")
+        assert result["buying_power"] == "250.50"
+        assert float(result["buying_power"]) == 250.50
+
+    def test_get_account_pdt_false(self) -> None:
+        adapter = _make_adapter(account=_MockAccount(pattern_day_trader=False))
+        result = adapter.read_only_get("/v2/account")
+        assert result["pattern_day_trader"] is False
+
+    def test_get_account_pdt_true(self) -> None:
+        adapter = _make_adapter(account=_MockAccount(pattern_day_trader=True))
+        result = adapter.read_only_get("/v2/account")
+        assert result["pattern_day_trader"] is True
+
+    def test_get_clock_open(self) -> None:
+        adapter = _make_adapter(clock=_MockClock(is_open=True))
+        result = adapter.read_only_get("/v2/clock")
+        assert result["is_open"] is True
+
+    def test_get_clock_closed(self) -> None:
+        adapter = _make_adapter(clock=_MockClock(is_open=False))
+        result = adapter.read_only_get("/v2/clock")
+        assert result["is_open"] is False
+
+    def test_get_asset_tradable_fractionable(self) -> None:
+        adapter = _make_adapter(asset=_MockAsset(tradable=True, fractionable=True))
+        result = adapter.read_only_get("/v2/assets/SPY")
+        assert result["tradable"] is True
+        assert result["fractionable"] is True
+
+    def test_get_asset_not_tradable(self) -> None:
+        adapter = _make_adapter(asset=_MockAsset(tradable=False, fractionable=True))
+        result = adapter.read_only_get("/v2/assets/SPY")
+        assert result["tradable"] is False
+
+    def test_get_asset_not_fractionable(self) -> None:
+        adapter = _make_adapter(asset=_MockAsset(tradable=True, fractionable=False))
+        result = adapter.read_only_get("/v2/assets/SPY")
+        assert result["fractionable"] is False
+
+    def test_adapter_paper_false(self) -> None:
+        constructed_paper: list[bool] = []
+
+        class _CheckPaperClient:
+            def __init__(self, api_key: str, secret_key: str, paper: bool, raw_data: bool) -> None:
+                constructed_paper.append(paper)
+
+            def get_account(self) -> _MockAccount:
+                return _MockAccount()
+
+            def get_clock(self) -> _MockClock:
+                return _MockClock()
+
+            def get_asset(self, symbol: str) -> _MockAsset:
+                return _MockAsset()
+
+        AlpacaLiveReadOnlyBroker(
+            api_key="k", secret_key="s", _trading_client_cls=_CheckPaperClient
+        )
+        assert constructed_paper == [False]
+
+    def test_adapter_unsupported_path_raises(self) -> None:
+        adapter = _make_adapter()
+        with pytest.raises(ValueError, match="unsupported path"):
+            adapter.read_only_get("/v2/orders")
+
+    def test_adapter_pass_path_integration(self, tmp_path: Path) -> None:
+        cg = _write_cg(tmp_path)
+        oo = _write_oo(tmp_path)
+        adapter = _make_adapter()
+        result = run_preflight(
+            credential_guard_path=cg, operator_override_path=oo,
+            symbol="SPY", side="buy", notional_cap=100.0,
+            broker=adapter, allow_live_readonly=True,
+        )
+        assert result["result"] == "PASS"
+        assert result["broker_calls_made"] is True
+
+    def test_adapter_blocked_path_integration(self, tmp_path: Path) -> None:
+        cg = _write_cg(tmp_path)
+        oo = _write_oo(tmp_path)
+        adapter = _make_adapter(account=_MockAccount(status="INACTIVE"))
+        result = run_preflight(
+            credential_guard_path=cg, operator_override_path=oo,
+            symbol="SPY", side="buy", notional_cap=100.0,
+            broker=adapter, allow_live_readonly=True,
+        )
+        assert result["result"] == "BLOCKED"
+
+
+# ---------------------------------------------------------------------------
+# CLI with --allow-live-broker-api-readonly but missing env vars
+# ---------------------------------------------------------------------------
+
+class TestCLIWithFlagMissingEnvVars:
+    """With --allow-live-broker-api-readonly but missing credentials,
+    CLI must be BLOCKED with no raw credential values in output."""
+
+    _SECRET = "sk-live-super-secret-ALPACA-99999"
+
+    def test_missing_both_env_vars_blocked(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv(_LIVE_API_KEY_ENV, raising=False)
+        monkeypatch.delenv(_LIVE_SECRET_KEY_ENV, raising=False)
+        cg = _write_cg(tmp_path)
+        oo = _write_oo(tmp_path)
+        out = _output_path(tmp_path)
+        with pytest.raises(SystemExit) as exc_info:
+            main([
+                "--credential-guard", str(cg),
+                "--operator-override", str(oo),
+                "--symbol", "SPY",
+                "--side", "buy",
+                "--notional-cap", "100.0",
+                "--output", str(out),
+                "--allow-live-broker-api-readonly",
+            ])
+        assert exc_info.value.code == 1
+        data = json.loads(out.read_text())
+        assert data["result"] == "BLOCKED"
+        assert data["broker_calls_made"] is False
+
+    def test_missing_api_key_blocked(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv(_LIVE_API_KEY_ENV, raising=False)
+        monkeypatch.setenv(_LIVE_SECRET_KEY_ENV, "some-secret")
+        cg = _write_cg(tmp_path)
+        oo = _write_oo(tmp_path)
+        out = _output_path(tmp_path)
+        with pytest.raises(SystemExit) as exc_info:
+            main([
+                "--credential-guard", str(cg),
+                "--operator-override", str(oo),
+                "--symbol", "SPY",
+                "--side", "buy",
+                "--notional-cap", "100.0",
+                "--output", str(out),
+                "--allow-live-broker-api-readonly",
+            ])
+        assert exc_info.value.code == 1
+        data = json.loads(out.read_text())
+        assert data["result"] == "BLOCKED"
+
+    def test_secret_value_not_in_output_json(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(_LIVE_API_KEY_ENV, self._SECRET)
+        monkeypatch.setenv(_LIVE_SECRET_KEY_ENV, self._SECRET)
+        cg = _write_cg(tmp_path)
+        oo = _write_oo(tmp_path)
+        out = _output_path(tmp_path)
+
+        class _FailClient:
+            def __init__(self, api_key: str, secret_key: str, paper: bool, raw_data: bool) -> None:
+                raise RuntimeError(f"auth failed: key={api_key} secret={secret_key}")
+
+        import src.tools.live_broker_preflight_readonly as _mod
+        original = AlpacaLiveReadOnlyBroker.__init__
+
+        _raised = []
+
+        def _patched_init(self_inner: Any, *, api_key: str, secret_key: str, _trading_client_cls: Any = None) -> None:
+            original(self_inner, api_key=api_key, secret_key=secret_key, _trading_client_cls=_FailClient)
+
+        monkeypatch.setattr(AlpacaLiveReadOnlyBroker, "__init__", _patched_init)
+
+        with pytest.raises(SystemExit):
+            main([
+                "--credential-guard", str(cg),
+                "--operator-override", str(oo),
+                "--symbol", "SPY",
+                "--side", "buy",
+                "--notional-cap", "100.0",
+                "--output", str(out),
+                "--allow-live-broker-api-readonly",
+            ])
+        output_text = out.read_text()
+        assert self._SECRET not in output_text
+
+    def test_secret_not_in_stdout(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture
+    ) -> None:
+        monkeypatch.delenv(_LIVE_API_KEY_ENV, raising=False)
+        monkeypatch.delenv(_LIVE_SECRET_KEY_ENV, raising=False)
+        cg = _write_cg(tmp_path)
+        oo = _write_oo(tmp_path)
+        out = _output_path(tmp_path)
+        with pytest.raises(SystemExit):
+            main([
+                "--credential-guard", str(cg),
+                "--operator-override", str(oo),
+                "--symbol", "SPY",
+                "--side", "buy",
+                "--notional-cap", "100.0",
+                "--output", str(out),
+                "--allow-live-broker-api-readonly",
+            ])
+        captured = capsys.readouterr()
+        assert _LIVE_API_KEY_ENV in captured.out or "BLOCKED" in captured.out
+        # Actual secret values must not appear
+        assert self._SECRET not in captured.out
+        assert self._SECRET not in captured.err
+
+    def test_broker_calls_made_false_when_creds_missing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv(_LIVE_API_KEY_ENV, raising=False)
+        monkeypatch.delenv(_LIVE_SECRET_KEY_ENV, raising=False)
+        cg = _write_cg(tmp_path)
+        oo = _write_oo(tmp_path)
+        result = run_preflight(
+            credential_guard_path=cg, operator_override_path=oo,
+            symbol="SPY", side="buy", notional_cap=100.0,
+            broker=None, allow_live_readonly=True,
+        )
+        assert result["broker_calls_made"] is False
+        assert result["result"] == "BLOCKED"
+
+
+# ---------------------------------------------------------------------------
+# Adapter construction only when flag + prerequisites pass
+# ---------------------------------------------------------------------------
+
+class TestAdapterConstructionGating:
+    """Broker adapter is constructed only when:
+    1. --allow-live-broker-api-readonly flag is present
+    2. Credentials are available
+    It is NOT constructed without the flag."""
+
+    def test_no_adapter_without_flag(self, tmp_path: Path) -> None:
+        constructed: list[bool] = []
+
+        class _TrackingClient:
+            def __init__(self, **kw: Any) -> None:
+                constructed.append(True)
+
+        cg = _write_cg(tmp_path)
+        oo = _write_oo(tmp_path)
+        out = _output_path(tmp_path)
+        # Call main WITHOUT --allow-live-broker-api-readonly
+        with pytest.raises(SystemExit):
+            main([
+                "--credential-guard", str(cg),
+                "--operator-override", str(oo),
+                "--symbol", "SPY",
+                "--side", "buy",
+                "--notional-cap", "100.0",
+                "--output", str(out),
+            ])
+        # _TrackingClient should never have been used
+        assert constructed == []
+
+    def test_run_preflight_with_flag_and_broker_makes_calls(
+        self, tmp_path: Path
+    ) -> None:
+        cg = _write_cg(tmp_path)
+        oo = _write_oo(tmp_path)
+        broker = _good_broker()
+        result = run_preflight(
+            credential_guard_path=cg, operator_override_path=oo,
+            symbol="SPY", side="buy", notional_cap=100.0,
+            broker=broker, allow_live_readonly=True,
+        )
+        assert result["result"] == "PASS"
+        assert result["broker_calls_made"] is True
+        assert len(broker.calls) > 0

@@ -3,18 +3,17 @@ tools/live_broker_preflight_readonly.py
 -----------------------------------------
 Read-only live broker preflight framework.
 
-Validates prerequisite artifacts and — when a broker client is injected —
+Validates prerequisite artifacts and — when a broker client is provided —
 performs a set of read-only checks against the live broker API before any
 future single live order attempt.
 
-**This PR implements the mock-only core framework.**
-**The real Alpaca broker adapter is not implemented in this PR.**
-**This tool still does not contact Alpaca in CLI mode.**
-**PASS is only possible through an injected mock broker in unit tests,**
-**not through live CLI execution.**
+**Real Alpaca live API access requires ``--allow-live-broker-api-readonly``.**
+**Without this flag, the CLI returns BLOCKED and makes zero broker calls.**
 **No real trading is approved by this tool.**
+**submit_order is unreachable.**
+**config_safety remains the final blocker.**
 
-Usage::
+Usage (flag required for live API access)::
 
     python -m src.tools.live_broker_preflight_readonly \\
         --credential-guard output/live_credential_presence_guard.json \\
@@ -22,11 +21,17 @@ Usage::
         --symbol SPY \\
         --side buy \\
         --notional-cap 100.0 \\
-        --output output/live_broker_preflight_readonly.json
+        --output output/live_broker_preflight_readonly.json \\
+        --allow-live-broker-api-readonly
 
-In CLI mode the tool always returns BLOCKED with the message
-``"real broker adapter not yet implemented"`` because no real Alpaca adapter
-exists in this PR.  The real adapter must be added in a separate future PR.
+Without ``--allow-live-broker-api-readonly`` the tool always returns BLOCKED
+with ``"live broker API access not enabled"`` and makes zero broker calls.
+
+With the flag, and after all prerequisite and parameter checks pass, the
+``AlpacaLiveReadOnlyBroker`` adapter is constructed using credentials from
+``ALPACA_LIVE_API_KEY`` and ``ALPACA_LIVE_SECRET_KEY`` environment variables.
+If either variable is absent or empty, the tool returns BLOCKED without
+contacting Alpaca.
 
 Broker client interface
 -----------------------
@@ -35,15 +40,14 @@ Any broker client injected into ``run_preflight()`` must implement::
     def read_only_get(self, path: str) -> dict[str, Any]: ...
 
 The tool enforces an explicit endpoint allowlist before calling
-``read_only_get``.  Only the following path prefixes are permitted:
+``read_only_get``.  Only the following paths are permitted:
 
-    /v2/account
-    /v2/clock
-    /v2/assets/
+    /v2/account  (exact)
+    /v2/clock    (exact)
+    /v2/assets/  (prefix — any asset symbol)
 
 Any path outside this list raises ``ValueError`` and produces BLOCKED.
-Only GET-equivalent calls are made through ``read_only_get``; no mutation
-methods exist on the interface.
+Only GET-equivalent calls are made; no mutation methods exist.
 
 Allowed checks (in order)
 --------------------------
@@ -65,7 +69,8 @@ Fail-closed conditions
 * ``symbol`` is not ``"SPY"``
 * ``side`` is not ``"buy"``
 * ``notional_cap`` is missing, ≤ 0, or > 100.0
-* No broker client injected (CLI mode)
+* ``--allow-live-broker-api-readonly`` not passed
+* Credentials not set or empty
 * ``account.status != "ACTIVE"``
 * ``buying_power < notional_cap``
 * ``pattern_day_trader == true``
@@ -93,6 +98,7 @@ What it never does
 * Never calls submit_order, cancel_order, or replace_order.
 * Never calls any POST/PATCH/DELETE broker endpoint.
 * Never calls any order-preview endpoint.
+* Never calls the orders endpoint.
 * Never writes or modifies live ledger files.
 * Never enables live trading.
 * Never removes the config_safety blocker.
@@ -103,6 +109,7 @@ What it never does
 from __future__ import annotations
 
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -111,6 +118,9 @@ from typing import Any, Protocol, runtime_checkable
 _REQUIRED_SYMBOL = "SPY"
 _REQUIRED_SIDE = "buy"
 _MAX_NOTIONAL_CAP = 100.0
+
+_LIVE_API_KEY_ENV = "ALPACA_LIVE_API_KEY"
+_LIVE_SECRET_KEY_ENV = "ALPACA_LIVE_SECRET_KEY"
 
 _ALLOWED_ENDPOINT_PREFIXES: frozenset[str] = frozenset({
     "/v2/account",
@@ -147,6 +157,120 @@ class BrokerClient(Protocol):
     def read_only_get(self, path: str) -> dict[str, Any]:
         """Perform a read-only GET-equivalent request and return parsed JSON."""
         ...
+
+
+# ---------------------------------------------------------------------------
+# Real Alpaca read-only adapter
+# ---------------------------------------------------------------------------
+
+class AlpacaLiveReadOnlyBroker:
+    """Read-only live broker adapter using alpaca-py TradingClient.
+
+    Only constructed when ``--allow-live-broker-api-readonly`` is explicitly
+    passed on the CLI and all prerequisite/parameter checks pass.
+
+    Credential values are consumed during construction and never stored
+    as attributes on this object. They are never printed, logged, or
+    included in any output artifact.
+
+    Only read-only SDK methods are called: ``get_account``, ``get_clock``,
+    ``get_asset``. No write or mutation methods are invoked.
+    """
+
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        secret_key: str,
+        _trading_client_cls: Any = None,
+    ) -> None:
+        if _trading_client_cls is None:
+            from alpaca.trading.client import TradingClient as _trading_client_cls
+        self._client = _trading_client_cls(
+            api_key=api_key,
+            secret_key=secret_key,
+            paper=False,
+            raw_data=False,
+        )
+
+    def read_only_get(self, path: str) -> dict[str, Any]:
+        """Map an allowlisted path to the corresponding read-only SDK call."""
+        if path == "/v2/account":
+            return self._get_account()
+        if path == "/v2/clock":
+            return self._get_clock()
+        if path.startswith("/v2/assets/"):
+            symbol = path[len("/v2/assets/"):]
+            return self._get_asset(symbol)
+        raise ValueError(
+            f"unsupported path for AlpacaLiveReadOnlyBroker: {path!r}"
+        )
+
+    def _get_account(self) -> dict[str, Any]:
+        account = self._client.get_account()
+        raw_status = account.status
+        status_str = (
+            raw_status.value
+            if hasattr(raw_status, "value")
+            else str(raw_status)
+        )
+        return {
+            "status": status_str,
+            "buying_power": str(account.buying_power) if account.buying_power is not None else "0",
+            "pattern_day_trader": bool(account.pattern_day_trader),
+        }
+
+    def _get_clock(self) -> dict[str, Any]:
+        clock = self._client.get_clock()
+        return {"is_open": bool(clock.is_open)}
+
+    def _get_asset(self, symbol: str) -> dict[str, Any]:
+        asset = self._client.get_asset(symbol)
+        return {
+            "tradable": bool(asset.tradable),
+            "fractionable": bool(asset.fractionable),
+        }
+
+
+# ---------------------------------------------------------------------------
+# Credential / broker construction helper
+# ---------------------------------------------------------------------------
+
+def _build_alpaca_live_broker(
+    *,
+    _trading_client_cls: Any = None,
+) -> tuple[AlpacaLiveReadOnlyBroker | None, str | None]:
+    """Read credentials from env and construct the live read-only broker.
+
+    Returns ``(broker, None)`` on success or ``(None, error_message)`` on
+    failure.  The error message never includes actual credential values.
+    """
+    api_key = os.environ.get(_LIVE_API_KEY_ENV, "").strip()
+    secret_key = os.environ.get(_LIVE_SECRET_KEY_ENV, "").strip()
+
+    missing: list[str] = []
+    if not api_key:
+        missing.append(_LIVE_API_KEY_ENV)
+    if not secret_key:
+        missing.append(_LIVE_SECRET_KEY_ENV)
+
+    if missing:
+        return None, (
+            f"required environment variable(s) not set or empty: "
+            f"{', '.join(missing)} — no broker calls were made"
+        )
+
+    try:
+        broker = AlpacaLiveReadOnlyBroker(
+            api_key=api_key,
+            secret_key=secret_key,
+            _trading_client_cls=_trading_client_cls,
+        )
+        return broker, None
+    except Exception:
+        return None, (
+            "failed to construct live broker adapter — details redacted"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -219,8 +343,8 @@ def _check_account(
     """Run account checks.  Returns True if all pass."""
     try:
         account = _guarded_get(broker, "/v2/account")
-    except Exception as exc:
-        violation = f"account check: broker error — details redacted"
+    except Exception:
+        violation = "account check: broker error — details redacted"
         violations.append(violation)
         checks.append(_make_check("account", "BLOCKED", violation))
         return False
@@ -275,8 +399,8 @@ def _check_clock(
     """Run market clock check.  Returns True if market is open."""
     try:
         clock = _guarded_get(broker, "/v2/clock")
-    except Exception as exc:
-        violation = f"clock check: broker error — details redacted"
+    except Exception:
+        violation = "clock check: broker error — details redacted"
         violations.append(violation)
         checks.append(_make_check("market_clock", "BLOCKED", violation))
         return False
@@ -302,8 +426,8 @@ def _check_asset(
     path = f"/v2/assets/{symbol}"
     try:
         asset = _guarded_get(broker, path)
-    except Exception as exc:
-        violation = f"asset check: broker error — details redacted"
+    except Exception:
+        violation = "asset check: broker error — details redacted"
         violations.append(violation)
         checks.append(_make_check("asset_metadata", "BLOCKED", violation))
         return False
@@ -343,12 +467,17 @@ def run_preflight(
     side: str,
     notional_cap: float,
     broker: BrokerClient | None = None,
+    allow_live_readonly: bool = False,
 ) -> dict[str, Any]:
     """Run the full read-only broker preflight.
 
     Never raises.  All errors are captured as violations → BLOCKED.
-    When ``broker`` is None, the tool returns BLOCKED immediately with
-    ``"real broker adapter not yet implemented"``.
+
+    When ``broker`` is None and ``allow_live_readonly`` is False the tool
+    returns BLOCKED with ``"live broker API access not enabled"``.
+
+    When ``broker`` is None and ``allow_live_readonly`` is True the tool
+    returns BLOCKED with ``"live broker credentials not available"``.
 
     Never reads, stores, or exposes credential values.
     """
@@ -406,11 +535,19 @@ def run_preflight(
     # Step 3 — broker client availability
     # ------------------------------------------------------------------
     if broker is None:
-        violations.append(
-            "real broker adapter not yet implemented — "
-            "this tool requires a broker client injected via the internal API; "
-            "the real Alpaca adapter is not implemented in this PR"
-        )
+        if not allow_live_readonly:
+            violations.append(
+                "live broker API access not enabled — "
+                "pass --allow-live-broker-api-readonly to use the live "
+                "read-only adapter; no broker calls will be made without "
+                "this explicit opt-in flag"
+            )
+        else:
+            violations.append(
+                "live broker credentials not available — "
+                f"{_LIVE_API_KEY_ENV} and {_LIVE_SECRET_KEY_ENV} must be "
+                "set and non-empty; no broker calls were made"
+            )
 
     # ------------------------------------------------------------------
     # Fail early if any prerequisite or parameter violation
@@ -424,7 +561,7 @@ def run_preflight(
         )
 
     # ------------------------------------------------------------------
-    # Step 4 — broker checks (mock or real)
+    # Step 4 — broker checks (real or mock)
     # ------------------------------------------------------------------
     broker_calls_made = True
 
@@ -449,20 +586,20 @@ def _build_result(
 ) -> dict[str, Any]:
     result = "PASS" if not violations else "BLOCKED"
     return {
-        "checked_at_utc":            checked_at,
-        "result":                    result,
-        "broker_calls_made":         broker_calls_made,
-        "broker_calls_readonly":     True,
+        "checked_at_utc":             checked_at,
+        "result":                     result,
+        "broker_calls_made":          broker_calls_made,
+        "broker_calls_readonly":      True,
         "broker_mutation_calls_made": False,
-        "credential_values_exposed": False,
-        "live_submit_enabled":       False,
-        "real_submit_implemented":   False,
-        "submit_order_reachable":    False,
+        "credential_values_exposed":  False,
+        "live_submit_enabled":        False,
+        "real_submit_implemented":    False,
+        "submit_order_reachable":     False,
         "config_safety_still_blocks": True,
-        "endpoint_allowlist_used":   _ENDPOINT_ALLOWLIST,
-        "checks":                    checks,
-        "violations":                violations,
-        "blocker":                   violations[0] if violations else None,
+        "endpoint_allowlist_used":    _ENDPOINT_ALLOWLIST,
+        "checks":                     checks,
+        "violations":                 violations,
+        "blocker":                    violations[0] if violations else None,
     }
 
 
@@ -510,8 +647,8 @@ def main(argv: list[str] | None = None) -> None:
         prog="python -m src.tools.live_broker_preflight_readonly",
         description=(
             "Read-only live broker preflight. "
-            "In CLI mode always returns BLOCKED — "
-            "the real Alpaca broker adapter is not yet implemented. "
+            "Requires --allow-live-broker-api-readonly to contact Alpaca. "
+            "Without that flag, always returns BLOCKED with zero broker calls. "
             "Never calls submit_order. Never enables live trading. "
             "Never removes config_safety."
         ),
@@ -540,16 +677,34 @@ def main(argv: list[str] | None = None) -> None:
         "--output", required=True, dest="output",
         help="Path to write live_broker_preflight_readonly.json",
     )
+    parser.add_argument(
+        "--allow-live-broker-api-readonly",
+        action="store_true",
+        dest="allow_live_broker_api_readonly",
+        default=False,
+        help=(
+            "Explicitly opt in to contacting the Alpaca live API. "
+            "Without this flag the tool returns BLOCKED with zero broker calls. "
+            "Requires ALPACA_LIVE_API_KEY and ALPACA_LIVE_SECRET_KEY env vars."
+        ),
+    )
     args = parser.parse_args(argv)
 
-    # broker=None → BLOCKED with "real broker adapter not yet implemented"
+    broker: BrokerClient | None = None
+    if args.allow_live_broker_api_readonly:
+        broker, broker_err = _build_alpaca_live_broker()
+        if broker_err:
+            # broker remains None; run_preflight emits "credentials not available"
+            pass
+
     result = run_preflight(
         credential_guard_path=Path(args.credential_guard),
         operator_override_path=Path(args.operator_override),
         symbol=args.symbol,
         side=args.side,
         notional_cap=args.notional_cap,
-        broker=None,
+        broker=broker,
+        allow_live_readonly=args.allow_live_broker_api_readonly,
     )
 
     output_path = Path(args.output)

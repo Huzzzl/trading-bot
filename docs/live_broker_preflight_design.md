@@ -244,28 +244,27 @@ and does not authorize a live order.
 | Item | State |
 |------|-------|
 | Design document | This file |
-| `src/tools/live_broker_preflight_readonly.py` | **Mock-only core framework implemented** |
-| `tests/test_live_broker_preflight_readonly.py` | Implemented — 69 tests, mock broker only |
-| Real Alpaca broker adapter | **Not implemented** |
-| Real Alpaca live endpoint calls | **None** |
-| CLI mode result | Always BLOCKED — "real broker adapter not yet implemented" |
-| PASS possible via | Injected mock broker in unit tests only |
-| `output/live_broker_preflight_readonly.json` | Generated only in tests |
+| `src/tools/live_broker_preflight_readonly.py` | **Real read-only Alpaca adapter implemented — manually gated** |
+| `tests/test_live_broker_preflight_readonly.py` | Implemented — 107 tests, mock broker only |
+| Real Alpaca broker adapter | **Implemented — `AlpacaLiveReadOnlyBroker`** |
+| Real Alpaca live endpoint calls | Gated behind `--allow-live-broker-api-readonly` |
+| CLI mode result (no flag) | Always BLOCKED — "live broker API access not enabled" |
+| CLI mode result (with flag + credentials) | Runs real read-only checks; PASS or BLOCKED |
+| `output/live_broker_preflight_readonly.json` | Written on every CLI run |
 | `submit_order` | Unreachable — no call path exists |
 | `config_safety` | Still the hard blocker |
 
-### What the mock-only implementation provides
+### What the adapter provides
 
-- Prerequisite artifact gating: credential guard and operator override artifacts
-  must exist and have `result="PASS"` before any broker call is attempted
-- Parameter validation: symbol, side, notional_cap
-- Endpoint allowlist enforcement:
-  - Exact-match: `/v2/account`, `/v2/clock`
-  - Prefix-match: `/v2/assets/`
-  - Any other path raises `ValueError` before the broker is contacted
-- Mock checks: account status, buying power, pattern day trader, clock, asset tradable/fractionable
-- All output invariants hardcoded: `broker_mutation_calls_made=false`, `credential_values_exposed=false`, `live_submit_enabled=false`, `real_submit_implemented=false`, `submit_order_reachable=false`, `config_safety_still_blocks=true`
-- No real Alpaca adapter — the real implementation must be added in a separate future PR
+- `AlpacaLiveReadOnlyBroker` wraps `alpaca-py` `TradingClient(paper=False)`
+- Only three read-only SDK methods used: `get_account()`, `get_clock()`, `get_asset(symbol)`
+- No write or mutation methods are called; `submit_order`, `cancel_order`, `replace_order` are never referenced
+- Credential values consumed during construction; never stored as attributes, logged, or included in any output
+- Lazy import: `from alpaca.trading.client import TradingClient` is inside `__init__` only — no module-level alpaca import
+- `--allow-live-broker-api-readonly` flag is required for any live API contact; without it, zero broker calls are made
+- `ALPACA_LIVE_API_KEY` and `ALPACA_LIVE_SECRET_KEY` must be set and non-empty; otherwise BLOCKED before any request
+- All seven output invariants still hardcoded: `broker_mutation_calls_made=false`, `credential_values_exposed=false`, `live_submit_enabled=false`, `real_submit_implemented=false`, `submit_order_reachable=false`, `config_safety_still_blocks=true`, `broker_calls_readonly=true`
+- Exception details from broker calls remain redacted — raw exception text never appears in output
 
 ---
 
