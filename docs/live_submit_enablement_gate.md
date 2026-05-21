@@ -446,16 +446,21 @@ acknowledgements are present.
 
 The tool blocks (`result="BLOCKED"`) when:
 - the override artifact file is missing or cannot be parsed
-- `config_safety_acknowledged` is not `true`
-- `submit_order_unreachable_acknowledged` is not `true`
-- `real_live_submit_unimplemented_acknowledged` is not `true`
+- `config_safety_acknowledged` is not JSON boolean `true` exactly
+- `submit_order_unreachable_acknowledged` is not JSON boolean `true` exactly
+- `real_live_submit_unimplemented_acknowledged` is not JSON boolean `true` exactly
 - `approval_scope` is not `"AUTHORIZE_SINGLE_LIVE_ORDER_ATTEMPT_ONLY"`
 - `symbol` is not `"SPY"`
 - `side` is not `"buy"`
 - `notional_cap` is not in the range (0, 100.0]
-- `recurring_trading_approved` is `true`
-- `automated_trading_approved` is `true`
+- `recurring_trading_approved` is not JSON boolean `false` exactly (field must be present)
+- `automated_trading_approved` is not JSON boolean `false` exactly (field must be present)
 - `operator_name` or `approval_note` is empty
+
+String representations are not accepted for safety-critical boolean fields.
+Values such as `"true"`, `"false"`, `"yes"`, `"1"`, `"0"`, numeric `0`, numeric `1`,
+and `null`/absent fields do not satisfy these fields — only the JSON literals
+`true` and `false` are accepted.
 
 The override artifact must be produced manually by the operator.  It must
 not be generated autonomously or by any executor.  Example minimal artifact:
