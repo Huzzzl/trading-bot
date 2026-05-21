@@ -311,6 +311,25 @@ class TestOutcomeRequirements:
         )
         assert any("outcome" in v for v in result["violations"])
 
+    def test_main_invalid_outcome_exits_1(self, tmp_path):
+        """main() with an invalid --outcome must exit 1, not crash via argparse."""
+        code, _, _ = _run_main(tmp_path, outcome="cancelled", broker_order_id="")
+        assert code == 1
+
+    def test_main_invalid_outcome_writes_output_json(self, tmp_path):
+        _, out, _ = _run_main(tmp_path, outcome="cancelled", broker_order_id="")
+        assert out.exists()
+
+    def test_main_invalid_outcome_result_is_blocked(self, tmp_path):
+        _, out, _ = _run_main(tmp_path, outcome="cancelled", broker_order_id="")
+        data = json.loads(out.read_text())
+        assert data["result"] == "BLOCKED"
+
+    def test_main_invalid_outcome_violations_mention_outcome(self, tmp_path):
+        _, out, _ = _run_main(tmp_path, outcome="cancelled", broker_order_id="")
+        data = json.loads(out.read_text())
+        assert any("outcome" in v for v in data["violations"])
+
 
 # ---------------------------------------------------------------------------
 # Ledger-level failures

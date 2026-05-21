@@ -290,8 +290,11 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument(
         "--outcome", required=True,
-        choices=sorted(_VALID_OUTCOMES),
-        help="Hypothetical submit outcome",
+        help=(
+            "Hypothetical submit outcome. "
+            f"Valid values: {', '.join(sorted(_VALID_OUTCOMES))}. "
+            "Invalid values are rejected by run_update() and produce result='BLOCKED'."
+        ),
     )
     parser.add_argument(
         "--broker-order-id", default="", dest="broker_order_id",
