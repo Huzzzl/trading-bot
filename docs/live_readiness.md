@@ -1216,6 +1216,33 @@ FAIL when ``block_guard`` is ``approval_artifact``, ``v2_trading_approval``,
 
 Never calls Alpaca.  Never reads credentials.  Never writes files.
 
+### Step 5c — Produce the v2 final readiness review artifact
+
+After Steps 5a and 5b pass, run the combined final readiness review to produce
+a single summary artifact confirming the entire v2 approval layer is complete:
+
+```bash
+python -m src.tools.live_v2_final_readiness_review \
+    --v2-approvals-review \
+    --live-trading-approval output/live_trading_approval.json \
+    --live-order-submission-approval output/live_order_submission_approval.json \
+    --executor-readiness-report output/live_submit_executor/live_submit_blocked_report.json \
+    --output output/live_v2_final_readiness_review.json
+```
+
+PASS only when both sub-reviews pass: the v2 approval artifacts are valid
+(``live_v2_approvals_review`` rules) and the executor report shows
+``block_guard=config_safety`` (``live_v2_executor_readiness_review`` rules).
+``--v2-approvals-review`` must be given; omitting it produces FAIL.
+
+Output JSON includes: ``review_result``, ``approvals_review_result``,
+``executor_readiness_review_result``, ``symbol``, ``approved_max_notional``,
+``block_guard``, ``submit_order_called``, ``live_submit_enabled=false``,
+``real_submit_implemented=false``, ``final_blocker``, ``violations``.
+
+Never calls Alpaca.  Never reads credentials.  Never calls ``submit_order``.
+Never writes the live ledger.
+
 ### Step 6 — Review the blocked report artifact
 
 ```bash

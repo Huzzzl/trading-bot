@@ -126,6 +126,26 @@ Output: `output/live_submit_executor/live_submit_blocked_report.json`
 Expected result: `blocked=true`, `submit_order_called=false`,
 `block_guard=approval_artifact`. Exit code 0.
 
+### Step 6c — V2 final readiness review (combined summary artifact)
+
+After Steps 6 and 6b pass, produce the combined summary:
+
+```bash
+python -m src.tools.live_v2_final_readiness_review \
+    --v2-approvals-review \
+    --live-trading-approval output/live_trading_approval.json \
+    --live-order-submission-approval output/live_order_submission_approval.json \
+    --executor-readiness-report output/live_submit_executor/live_submit_blocked_report.json \
+    --output output/live_v2_final_readiness_review.json
+```
+
+Output: `output/live_v2_final_readiness_review.json`
+
+Expected result: `review_result=PASS`, `final_blocker=config_safety`,
+`live_submit_enabled=false`, `real_submit_implemented=false`. Exit code 0.
+
+FAIL if either sub-review fails or `--v2-approvals-review` flag is not given.
+
 ### Step 6b — V2 executor readiness review (after v2 approvals)
 
 When v2 approval artifacts are supplied to `live_submit_executor_check` via
@@ -242,6 +262,7 @@ The following read-only checks and guards are implemented and tested:
 | `live_v2_approvals_review` | Offline review of both v2 approval artifacts; PASS only if both artifacts are consistent, separate, correctly scoped, symbols match, and submission notional ≤ trading notional; never writes files; never calls Alpaca |
 | `live_submit_executor` v2 guards | `maybe_execute_live_submit()` accepts optional `live_trading_approval_path` and `live_order_submission_approval_path`; validates both v2 artifacts (symbol, notional cap, scope, risk_acknowledged) after existing approval_artifact guard; omitting v2 paths preserves original behavior; all exit paths still `blocked=true`; `submit_order` never called |
 | `live_v2_executor_readiness_review` | Offline review of executor blocked report after v2 approvals are provided; PASS only if `blocked=true`, `submit_order_called=false`, `block_guard=config_safety`, and violations include at least one default config-safety flag; FAIL if any v2 approval guard blocked; never writes files; never calls Alpaca |
+| `live_v2_final_readiness_review` | Offline combined summary CLI; runs v2 approvals review and executor readiness review together; PASS only when both sub-reviews pass; writes `live_v2_final_readiness_review.json` with `review_result`, `final_blocker`, `live_submit_enabled=false`, `real_submit_implemented=false`; never calls Alpaca; never submits orders |
 
 ---
 
