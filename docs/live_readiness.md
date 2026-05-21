@@ -47,6 +47,10 @@ and `order_submission_approval_for_single_attempt=true`; the two artifacts are a
 The combined review CLI (`live_v2_approvals_review`) is implemented in
 `src/tools/live_v2_approvals_review.py`; it verifies both artifacts are consistent,
 separate, and scoped to a single live order attempt; PASS on exit 0, FAIL on exit 1.
+The executor (`src/execution/live_submit_executor.py`) now accepts optional
+`live_trading_approval_path` and `live_order_submission_approval_path` parameters;
+when provided it validates both v2 artifacts before continuing; `submit_order` remains
+unreachable and all exit paths remain `blocked=true`.
 
 ---
 

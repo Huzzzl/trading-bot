@@ -21,20 +21,22 @@ Guards (all must pass in order)
  2. Approval artifact exists and is valid
  3. approval_for_real_submit_pr == true
  4. approval_scope == "OPEN_REAL_SUBMIT_IMPLEMENTATION_PR_ONLY"
- 5. live_trading_approved == false  → BLOCK  (always true with current tooling)
- 6. live_order_submission_approved == false  → BLOCK  (always true with current tooling)
- 7. live_trading_enabled == true    (default false → blocks)
- 8. live_submit_dry_run == false    (default true  → blocks)
- 9. live_kill_switch_enabled == false (default true → blocks; kill switch engaged)
+ 5. live_trading_approved == false -- BLOCK (always true with current tooling)
+ 6. live_order_submission_approved == false -- BLOCK (always true with current tooling)
+ 2b. (optional) v2 trading approval artifact valid
+ 2c. (optional) v2 order submission approval artifact valid
+ 7. live_trading_enabled == true    (default false -- blocks)
+ 8. live_submit_dry_run == false    (default true  -- blocks)
+ 9. live_kill_switch_enabled == false (default true -- blocks; kill switch engaged)
 10. live_require_human_confirm == true
 11. Pre-submit checklist READY
 12. Submit plan review PASS
 13. Daily order count < live_max_orders_per_day
-14. Daily notional + intended ≤ live_max_notional_per_day
+14. Daily notional + intended <= live_max_notional_per_day
 15. No open position in target symbol
 16. No open order for target symbol
 17. client_order_id not already in live ledger
-18. effective_notional ≤ live_max_order_notional
+18. effective_notional <= live_max_order_notional
 
 Blocked path
 ------------
@@ -44,7 +46,7 @@ identified.  ``submit_order`` is never called.
 
 What this module never does
 ---------------------------
-* Never calls ``submit_order`` unless all 18 guards pass (unreachable today).
+* Never calls ``submit_order`` unless all guards pass (unreachable today).
 * Never writes the live ledger on the blocked path.
 * Never reads paper credentials.
 * Never cancels orders.
@@ -64,6 +66,7 @@ from typing import Any
 
 REAL_SUBMIT_CONFIRM_TOKEN = "REAL-LIVE-SUBMIT-AUTHORIZED"
 _EXPECTED_APPROVAL_SCOPE = "OPEN_REAL_SUBMIT_IMPLEMENTATION_PR_ONLY"
+_V2_APPROVAL_SCOPE = "AUTHORIZE_SINGLE_LIVE_ORDER_ATTEMPT_ONLY"
 
 
 # ---------------------------------------------------------------------------
@@ -71,12 +74,6 @@ _EXPECTED_APPROVAL_SCOPE = "OPEN_REAL_SUBMIT_IMPLEMENTATION_PR_ONLY"
 # ---------------------------------------------------------------------------
 
 def _read_json(path: Path) -> dict[str, Any]:
-    """Read and parse a JSON artifact.
-
-    Raises
-    ------
-    FileNotFoundError / ValueError
-    """
     if not path.exists():
         raise FileNotFoundError(f"artifact not found: {path}")
     try:
@@ -92,58 +89,149 @@ def _is_truthy(value: Any) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Guard functions (pure — no I/O, easily testable)
+# Guard functions (pure -- no I/O, easily testable)
 # ---------------------------------------------------------------------------
 
 def _check_confirm_token(token: str) -> list[str]:
     if token != REAL_SUBMIT_CONFIRM_TOKEN:
         return [
-            f"confirmation token mismatch — "
+            f"confirmation token mismatch -- "
             f"expected {REAL_SUBMIT_CONFIRM_TOKEN!r}, got {token!r}"
         ]
     return []
 
 
 def _check_approval_artifact(artifact: dict[str, Any]) -> list[str]:
-    """Validate the approval artifact fields.
-
-    Guards 3–6: approval_for_real_submit_pr, approval_scope,
-    live_trading_approved (must be false → block),
-    live_order_submission_approved (must be false → block).
-    """
     violations: list[str] = []
 
     if not _is_truthy(artifact.get("approval_for_real_submit_pr", False)):
         violations.append(
             f"approval_for_real_submit_pr="
-            f"{artifact.get('approval_for_real_submit_pr')!r} — must be true"
+            f"{artifact.get('approval_for_real_submit_pr')!r} -- must be true"
         )
 
     scope = str(artifact.get("approval_scope", "")).strip()
     if scope != _EXPECTED_APPROVAL_SCOPE:
         violations.append(
-            f"approval_scope={artifact.get('approval_scope')!r} — "
+            f"approval_scope={artifact.get('approval_scope')!r} -- "
             f"must be {_EXPECTED_APPROVAL_SCOPE!r}"
         )
 
     # live_trading_approved must be true to proceed.
-    # Current tooling always writes this as false → always blocks here.
+    # Current tooling always writes this as false -- always blocks here.
     if not _is_truthy(artifact.get("live_trading_approved", False)):
         violations.append(
             f"live_trading_approved="
-            f"{artifact.get('live_trading_approved')!r} — "
+            f"{artifact.get('live_trading_approved')!r} -- "
             "live trading is not approved; submit blocked. "
             "Current approval tooling always sets this to false."
         )
 
     # live_order_submission_approved must be true to proceed.
-    # Current tooling always writes this as false → always blocks here.
+    # Current tooling always writes this as false -- always blocks here.
     if not _is_truthy(artifact.get("live_order_submission_approved", False)):
         violations.append(
             f"live_order_submission_approved="
-            f"{artifact.get('live_order_submission_approved')!r} — "
+            f"{artifact.get('live_order_submission_approved')!r} -- "
             "live order submission is not approved; submit blocked. "
             "Current approval tooling always sets this to false."
+        )
+
+    return violations
+
+
+def _check_v2_trading_approval(
+    ta: dict[str, Any],
+    symbol: str,
+    intended_notional: float,
+) -> list[str]:
+    """Validate live_trading_approval.json (v2 guard)."""
+    violations: list[str] = []
+
+    if ta.get("live_trading_approved") is not True:
+        violations.append(
+            f"v2 live_trading_approved={ta.get('live_trading_approved')!r} -- must be true"
+        )
+    if ta.get("live_order_submission_approved") is not False:
+        violations.append(
+            f"v2 live_order_submission_approved={ta.get('live_order_submission_approved')!r}"
+            " -- must be false in trading approval"
+        )
+    if ta.get("approval_scope") != _V2_APPROVAL_SCOPE:
+        violations.append(
+            f"v2 trading approval_scope={ta.get('approval_scope')!r}"
+            f" -- must be {_V2_APPROVAL_SCOPE!r}"
+        )
+    if ta.get("risk_acknowledged") is not True:
+        violations.append(
+            f"v2 risk_acknowledged={ta.get('risk_acknowledged')!r} -- must be true"
+        )
+
+    approved_symbol = str(ta.get("approved_symbol", "")).strip().upper()
+    requested_symbol = symbol.strip().upper()
+    if approved_symbol != requested_symbol:
+        violations.append(
+            f"v2 trading approved_symbol={approved_symbol!r} does not match"
+            f" symbol={requested_symbol!r}"
+        )
+
+    try:
+        cap = float(ta.get("approved_max_notional", 0))
+    except (TypeError, ValueError):
+        cap = 0.0
+    if intended_notional > cap:
+        violations.append(
+            f"intended_notional={intended_notional} exceeds"
+            f" v2 trading approved_max_notional={cap}"
+        )
+
+    return violations
+
+
+def _check_v2_submission_approval(
+    sa: dict[str, Any],
+    symbol: str,
+    intended_notional: float,
+) -> list[str]:
+    """Validate live_order_submission_approval.json (v2 guard)."""
+    violations: list[str] = []
+
+    if sa.get("live_order_submission_approved") is not True:
+        violations.append(
+            f"v2 live_order_submission_approved={sa.get('live_order_submission_approved')!r}"
+            " -- must be true"
+        )
+    if sa.get("order_submission_approval_for_single_attempt") is not True:
+        violations.append(
+            f"v2 order_submission_approval_for_single_attempt="
+            f"{sa.get('order_submission_approval_for_single_attempt')!r} -- must be true"
+        )
+    if sa.get("approval_scope") != _V2_APPROVAL_SCOPE:
+        violations.append(
+            f"v2 submission approval_scope={sa.get('approval_scope')!r}"
+            f" -- must be {_V2_APPROVAL_SCOPE!r}"
+        )
+    if sa.get("risk_acknowledged") is not True:
+        violations.append(
+            f"v2 risk_acknowledged={sa.get('risk_acknowledged')!r} -- must be true"
+        )
+
+    approved_symbol = str(sa.get("approved_symbol", "")).strip().upper()
+    requested_symbol = symbol.strip().upper()
+    if approved_symbol != requested_symbol:
+        violations.append(
+            f"v2 submission approved_symbol={approved_symbol!r} does not match"
+            f" symbol={requested_symbol!r}"
+        )
+
+    try:
+        cap = float(sa.get("approved_max_notional", 0))
+    except (TypeError, ValueError):
+        cap = 0.0
+    if intended_notional > cap:
+        violations.append(
+            f"intended_notional={intended_notional} exceeds"
+            f" v2 submission approved_max_notional={cap}"
         )
 
     return violations
@@ -155,33 +243,29 @@ def _check_config_safety(
     live_kill_switch_enabled: bool,
     live_require_human_confirm: bool,
 ) -> list[str]:
-    """Validate config safety fields.
-
-    Guards 7–10.
-    """
     violations: list[str] = []
 
     if not live_trading_enabled:
         violations.append(
-            "live_trading_enabled=false — live trading is disabled in config"
+            "live_trading_enabled=false -- live trading is disabled in config"
         )
 
     if live_submit_dry_run:
         violations.append(
-            "live_submit_dry_run=true — dry-run gate is engaged; "
+            "live_submit_dry_run=true -- dry-run gate is engaged; "
             "must be set to false by operator to enable real submit"
         )
 
-    # kill_switch_enabled=true means kill switch is armed/engaged → blocks trading
+    # kill_switch_enabled=true means kill switch is armed/engaged -- blocks trading
     if live_kill_switch_enabled:
         violations.append(
-            "live_kill_switch_enabled=true — kill switch is engaged; "
+            "live_kill_switch_enabled=true -- kill switch is engaged; "
             "must be disengaged (false) to allow real submit"
         )
 
     if not live_require_human_confirm:
         violations.append(
-            "live_require_human_confirm=false — human confirmation requirement "
+            "live_require_human_confirm=false -- human confirmation requirement "
             "must be enabled"
         )
 
@@ -190,13 +274,13 @@ def _check_config_safety(
 
 def _check_checklist_ready(final_result: str) -> list[str]:
     if str(final_result).strip().upper() != "READY":
-        return [f"pre_submit_checklist.final_result={final_result!r} — must be READY"]
+        return [f"pre_submit_checklist.final_result={final_result!r} -- must be READY"]
     return []
 
 
 def _check_plan_review_pass(review_result: str) -> list[str]:
     if str(review_result).strip().upper() != "PASS":
-        return [f"plan_review.review_result={review_result!r} — must be PASS"]
+        return [f"plan_review.review_result={review_result!r} -- must be PASS"]
     return []
 
 
@@ -238,7 +322,7 @@ def _check_no_open_conflict(
 def _check_idempotency(client_order_id_used: bool, client_order_id: str) -> list[str]:
     if client_order_id_used:
         return [
-            f"client_order_id={client_order_id!r} already in live ledger — "
+            f"client_order_id={client_order_id!r} already in live ledger -- "
             "duplicate order blocked"
         ]
     return []
@@ -262,6 +346,10 @@ def _check_notional_cap(
 
 def _load_approval_artifact(approval_path: Path) -> dict[str, Any]:
     return _read_json(approval_path)
+
+
+def _load_v2_approval(path: Path) -> dict[str, Any]:
+    return _read_json(path)
 
 
 def _load_checklist(checklist_path: Path) -> dict[str, Any]:
@@ -361,13 +449,23 @@ def maybe_execute_live_submit(
     ledger_path: Path,
     output_dir: Path,
     broker_client: Any = None,
+    live_trading_approval_path: Path | None = None,
+    live_order_submission_approval_path: Path | None = None,
 ) -> dict[str, Any]:
     """Run all safety guards in order; fail closed at every step.
 
-    There is no return path with ``blocked=False`` in this PR.  If all 18
-    guards pass, a final ``real_submit_not_implemented`` block is returned
-    instead of calling ``submit_order``.  A ``live_submit_blocked_report.json``
-    is written to ``output_dir`` on every exit path.
+    There is no return path with ``blocked=False`` in this PR.  If all guards
+    pass, a final ``real_submit_not_implemented`` block is returned instead of
+    calling ``submit_order``.  A ``live_submit_blocked_report.json`` is written
+    to ``output_dir`` on every exit path.
+
+    Optional v2 approval paths
+    --------------------------
+    When ``live_trading_approval_path`` and
+    ``live_order_submission_approval_path`` are provided, the executor validates
+    both v2 artifacts (symbol match, notional caps, scope, risk_acknowledged)
+    after the existing approval_artifact guard.  If omitted, the existing
+    approval_artifact guard behaviour is unchanged.
 
     Returns
     -------
@@ -391,12 +489,12 @@ def maybe_execute_live_submit(
         write_blocked_report(output_dir, report)
         return report
 
-    # Guard 1 — confirmation token
+    # Guard 1 -- confirmation token
     v = _check_confirm_token(confirm_token)
     if v:
         return _blocked("confirm_token", v)
 
-    # Guard 2 + 3–6 — approval artifact
+    # Guard 2 + 3-6 -- approval artifact
     try:
         approval = _load_approval_artifact(approval_path)
     except (FileNotFoundError, ValueError) as exc:
@@ -406,7 +504,35 @@ def maybe_execute_live_submit(
     if v:
         return _blocked("approval_artifact", v)
 
-    # Guards 7–10 — config safety
+    # Guards 2b-2c -- v2 approval artifacts (optional)
+    if live_trading_approval_path is not None or live_order_submission_approval_path is not None:
+        # Both must be provided together
+        if live_trading_approval_path is None or live_order_submission_approval_path is None:
+            return _blocked(
+                "v2_approval_missing",
+                ["both live_trading_approval_path and live_order_submission_approval_path"
+                 " must be provided together"],
+            )
+
+        try:
+            ta = _load_v2_approval(live_trading_approval_path)
+        except (FileNotFoundError, ValueError) as exc:
+            return _blocked("v2_trading_approval_load", [str(exc)])
+
+        v = _check_v2_trading_approval(ta, symbol, intended_notional)
+        if v:
+            return _blocked("v2_trading_approval", v)
+
+        try:
+            sa = _load_v2_approval(live_order_submission_approval_path)
+        except (FileNotFoundError, ValueError) as exc:
+            return _blocked("v2_submission_approval_load", [str(exc)])
+
+        v = _check_v2_submission_approval(sa, symbol, intended_notional)
+        if v:
+            return _blocked("v2_submission_approval", v)
+
+    # Guards 7-10 -- config safety
     v = _check_config_safety(
         live_trading_enabled,
         live_submit_dry_run,
@@ -416,7 +542,7 @@ def maybe_execute_live_submit(
     if v:
         return _blocked("config_safety", v)
 
-    # Guard 11 — pre-submit checklist
+    # Guard 11 -- pre-submit checklist
     try:
         checklist = _load_checklist(checklist_path)
     except (FileNotFoundError, ValueError) as exc:
@@ -426,7 +552,7 @@ def maybe_execute_live_submit(
     if v:
         return _blocked("checklist_ready", v)
 
-    # Guard 12 — plan review
+    # Guard 12 -- plan review
     try:
         review = _load_plan_review(review_path)
     except (FileNotFoundError, ValueError) as exc:
@@ -436,7 +562,7 @@ def maybe_execute_live_submit(
     if v:
         return _blocked("plan_review_pass", v)
 
-    # Guard 13–14 — daily limits
+    # Guard 13-14 -- daily limits
     today_count, today_notional = _count_today_orders(ledger_path)
     v = _check_daily_limits(
         today_count,
@@ -448,7 +574,7 @@ def maybe_execute_live_submit(
     if v:
         return _blocked("daily_limits", v)
 
-    # Guards 15–16 — open position / order conflict
+    # Guards 15-16 -- open position / order conflict
     if broker_client is not None:
         has_position = _check_broker_position(broker_client, symbol)
         has_order = _check_broker_open_order(broker_client, symbol)
@@ -460,19 +586,19 @@ def maybe_execute_live_submit(
     if v:
         return _blocked("open_conflict", v)
 
-    # Guard 17 — idempotency
+    # Guard 17 -- idempotency
     used = _is_client_order_id_used(ledger_path, client_order_id)
     v = _check_idempotency(used, client_order_id)
     if v:
         return _blocked("idempotency", v)
 
-    # Guard 18 — notional cap
+    # Guard 18 -- notional cap
     v = _check_notional_cap(intended_notional, live_max_order_notional)
     if v:
         return _blocked("notional_cap", v)
 
     # -----------------------------------------------------------------------
-    # All 18 guards passed — real submit execution would follow here.
+    # All guards passed -- real submit execution would follow here.
     # It is NOT implemented in this PR.  Fail closed: return a blocked report
     # so there is no return path with blocked=False in the current codebase.
     # submit_order is never called.

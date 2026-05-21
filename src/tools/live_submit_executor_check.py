@@ -111,6 +111,12 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--plan-review", required=True, dest="plan_review", help="Path to live_submit_plan_review.json")
     parser.add_argument("--output-dir", required=True, dest="output_dir", help="Directory for live_submit_blocked_report.json")
     parser.add_argument("--plan", required=False, default=None, help="Optional path to live_submit_dry_run_plan.json")
+    parser.add_argument("--live-trading-approval", required=False, default=None,
+                        dest="live_trading_approval",
+                        help="Optional path to live_trading_approval.json (v2)")
+    parser.add_argument("--live-order-submission-approval", required=False, default=None,
+                        dest="live_order_submission_approval",
+                        help="Optional path to live_order_submission_approval.json (v2)")
     args = parser.parse_args(argv)
 
     try:
@@ -146,6 +152,12 @@ def main(argv: list[str] | None = None) -> None:
         ledger_path=                ledger_path,
         output_dir=                 output_dir,
         broker_client=              None,
+        live_trading_approval_path=(
+            Path(args.live_trading_approval) if args.live_trading_approval else None
+        ),
+        live_order_submission_approval_path=(
+            Path(args.live_order_submission_approval) if args.live_order_submission_approval else None
+        ),
     )
 
     blocked = result.get("blocked", False)

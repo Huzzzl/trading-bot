@@ -203,7 +203,7 @@ The real-submit implementation PR must include all of the following:
 - [ ] New `live_trading_approval` CLI — produces `live_trading_approval.json` ✓ **implemented (PR #102)**
 - [ ] New `live_order_submission_approval` CLI — produces `live_order_submission_approval.json` ✓ **implemented (PR #103)**
 - [ ] `live_v2_approvals_review` — offline review of both artifacts ✓ **implemented (PR #104)**
-- [ ] Updated executor guards — consume both new approval artifacts
+- [ ] Updated executor guards — consume both new approval artifacts ✓ **implemented (PR #105)**
 - [ ] `submit_order` call path — gated behind all guards listed above
 - [ ] Pre-submit ledger write — row written before `submit_order`
 - [ ] Post-submit ledger update — row updated for submitted / rejected / exception

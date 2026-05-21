@@ -507,11 +507,318 @@ class TestAllGuardsPassingFailsClosed:
             _run(**kwargs)
         assert not ledger.exists()
 
-    def test_no_return_path_with_blocked_false(self, tmp_path):
-        """Prove there is no blocked=False return path in this PR."""
+
+# ---------------------------------------------------------------------------
+# V2 approval artifact guards
+# ---------------------------------------------------------------------------
+
+def _valid_v2_ta(**overrides) -> dict:
+    d = {
+        "live_trading_approved":          True,
+        "live_order_submission_approved": False,
+        "approval_scope":                 "AUTHORIZE_SINGLE_LIVE_ORDER_ATTEMPT_ONLY",
+        "risk_acknowledged":              True,
+        "approved_symbol":                "SPY",
+        "approved_max_notional":          100.0,
+    }
+    d.update(overrides)
+    return d
+
+
+def _valid_v2_sa(**overrides) -> dict:
+    d = {
+        "live_trading_approved":                   True,
+        "live_order_submission_approved":          True,
+        "order_submission_approval_for_single_attempt": True,
+        "approval_scope":                          "AUTHORIZE_SINGLE_LIVE_ORDER_ATTEMPT_ONLY",
+        "risk_acknowledged":                       True,
+        "approved_symbol":                         "SPY",
+        "approved_max_notional":                   100.0,
+    }
+    d.update(overrides)
+    return d
+
+
+def _permissive_approval_kwargs(tmp_path: Path, **extra) -> dict:
+    """Build kwargs with a permissive approval_artifact (live_trading_approved=true)
+    so v2 guard tests can isolate the v2 path."""
+    approval = _write(tmp_path, "_perm_approval.json", _valid_approval(
+        live_trading_approved=True,
+        live_order_submission_approved=True,
+    ))
+    ta_path = _write(tmp_path, "_v2_ta.json", _valid_v2_ta())
+    sa_path = _write(tmp_path, "_v2_sa.json", _valid_v2_sa())
+    base = _default_kwargs(tmp_path, approval_path=approval,
+                           live_trading_approval_path=ta_path,
+                           live_order_submission_approval_path=sa_path)
+    base.update(extra)
+    return base
+
+
+class TestCheckV2TradingApproval:
+    def _check(self, **overrides):
+        from src.execution.live_submit_executor import _check_v2_trading_approval
+        ta = _valid_v2_ta(**overrides)
+        return _check_v2_trading_approval(ta, "SPY", 95.0)
+
+    def test_valid_passes(self):
+        assert self._check() == []
+
+    def test_live_trading_approved_false_fails(self):
+        assert self._check(live_trading_approved=False) != []
+
+    def test_live_order_submission_approved_true_fails(self):
+        assert self._check(live_order_submission_approved=True) != []
+
+    def test_wrong_scope_fails(self):
+        assert self._check(approval_scope="WRONG") != []
+
+    def test_risk_acknowledged_false_fails(self):
+        assert self._check(risk_acknowledged=False) != []
+
+    def test_symbol_mismatch_fails(self):
+        from src.execution.live_submit_executor import _check_v2_trading_approval
+        ta = _valid_v2_ta(approved_symbol="QQQ")
+        assert _check_v2_trading_approval(ta, "SPY", 95.0) != []
+
+    def test_notional_over_cap_fails(self):
+        from src.execution.live_submit_executor import _check_v2_trading_approval
+        ta = _valid_v2_ta(approved_max_notional=50.0)
+        assert _check_v2_trading_approval(ta, "SPY", 95.0) != []
+
+    def test_notional_at_cap_passes(self):
+        from src.execution.live_submit_executor import _check_v2_trading_approval
+        ta = _valid_v2_ta(approved_max_notional=95.0)
+        assert _check_v2_trading_approval(ta, "SPY", 95.0) == []
+
+
+class TestCheckV2SubmissionApproval:
+    def _check(self, **overrides):
+        from src.execution.live_submit_executor import _check_v2_submission_approval
+        sa = _valid_v2_sa(**overrides)
+        return _check_v2_submission_approval(sa, "SPY", 95.0)
+
+    def test_valid_passes(self):
+        assert self._check() == []
+
+    def test_order_submission_approved_false_fails(self):
+        assert self._check(live_order_submission_approved=False) != []
+
+    def test_single_attempt_false_fails(self):
+        assert self._check(order_submission_approval_for_single_attempt=False) != []
+
+    def test_wrong_scope_fails(self):
+        assert self._check(approval_scope="WRONG") != []
+
+    def test_risk_acknowledged_false_fails(self):
+        assert self._check(risk_acknowledged=False) != []
+
+    def test_symbol_mismatch_fails(self):
+        from src.execution.live_submit_executor import _check_v2_submission_approval
+        sa = _valid_v2_sa(approved_symbol="QQQ")
+        assert _check_v2_submission_approval(sa, "SPY", 95.0) != []
+
+    def test_notional_over_cap_fails(self):
+        from src.execution.live_submit_executor import _check_v2_submission_approval
+        sa = _valid_v2_sa(approved_max_notional=50.0)
+        assert _check_v2_submission_approval(sa, "SPY", 95.0) != []
+
+
+class TestV2ApprovalIntegration:
+    def test_no_v2_paths_keeps_old_blocking_behavior(self, tmp_path):
+        """Without v2 paths, approval_artifact guard still blocks as before."""
+        result = _run(**_default_kwargs(tmp_path))
+        assert result["blocked"] is True
+        assert result["block_guard"] == "approval_artifact"
+        assert result["submit_order_called"] is False
+
+    def test_valid_v2_approvals_pass_approval_artifact_guard(self, tmp_path):
+        """Valid v2 approvals with permissive base approval allow executor past
+        approval_artifact guard and on to config_safety (which still blocks)."""
+        kwargs = _permissive_approval_kwargs(tmp_path)
         with patch(f"{_MODULE}._count_today_orders", return_value=(0, 0.0)), \
              patch(f"{_MODULE}._is_client_order_id_used", return_value=False):
-            result = _run(**self._all_passing_kwargs(tmp_path))
-        assert result.get("blocked") is not False, (
-            "blocked=False must not be returned — fail-closed invariant violated"
+            result = _run(**kwargs)
+        assert result["blocked"] is True
+        assert result["submit_order_called"] is False
+        # With permissive approval and v2 approvals, config_safety blocks
+        # (live_trading_enabled=True, live_submit_dry_run=False,
+        #  live_kill_switch_enabled=False -- all permissive in _default_kwargs,
+        #  so execution proceeds to real_submit_not_implemented)
+        assert result["block_guard"] == "real_submit_not_implemented"
+
+    def test_invalid_v2_trading_approval_blocks(self, tmp_path):
+        approval = _write(tmp_path, "_perm_approval.json", _valid_approval(
+            live_trading_approved=True, live_order_submission_approved=True,
+        ))
+        bad_ta = _write(tmp_path, "_bad_ta.json",
+                        _valid_v2_ta(live_trading_approved=False))
+        sa_path = _write(tmp_path, "_v2_sa.json", _valid_v2_sa())
+        result = _run(**_default_kwargs(tmp_path,
+            approval_path=approval,
+            live_trading_approval_path=bad_ta,
+            live_order_submission_approval_path=sa_path,
+        ))
+        assert result["blocked"] is True
+        assert result["block_guard"] == "v2_trading_approval"
+        assert result["submit_order_called"] is False
+
+    def test_invalid_v2_submission_approval_blocks(self, tmp_path):
+        approval = _write(tmp_path, "_perm_approval.json", _valid_approval(
+            live_trading_approved=True, live_order_submission_approved=True,
+        ))
+        ta_path = _write(tmp_path, "_v2_ta.json", _valid_v2_ta())
+        bad_sa = _write(tmp_path, "_bad_sa.json",
+                        _valid_v2_sa(live_order_submission_approved=False))
+        result = _run(**_default_kwargs(tmp_path,
+            approval_path=approval,
+            live_trading_approval_path=ta_path,
+            live_order_submission_approval_path=bad_sa,
+        ))
+        assert result["blocked"] is True
+        assert result["block_guard"] == "v2_submission_approval"
+        assert result["submit_order_called"] is False
+
+    def test_v2_symbol_mismatch_blocks(self, tmp_path):
+        approval = _write(tmp_path, "_perm_approval.json", _valid_approval(
+            live_trading_approved=True, live_order_submission_approved=True,
+        ))
+        ta_path = _write(tmp_path, "_v2_ta.json",
+                         _valid_v2_ta(approved_symbol="QQQ"))
+        sa_path = _write(tmp_path, "_v2_sa.json",
+                         _valid_v2_sa(approved_symbol="QQQ"))
+        result = _run(**_default_kwargs(tmp_path,
+            approval_path=approval,
+            live_trading_approval_path=ta_path,
+            live_order_submission_approval_path=sa_path,
+            symbol="SPY",
+        ))
+        assert result["blocked"] is True
+        assert result["block_guard"] == "v2_trading_approval"
+
+    def test_v2_notional_over_cap_blocks(self, tmp_path):
+        approval = _write(tmp_path, "_perm_approval.json", _valid_approval(
+            live_trading_approved=True, live_order_submission_approved=True,
+        ))
+        ta_path = _write(tmp_path, "_v2_ta.json",
+                         _valid_v2_ta(approved_max_notional=50.0))
+        sa_path = _write(tmp_path, "_v2_sa.json",
+                         _valid_v2_sa(approved_max_notional=50.0))
+        result = _run(**_default_kwargs(tmp_path,
+            approval_path=approval,
+            live_trading_approval_path=ta_path,
+            live_order_submission_approval_path=sa_path,
+            intended_notional=95.0,
+        ))
+        assert result["blocked"] is True
+        assert result["block_guard"] == "v2_trading_approval"
+
+    def test_all_guards_with_v2_still_blocked_at_not_implemented(self, tmp_path):
+        """Even with v2 approvals + all other guards passing, fail closed."""
+        ta_path = _write(tmp_path, "_v2_ta.json", _valid_v2_ta())
+        sa_path = _write(tmp_path, "_v2_sa.json", _valid_v2_sa())
+        approval = _write(tmp_path, "_full_approval.json", _valid_approval(
+            live_trading_approved=True, live_order_submission_approved=True,
+        ))
+        checklist = _write(tmp_path, "_full_checklist.json", {"final_result": "READY"})
+        review = _write(tmp_path, "_full_review.json", {"review_result": "PASS"})
+        kwargs = dict(
+            confirm_token="REAL-LIVE-SUBMIT-AUTHORIZED",
+            approval_path=approval,
+            checklist_path=checklist,
+            review_path=review,
+            symbol="SPY",
+            intended_notional=95.0,
+            client_order_id="v2-all-pass-001",
+            live_trading_enabled=True,
+            live_submit_dry_run=False,
+            live_kill_switch_enabled=False,
+            live_require_human_confirm=True,
+            live_max_order_notional=100.0,
+            live_max_orders_per_day=1,
+            live_max_notional_per_day=100.0,
+            ledger_path=tmp_path / "ledger.csv",
+            output_dir=tmp_path / "output",
+            broker_client=None,
+            live_trading_approval_path=ta_path,
+            live_order_submission_approval_path=sa_path,
         )
+        with patch(f"{_MODULE}._count_today_orders", return_value=(0, 0.0)), \
+             patch(f"{_MODULE}._is_client_order_id_used", return_value=False):
+            result = _run(**kwargs)
+        assert result["blocked"] is True
+        assert result["block_guard"] == "real_submit_not_implemented"
+        assert result["submit_order_called"] is False
+
+    def test_submit_order_never_called_with_v2(self, tmp_path):
+        broker = MagicMock()
+        kwargs = _permissive_approval_kwargs(tmp_path, broker_client=broker)
+        with patch(f"{_MODULE}._count_today_orders", return_value=(0, 0.0)), \
+             patch(f"{_MODULE}._is_client_order_id_used", return_value=False):
+            result = _run(**kwargs)
+        broker.submit_order.assert_not_called()
+        assert result["submit_order_called"] is False
+
+    def test_cancel_order_never_called_with_v2(self, tmp_path):
+        broker = MagicMock()
+        kwargs = _permissive_approval_kwargs(tmp_path, broker_client=broker)
+        with patch(f"{_MODULE}._count_today_orders", return_value=(0, 0.0)), \
+             patch(f"{_MODULE}._is_client_order_id_used", return_value=False):
+            _run(**kwargs)
+        broker.cancel_order.assert_not_called()
+
+    def test_no_ledger_writes_with_v2(self, tmp_path):
+        ledger = tmp_path / "v2_ledger.csv"
+        kwargs = _permissive_approval_kwargs(tmp_path, ledger_path=ledger)
+        with patch(f"{_MODULE}._count_today_orders", return_value=(0, 0.0)), \
+             patch(f"{_MODULE}._is_client_order_id_used", return_value=False):
+            _run(**kwargs)
+        assert not ledger.exists()
+
+    def test_missing_v2_trading_approval_file_blocks(self, tmp_path):
+        approval = _write(tmp_path, "_perm_approval.json", _valid_approval(
+            live_trading_approved=True, live_order_submission_approved=True,
+        ))
+        sa_path = _write(tmp_path, "_v2_sa.json", _valid_v2_sa())
+        result = _run(**_default_kwargs(tmp_path,
+            approval_path=approval,
+            live_trading_approval_path=tmp_path / "nonexistent_ta.json",
+            live_order_submission_approval_path=sa_path,
+        ))
+        assert result["blocked"] is True
+        assert result["block_guard"] == "v2_trading_approval_load"
+
+    def test_no_return_path_with_blocked_false(self, tmp_path):
+        """Prove there is no blocked=False return path even with v2 approvals."""
+        ta_path = _write(tmp_path, "_v2_ta2.json", _valid_v2_ta())
+        sa_path = _write(tmp_path, "_v2_sa2.json", _valid_v2_sa())
+        approval = _write(tmp_path, "_full2_approval.json", _valid_approval(
+            live_trading_approved=True, live_order_submission_approved=True,
+        ))
+        checklist = _write(tmp_path, "_full2_checklist.json", {"final_result": "READY"})
+        review = _write(tmp_path, "_full2_review.json", {"review_result": "PASS"})
+        kwargs = dict(
+            confirm_token="REAL-LIVE-SUBMIT-AUTHORIZED",
+            approval_path=approval,
+            checklist_path=checklist,
+            review_path=review,
+            symbol="SPY",
+            intended_notional=95.0,
+            client_order_id="v2-no-false-001",
+            live_trading_enabled=True,
+            live_submit_dry_run=False,
+            live_kill_switch_enabled=False,
+            live_require_human_confirm=True,
+            live_max_order_notional=100.0,
+            live_max_orders_per_day=1,
+            live_max_notional_per_day=100.0,
+            ledger_path=tmp_path / "ledger2.csv",
+            output_dir=tmp_path / "output2",
+            broker_client=None,
+            live_trading_approval_path=ta_path,
+            live_order_submission_approval_path=sa_path,
+        )
+        with patch(f"{_MODULE}._count_today_orders", return_value=(0, 0.0)), \
+             patch(f"{_MODULE}._is_client_order_id_used", return_value=False):
+            result = _run(**kwargs)
+        assert result.get("blocked") is not False
