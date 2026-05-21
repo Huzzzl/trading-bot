@@ -121,7 +121,7 @@ order when any of the following conditions are true:
 | SPY not tradable | `GET /v2/assets/SPY` returns `tradable=false` |
 | Non-read-only endpoint attempted | Any POST/PATCH/DELETE call blocked by the allowlist |
 | Credential value in output | Any check that would write a real API key or secret to stdout or JSON |
-| Any exception from broker client | Uncaught exception during any broker call → BLOCKED |
+| Any exception from broker client | Uncaught exception during any broker call → BLOCKED; raw exception text is redacted from all output (violations, checks, blocker, stdout, output JSON) |
 
 All failures are hard blockers. No partial execution, no retry.
 
@@ -244,11 +244,28 @@ and does not authorize a live order.
 | Item | State |
 |------|-------|
 | Design document | This file |
-| `src/tools/live_broker_preflight_readonly.py` | **Not implemented** |
-| `output/live_broker_preflight_readonly.json` | Not generated |
-| Real Alpaca live endpoint calls | **None — this PR makes zero broker calls** |
+| `src/tools/live_broker_preflight_readonly.py` | **Mock-only core framework implemented** |
+| `tests/test_live_broker_preflight_readonly.py` | Implemented — 69 tests, mock broker only |
+| Real Alpaca broker adapter | **Not implemented** |
+| Real Alpaca live endpoint calls | **None** |
+| CLI mode result | Always BLOCKED — "real broker adapter not yet implemented" |
+| PASS possible via | Injected mock broker in unit tests only |
+| `output/live_broker_preflight_readonly.json` | Generated only in tests |
 | `submit_order` | Unreachable — no call path exists |
 | `config_safety` | Still the hard blocker |
+
+### What the mock-only implementation provides
+
+- Prerequisite artifact gating: credential guard and operator override artifacts
+  must exist and have `result="PASS"` before any broker call is attempted
+- Parameter validation: symbol, side, notional_cap
+- Endpoint allowlist enforcement:
+  - Exact-match: `/v2/account`, `/v2/clock`
+  - Prefix-match: `/v2/assets/`
+  - Any other path raises `ValueError` before the broker is contacted
+- Mock checks: account status, buying power, pattern day trader, clock, asset tradable/fractionable
+- All output invariants hardcoded: `broker_mutation_calls_made=false`, `credential_values_exposed=false`, `live_submit_enabled=false`, `real_submit_implemented=false`, `submit_order_reachable=false`, `config_safety_still_blocks=true`
+- No real Alpaca adapter — the real implementation must be added in a separate future PR
 
 ---
 
