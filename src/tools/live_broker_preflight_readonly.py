@@ -72,7 +72,9 @@ Fail-closed conditions
 * ``clock.is_open == false``
 * ``asset.tradable == false``
 * ``asset.fractionable == false``
-* Any exception from the broker client
+* Any exception from the broker client (exception details are redacted from
+  all output — raw exception text must not appear in violations, checks,
+  blocker, stdout, or output JSON)
 
 Output invariants
 -----------------
@@ -218,7 +220,7 @@ def _check_account(
     try:
         account = _guarded_get(broker, "/v2/account")
     except Exception as exc:
-        violation = f"account check: broker error — {exc}"
+        violation = f"account check: broker error — details redacted"
         violations.append(violation)
         checks.append(_make_check("account", "BLOCKED", violation))
         return False
@@ -274,7 +276,7 @@ def _check_clock(
     try:
         clock = _guarded_get(broker, "/v2/clock")
     except Exception as exc:
-        violation = f"clock check: broker error — {exc}"
+        violation = f"clock check: broker error — details redacted"
         violations.append(violation)
         checks.append(_make_check("market_clock", "BLOCKED", violation))
         return False
@@ -301,7 +303,7 @@ def _check_asset(
     try:
         asset = _guarded_get(broker, path)
     except Exception as exc:
-        violation = f"asset check ({symbol}): broker error — {exc}"
+        violation = f"asset check: broker error — details redacted"
         violations.append(violation)
         checks.append(_make_check("asset_metadata", "BLOCKED", violation))
         return False

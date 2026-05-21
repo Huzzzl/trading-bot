@@ -559,6 +559,111 @@ class TestAssetChecks:
 
 
 # ---------------------------------------------------------------------------
+# Broker exception redaction — secrets must not leak
+# ---------------------------------------------------------------------------
+
+class TestBrokerExceptionRedaction:
+    """Broker exception details are redacted from all output.
+
+    A broker adapter exception may include request metadata, URLs, headers,
+    or credential-like values in its message.  Raw exception text must never
+    appear in violations, checks, blocker, stdout, or output JSON.
+    """
+
+    _SECRET = "SECRET_IN_EXCEPTION_XYZ_BROKER_12345"
+
+    def _broker_raising_with_secret(self, path_prefix: str) -> MockBroker:
+        """Return a mock broker that raises an exception carrying a secret."""
+        class SecretException(RuntimeError):
+            pass
+
+        class SecretBroker:
+            def read_only_get(self, path: str) -> dict[str, Any]:
+                if path.startswith(path_prefix):
+                    raise SecretException(
+                        f"request to {path} failed: "
+                        f"Authorization: {TestBrokerExceptionRedaction._SECRET}"
+                    )
+                return dict(_GOOD_RESPONSES.get(path, {}))
+
+        return SecretBroker()  # type: ignore[return-value]
+
+    def _assert_secret_absent(self, data: Any, label: str) -> None:
+        serialised = json.dumps(data) if not isinstance(data, str) else data
+        assert self._SECRET not in serialised, (
+            f"secret found in {label}: {serialised[:200]}"
+        )
+
+    def test_account_exception_secret_not_in_json(self, tmp_path: Path) -> None:
+        broker = self._broker_raising_with_secret("/v2/account")
+        result = _run_pass(tmp_path, broker=broker)
+        assert result["result"] == "BLOCKED"
+        self._assert_secret_absent(result, "result dict")
+
+    def test_account_exception_secret_not_in_violations(
+        self, tmp_path: Path
+    ) -> None:
+        broker = self._broker_raising_with_secret("/v2/account")
+        result = _run_pass(tmp_path, broker=broker)
+        for v in result["violations"]:
+            assert self._SECRET not in v, f"secret in violation: {v!r}"
+
+    def test_account_exception_secret_not_in_blocker(
+        self, tmp_path: Path
+    ) -> None:
+        broker = self._broker_raising_with_secret("/v2/account")
+        result = _run_pass(tmp_path, broker=broker)
+        assert result["blocker"] is None or self._SECRET not in result["blocker"]
+
+    def test_account_exception_secret_not_in_checks(
+        self, tmp_path: Path
+    ) -> None:
+        broker = self._broker_raising_with_secret("/v2/account")
+        result = _run_pass(tmp_path, broker=broker)
+        for check in result["checks"]:
+            self._assert_secret_absent(check, f"check {check['name']!r}")
+
+    def test_account_exception_secret_not_in_stdout(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        from src.tools.live_broker_preflight_readonly import print_preflight
+        broker = self._broker_raising_with_secret("/v2/account")
+        result = _run_pass(tmp_path, broker=broker)
+        print_preflight(result)
+        captured = capsys.readouterr()
+        assert self._SECRET not in captured.out
+        assert self._SECRET not in captured.err
+
+    def test_clock_exception_secret_not_in_output(
+        self, tmp_path: Path
+    ) -> None:
+        broker = self._broker_raising_with_secret("/v2/clock")
+        result = _run_pass(tmp_path, broker=broker)
+        assert result["result"] == "BLOCKED"
+        self._assert_secret_absent(result, "result dict")
+
+    def test_asset_exception_secret_not_in_output(
+        self, tmp_path: Path
+    ) -> None:
+        broker = self._broker_raising_with_secret("/v2/assets/")
+        result = _run_pass(tmp_path, broker=broker)
+        assert result["result"] == "BLOCKED"
+        self._assert_secret_absent(result, "result dict")
+
+    def test_violation_uses_fixed_text(self, tmp_path: Path) -> None:
+        broker = self._broker_raising_with_secret("/v2/account")
+        result = _run_pass(tmp_path, broker=broker)
+        assert any("details redacted" in v for v in result["violations"])
+
+    def test_check_detail_uses_fixed_text(self, tmp_path: Path) -> None:
+        broker = self._broker_raising_with_secret("/v2/account")
+        result = _run_pass(tmp_path, broker=broker)
+        error_checks = [c for c in result["checks"] if c["result"] == "BLOCKED"]
+        assert error_checks, "expected at least one BLOCKED check"
+        assert any("details redacted" in c["detail"] for c in error_checks)
+
+
+# ---------------------------------------------------------------------------
 # Output invariants
 # ---------------------------------------------------------------------------
 

@@ -121,7 +121,7 @@ order when any of the following conditions are true:
 | SPY not tradable | `GET /v2/assets/SPY` returns `tradable=false` |
 | Non-read-only endpoint attempted | Any POST/PATCH/DELETE call blocked by the allowlist |
 | Credential value in output | Any check that would write a real API key or secret to stdout or JSON |
-| Any exception from broker client | Uncaught exception during any broker call → BLOCKED |
+| Any exception from broker client | Uncaught exception during any broker call → BLOCKED; raw exception text is redacted from all output (violations, checks, blocker, stdout, output JSON) |
 
 All failures are hard blockers. No partial execution, no retry.
 
