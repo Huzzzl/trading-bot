@@ -102,6 +102,7 @@ def _check_confirm_token(token: str) -> list[str]:
 
 
 def _check_approval_artifact(artifact: dict[str, Any]) -> list[str]:
+    """Legacy mode: validate all four fields on the PR-approval artifact."""
     violations: list[str] = []
 
     if not _is_truthy(artifact.get("approval_for_real_submit_pr", False)):
@@ -135,6 +136,33 @@ def _check_approval_artifact(artifact: dict[str, Any]) -> list[str]:
             f"{artifact.get('live_order_submission_approved')!r} -- "
             "live order submission is not approved; submit blocked. "
             "Current approval tooling always sets this to false."
+        )
+
+    return violations
+
+
+def _check_approval_artifact_v2_mode(artifact: dict[str, Any]) -> list[str]:
+    """V2 mode: validate only PR-approval fields; v2 artifacts carry the live-submit grants.
+
+    In v2 mode the separate live_trading_approval.json and
+    live_order_submission_approval.json carry live_trading_approved and
+    live_order_submission_approved.  The legacy PR-approval artifact
+    (live_real_submit_pr_approval.json) always has those set to false by
+    design -- checking them here would always block before v2 guards run.
+    """
+    violations: list[str] = []
+
+    if not _is_truthy(artifact.get("approval_for_real_submit_pr", False)):
+        violations.append(
+            f"approval_for_real_submit_pr="
+            f"{artifact.get('approval_for_real_submit_pr')!r} -- must be true"
+        )
+
+    scope = str(artifact.get("approval_scope", "")).strip()
+    if scope != _EXPECTED_APPROVAL_SCOPE:
+        violations.append(
+            f"approval_scope={artifact.get('approval_scope')!r} -- "
+            f"must be {_EXPECTED_APPROVAL_SCOPE!r}"
         )
 
     return violations
@@ -192,8 +220,16 @@ def _check_v2_submission_approval(
     sa: dict[str, Any],
     symbol: str,
     intended_notional: float,
+    *,
+    ta_path: Path | None = None,
 ) -> list[str]:
-    """Validate live_order_submission_approval.json (v2 guard)."""
+    """Validate live_order_submission_approval.json (v2 guard).
+
+    When ``ta_path`` is provided, verifies that
+    ``source_live_trading_approval_path`` in the artifact resolves to the same
+    file, confirming the submission approval was derived from the correct
+    trading approval.
+    """
     violations: list[str] = []
 
     if sa.get("live_order_submission_approved") is not True:
@@ -216,6 +252,18 @@ def _check_v2_submission_approval(
             f"v2 risk_acknowledged={sa.get('risk_acknowledged')!r} -- must be true"
         )
 
+    src = str(sa.get("source_live_trading_approval_path", "")).strip()
+    if not src:
+        violations.append(
+            "source_live_trading_approval_path is missing or empty in submission approval"
+        )
+    elif ta_path is not None:
+        if Path(src).resolve() != Path(ta_path).resolve():
+            violations.append(
+                f"source_live_trading_approval_path={src!r} does not match"
+                f" provided trading approval path {str(ta_path)!r}"
+            )
+
     approved_symbol = str(sa.get("approved_symbol", "")).strip().upper()
     requested_symbol = symbol.strip().upper()
     if approved_symbol != requested_symbol:
@@ -232,6 +280,45 @@ def _check_v2_submission_approval(
         violations.append(
             f"intended_notional={intended_notional} exceeds"
             f" v2 submission approved_max_notional={cap}"
+        )
+
+    return violations
+
+
+def _check_v2_cross(
+    ta: dict[str, Any],
+    sa: dict[str, Any],
+    ta_path: Path,
+    sa_path: Path,
+) -> list[str]:
+    """Cross-artifact consistency checks for the two v2 approval artifacts."""
+    violations: list[str] = []
+
+    if Path(ta_path).resolve() == Path(sa_path).resolve():
+        violations.append(
+            "v2 trading and submission approval artifacts must be separate files"
+        )
+
+    ta_symbol = str(ta.get("approved_symbol", "")).strip().upper()
+    sa_symbol = str(sa.get("approved_symbol", "")).strip().upper()
+    if ta_symbol != sa_symbol:
+        violations.append(
+            f"v2 artifact symbol mismatch: "
+            f"trading={ta_symbol!r} vs submission={sa_symbol!r}"
+        )
+
+    try:
+        ta_cap = float(ta.get("approved_max_notional", 0))
+    except (TypeError, ValueError):
+        ta_cap = 0.0
+    try:
+        sa_cap = float(sa.get("approved_max_notional", 0))
+    except (TypeError, ValueError):
+        sa_cap = 0.0
+    if sa_cap > ta_cap:
+        violations.append(
+            f"v2 submission approved_max_notional={sa_cap} exceeds"
+            f" trading approved_max_notional={ta_cap}"
         )
 
     return violations
@@ -494,19 +581,29 @@ def maybe_execute_live_submit(
     if v:
         return _blocked("confirm_token", v)
 
-    # Guard 2 + 3-6 -- approval artifact
+    # Guard 2 -- approval artifact (legacy or v2 mode)
+    v2_mode = (
+        live_trading_approval_path is not None
+        or live_order_submission_approval_path is not None
+    )
+
     try:
         approval = _load_approval_artifact(approval_path)
     except (FileNotFoundError, ValueError) as exc:
         return _blocked("approval_artifact_load", [str(exc)])
 
-    v = _check_approval_artifact(approval)
+    if v2_mode:
+        # V2 mode: only check PR-approval fields on the legacy artifact.
+        # live_trading_approved and live_order_submission_approved are always
+        # false in real current artifacts -- those grants come from the v2 artifacts.
+        v = _check_approval_artifact_v2_mode(approval)
+    else:
+        v = _check_approval_artifact(approval)
     if v:
         return _blocked("approval_artifact", v)
 
-    # Guards 2b-2c -- v2 approval artifacts (optional)
-    if live_trading_approval_path is not None or live_order_submission_approval_path is not None:
-        # Both must be provided together
+    # Guards 2b-2d -- v2 approval artifacts
+    if v2_mode:
         if live_trading_approval_path is None or live_order_submission_approval_path is None:
             return _blocked(
                 "v2_approval_missing",
@@ -528,9 +625,15 @@ def maybe_execute_live_submit(
         except (FileNotFoundError, ValueError) as exc:
             return _blocked("v2_submission_approval_load", [str(exc)])
 
-        v = _check_v2_submission_approval(sa, symbol, intended_notional)
+        v = _check_v2_submission_approval(
+            sa, symbol, intended_notional, ta_path=live_trading_approval_path
+        )
         if v:
             return _blocked("v2_submission_approval", v)
+
+        v = _check_v2_cross(ta, sa, live_trading_approval_path, live_order_submission_approval_path)
+        if v:
+            return _blocked("v2_cross_check", v)
 
     # Guards 7-10 -- config safety
     v = _check_config_safety(
