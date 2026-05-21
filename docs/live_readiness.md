@@ -58,6 +58,12 @@ The offline GO/NO_GO gate checker (`live_submit_enablement_gate`) is implemented
 `src/tools/live_submit_enablement_gate.py`; it evaluates all conditions required before
 the `config_safety` blocker can be removed and writes a `live_submit_enablement_gate.json`
 artifact; GO means config_safety is the only remaining blocker — GO does not submit an order.
+The offline pre-submit ledger dry-run writer (`live_pre_submit_ledger_dry_run`) is implemented
+in `src/tools/live_pre_submit_ledger_dry_run.py`; it requires a GO gate artifact, validates
+order metadata (symbol, buy-only side, notional, unique client_order_id), and appends one row
+with `status="attempting"` to the live submit ledger CSV; it proves the required pre-submit
+ledger row can be written without submitting any order; future real submit must reuse the same
+ledger schema and update the same `client_order_id` row after the order attempt.
 
 ---
 

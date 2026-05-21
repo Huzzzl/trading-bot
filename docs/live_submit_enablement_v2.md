@@ -230,3 +230,8 @@ are defined in **[docs/live_submit_enablement_gate.md](live_submit_enablement_ga
 The offline GO/NO_GO checker (`src/tools/live_submit_enablement_gate.py`) evaluates all those
 conditions in one command.  GO does not submit an order; it only means `config_safety` is the
 remaining blocker and all preconditions are satisfied.
+The offline pre-submit ledger dry-run writer (`src/tools/live_pre_submit_ledger_dry_run.py`)
+proves the required pre-submit ledger row can be written.  It requires a GO gate artifact
+and writes one CSV row with `status="attempting"`.  It does not submit orders and makes no
+real broker calls.  Future real submit must reuse the same ledger schema and update the same
+`client_order_id` row after the order attempt.

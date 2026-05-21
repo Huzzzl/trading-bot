@@ -35,6 +35,39 @@ the live ledger.  Exit 0 on GO; exit 1 on NO_GO.  Always writes output JSON.
 
 ---
 
+## Pre-Submit Ledger Dry-Run CLI
+
+`src/tools/live_pre_submit_ledger_dry_run.py` is an offline dry-run writer that
+proves the required pre-submit ledger row can be written before any real order
+attempt.  It requires a GO gate artifact, validates order metadata, and appends
+one row with ``status="attempting"`` to the live submit ledger CSV.
+
+```bash
+python -m src.tools.live_pre_submit_ledger_dry_run \
+    --enablement-gate output/live_submit_enablement_gate.json \
+    --symbol SPY \
+    --side buy \
+    --notional 100.0 \
+    --client-order-id LIVE-TEST-000001 \
+    --ledger output/live_submit_ledger.csv \
+    --output output/live_pre_submit_ledger_dry_run.json
+```
+
+**This tool does not submit orders and makes no real broker calls.**
+It only writes the ledger CSV row.  Future real submit must reuse the same
+ledger schema and update the same ``client_order_id`` row after the order
+attempt completes.
+
+The tool blocks (``result="BLOCKED"``) when:
+- enablement gate decision is not ``"GO"``
+- symbol is empty, side is not ``"buy"``, notional ≤ 0, or client_order_id is empty
+- ``client_order_id`` is already present in the ledger (idempotency guard)
+
+Exit 0 on ``LEDGER_DRY_RUN_WRITTEN``; exit 1 on ``BLOCKED``.  Always writes
+output JSON.  Never calls Alpaca.  Never reads credentials.
+
+---
+
 ## Current Status
 
 | Item | State |
