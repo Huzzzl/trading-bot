@@ -3,14 +3,14 @@
 Final checklist that must be fully satisfied before implementing a real Alpaca
 live submit adapter in `live_single_manual_submit` or any successor tool.
 
-**This PR does NOT implement real live submit.**
-**This PR does NOT call Alpaca.**
-**This PR does NOT read credentials.**
+**The real `AlpacaLiveSubmitBroker` adapter is now implemented (PR #122).**
+**No real order has been submitted.**
+**All tests are mock-only — no real Alpaca calls in any test.**
+**CLI requires `--allow-real-live-submit-once` plus all prerequisite artifacts.**
 **This PR does NOT submit, cancel, or replace orders.**
-**This PR does NOT write the live ledger.**
 **This PR does NOT enable automated trading.**
 **This PR does NOT bypass `config_safety`.**
-**Real live submit remains unimplemented after this PR.**
+**Real live submit requires explicit operator flag and all gate conditions at runtime.**
 
 ---
 
@@ -30,6 +30,7 @@ adapter implementation PR is opened.
   (see `docs/live_readiness_status.md` milestone history)
 
 **Current state:** All items above are complete as of PR #120.
+`AlpacaLiveSubmitBroker` real adapter implemented in PR #122 (mock-only tests; no real order submitted).
 
 ---
 
@@ -262,14 +263,15 @@ live-submit-adapter-readiness-checklist-complete
 
 ## Warning
 
-> **This checklist does not approve real trading.**
-> **This checklist does not approve live order submission.**
-> **This checklist does not implement any part of the real submit adapter.**
-> Real live submit remains unimplemented.
-> `config_safety` remains the hard blocker.
-> `submit_order`, `cancel_order`, and `replace_order` remain unimplemented for live.
-> No orders endpoint, POST/PATCH/DELETE, live ledger writes, or `config_safety`
-> bypass exist in the current codebase.
-> Satisfying this checklist requires its own dedicated implementation PR,
-> its own full test suite (mock broker only), and explicit operator approval
-> at runtime — none of which are provided here.
+> **The real `AlpacaLiveSubmitBroker` adapter is now implemented (PR #122).**
+> **No real order has been submitted.**
+> **All tests are mock-only — no real Alpaca calls in any test.**
+> CLI requires `--allow-real-live-submit-once` plus all prerequisite artifacts
+> with `result="PASS"`, strict local operator config booleans, and valid
+> credentials in `ALPACA_LIVE_API_KEY` / `ALPACA_LIVE_SECRET_KEY`.
+> Without the flag, CLI is always BLOCKED.
+> `cancel_order` and `replace_order` remain unimplemented.
+> No retry logic exists — BLOCKED is a final result.
+> Automated and recurring live trading remain unimplemented.
+> A real live order attempt requires the operator to satisfy all runtime
+> prerequisites listed in Section 2 and Section 5 above at the time of the run.

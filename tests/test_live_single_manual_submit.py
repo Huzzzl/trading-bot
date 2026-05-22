@@ -30,11 +30,23 @@ class MockBroker:
         self.raise_exc = raise_exc
 
     def submit_order(
-        self, *, symbol: str, side: str, order_type: str, notional: float
+        self,
+        *,
+        symbol: str,
+        side: str,
+        order_type: str,
+        notional: float,
+        client_order_id: str | None = None,
     ) -> dict[str, Any]:
         self.call_count += 1
         self.calls.append(
-            {"symbol": symbol, "side": side, "order_type": order_type, "notional": notional}
+            {
+                "symbol":          symbol,
+                "side":            side,
+                "order_type":      order_type,
+                "notional":        notional,
+                "client_order_id": client_order_id,
+            }
         )
         if self.raise_exc is not None:
             raise self.raise_exc
@@ -49,12 +61,68 @@ class LedgerCaptureBroker:
         self.rows_at_call: list[dict[str, str]] = []
 
     def submit_order(
-        self, *, symbol: str, side: str, order_type: str, notional: float
+        self,
+        *,
+        symbol: str,
+        side: str,
+        order_type: str,
+        notional: float,
+        client_order_id: str | None = None,
     ) -> dict[str, Any]:
         with self.ledger_path.open(encoding="utf-8", newline="") as fh:
             reader = csv.DictReader(fh)
             self.rows_at_call = [dict(row) for row in reader]
         return {"id": "mock-order"}
+
+
+# ---------------------------------------------------------------------------
+# Injectable mock classes for AlpacaLiveSubmitBroker tests
+# ---------------------------------------------------------------------------
+
+class _FakeOrderSide:
+    BUY = "FAKE_BUY"
+
+
+class _FakeTimeInForce:
+    DAY = "FAKE_DAY"
+
+
+class _FakeOrderRequest:
+    def __init__(self, **kwargs: Any) -> None:
+        self.kwargs = kwargs
+
+
+class _FakeTradingClient:
+    def __init__(self, *, api_key: str, secret_key: str, paper: bool) -> None:
+        self.api_key = api_key
+        self.secret_key = secret_key
+        self.paper = paper
+        self.submit_calls: list[Any] = []
+        self.raise_exc: BaseException | None = None
+
+    def submit_order(self, *, order_data: Any) -> Any:
+        self.submit_calls.append(order_data)
+        if self.raise_exc is not None:
+            raise self.raise_exc
+
+        class _Resp:
+            id = "fake-order-id"
+
+        return _Resp()
+
+
+class _TrackingClientCls:
+    """Callable that acts as TradingClient class; stores created instances."""
+
+    def __init__(self, raise_exc: BaseException | None = None) -> None:
+        self.instances: list[_FakeTradingClient] = []
+        self._raise_exc = raise_exc
+
+    def __call__(self, *, api_key: str, secret_key: str, paper: bool) -> _FakeTradingClient:
+        client = _FakeTradingClient(api_key=api_key, secret_key=secret_key, paper=paper)
+        client.raise_exc = self._raise_exc
+        self.instances.append(client)
+        return client
 
 
 # ---------------------------------------------------------------------------
@@ -103,6 +171,11 @@ def _run(
     sa_result: str | None = "PASS",
     config_overrides: dict | None = None,
     missing_config: bool = False,
+    allow_real_live_submit: bool = False,
+    _trading_client_cls: Any = None,
+    _market_order_request_cls: Any = None,
+    _order_side_cls: Any = None,
+    _time_in_force_cls: Any = None,
 ) -> dict[str, Any]:
     """Build standard inputs, apply overrides, and call run_submit()."""
     cg, oo, bp, sa = _write_prereqs(tmp_path)
@@ -145,6 +218,11 @@ def _run(
         notional_cap=notional_cap,
         ledger_path=ledger,
         broker=broker,
+        allow_real_live_submit=allow_real_live_submit,
+        _trading_client_cls=_trading_client_cls,
+        _market_order_request_cls=_market_order_request_cls,
+        _order_side_cls=_order_side_cls,
+        _time_in_force_cls=_time_in_force_cls,
     )
 
 
@@ -237,6 +315,14 @@ class TestHappyPath:
         assert call["side"] == "buy"
         assert call["order_type"] == "market"
         assert call["notional"] == 100.0
+
+    def test_submit_called_with_client_order_id(self, tmp_path: Path) -> None:
+        broker = MockBroker()
+        out = _run(tmp_path, broker=broker)
+        call = broker.calls[0]
+        assert call["client_order_id"] == out["client_order_id"]
+        assert isinstance(call["client_order_id"], str)
+        assert call["client_order_id"].startswith("LIVE-SPY-BUY-")
 
     def test_all_required_fields_present(self, tmp_path: Path) -> None:
         out = _submitted(tmp_path)
@@ -959,6 +1045,89 @@ class TestCLI:
 
 
 # ---------------------------------------------------------------------------
+# TestCLIRealFlag
+# ---------------------------------------------------------------------------
+
+class TestCLIRealFlag:
+    """CLI tests for --allow-real-live-submit-once flag."""
+
+    def _invoke_with_flag(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> tuple[int, dict[str, Any]]:
+        from src.tools.live_single_manual_submit import main
+
+        monkeypatch.delenv("ALPACA_LIVE_API_KEY", raising=False)
+        monkeypatch.delenv("ALPACA_LIVE_SECRET_KEY", raising=False)
+
+        cg, oo, bp, sa = _write_prereqs(tmp_path)
+        cfg = _write_config(tmp_path)
+        out_path = tmp_path / "output.json"
+
+        argv = [
+            "--credential-guard", str(cg),
+            "--operator-override", str(oo),
+            "--broker-preflight", str(bp),
+            "--submit-approval", str(sa),
+            "--local-operator-config", str(cfg),
+            "--symbol", "SPY",
+            "--side", "buy",
+            "--order-type", "market",
+            "--notional-cap", "100.0",
+            "--ledger", str(tmp_path / "ledger.csv"),
+            "--output", str(out_path),
+            "--allow-real-live-submit-once",
+        ]
+        with pytest.raises(SystemExit) as exc_info:
+            main(argv)
+        data = json.loads(out_path.read_text(encoding="utf-8"))
+        return exc_info.value.code, data  # type: ignore[return-value]
+
+    def test_blocked_without_credentials(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        code, data = self._invoke_with_flag(tmp_path, monkeypatch)
+        assert code != 0
+        assert data["result"] == "BLOCKED"
+
+    def test_blocker_credentials_not_found(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _, data = self._invoke_with_flag(tmp_path, monkeypatch)
+        assert data["blocker"] is not None
+        assert "credentials" in data["blocker"]
+
+    def test_without_flag_blocker_not_implemented(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from src.tools.live_single_manual_submit import main
+
+        monkeypatch.setenv("ALPACA_LIVE_API_KEY", "fake-key")
+        monkeypatch.setenv("ALPACA_LIVE_SECRET_KEY", "fake-secret")
+
+        cg, oo, bp, sa = _write_prereqs(tmp_path)
+        cfg = _write_config(tmp_path)
+        out_path = tmp_path / "output.json"
+
+        argv = [
+            "--credential-guard", str(cg),
+            "--operator-override", str(oo),
+            "--broker-preflight", str(bp),
+            "--submit-approval", str(sa),
+            "--local-operator-config", str(cfg),
+            "--symbol", "SPY", "--side", "buy", "--order-type", "market",
+            "--notional-cap", "100.0",
+            "--ledger", str(tmp_path / "ledger.csv"),
+            "--output", str(out_path),
+        ]
+        with pytest.raises(SystemExit):
+            main(argv)
+        data = json.loads(out_path.read_text(encoding="utf-8"))
+        assert data["blocker"] == "real live submit adapter not implemented"
+
+
+# ---------------------------------------------------------------------------
 # TestNoCredentialLeakage
 # ---------------------------------------------------------------------------
 
@@ -1110,6 +1279,442 @@ class TestOutputStructure:
 
 
 # ---------------------------------------------------------------------------
+# TestRealAdapterFlagAbsent
+# ---------------------------------------------------------------------------
+
+class TestRealAdapterFlagAbsent:
+    """Without --allow-real-live-submit-once, broker=None is always BLOCKED."""
+
+    def test_result_blocked(self, tmp_path: Path) -> None:
+        out = _run(tmp_path, allow_real_live_submit=False)
+        assert out["result"] == "BLOCKED"
+
+    def test_blocker_not_implemented(self, tmp_path: Path) -> None:
+        out = _run(tmp_path, allow_real_live_submit=False)
+        assert out["blocker"] == "real live submit adapter not implemented"
+
+    def test_no_trading_client_constructed(self, tmp_path: Path) -> None:
+        factory = _TrackingClientCls()
+        _run(tmp_path, allow_real_live_submit=False, _trading_client_cls=factory)
+        assert len(factory.instances) == 0
+
+    def test_no_ledger(self, tmp_path: Path) -> None:
+        _run(tmp_path, allow_real_live_submit=False)
+        assert not (tmp_path / "ledger.csv").exists()
+
+    def test_submit_order_not_called(self, tmp_path: Path) -> None:
+        out = _run(tmp_path, allow_real_live_submit=False)
+        assert out["submit_order_called"] is False
+
+    def test_order_submitted_false(self, tmp_path: Path) -> None:
+        out = _run(tmp_path, allow_real_live_submit=False)
+        assert out["order_submitted"] is False
+
+    def test_broker_mutation_false(self, tmp_path: Path) -> None:
+        out = _run(tmp_path, allow_real_live_submit=False)
+        assert out["broker_mutation_calls_made"] is False
+
+
+# ---------------------------------------------------------------------------
+# TestRealAdapterMissingCredentials
+# ---------------------------------------------------------------------------
+
+class TestRealAdapterMissingCredentials:
+    """With flag but missing env credentials → BLOCKED, no TradingClient."""
+
+    def test_blocked(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("ALPACA_LIVE_API_KEY", raising=False)
+        monkeypatch.delenv("ALPACA_LIVE_SECRET_KEY", raising=False)
+        out = _run(tmp_path, allow_real_live_submit=True)
+        assert out["result"] == "BLOCKED"
+
+    def test_blocker_contains_credentials(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("ALPACA_LIVE_API_KEY", raising=False)
+        monkeypatch.delenv("ALPACA_LIVE_SECRET_KEY", raising=False)
+        out = _run(tmp_path, allow_real_live_submit=True)
+        assert out["blocker"] is not None
+        assert "credentials" in out["blocker"]
+
+    def test_no_trading_client_constructed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("ALPACA_LIVE_API_KEY", raising=False)
+        monkeypatch.delenv("ALPACA_LIVE_SECRET_KEY", raising=False)
+        factory = _TrackingClientCls()
+        _run(tmp_path, allow_real_live_submit=True, _trading_client_cls=factory)
+        assert len(factory.instances) == 0
+
+    def test_submit_order_not_called(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("ALPACA_LIVE_API_KEY", raising=False)
+        monkeypatch.delenv("ALPACA_LIVE_SECRET_KEY", raising=False)
+        out = _run(tmp_path, allow_real_live_submit=True)
+        assert out["submit_order_called"] is False
+
+    def test_no_ledger_written(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("ALPACA_LIVE_API_KEY", raising=False)
+        monkeypatch.delenv("ALPACA_LIVE_SECRET_KEY", raising=False)
+        out = _run(tmp_path, allow_real_live_submit=True)
+        assert out["live_ledger_written"] is False
+
+    def test_missing_only_api_key_blocked(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("ALPACA_LIVE_API_KEY", raising=False)
+        monkeypatch.setenv("ALPACA_LIVE_SECRET_KEY", "has-secret-only")
+        out = _run(tmp_path, allow_real_live_submit=True)
+        assert out["result"] == "BLOCKED"
+
+    def test_missing_only_secret_key_blocked(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ALPACA_LIVE_API_KEY", "has-api-only")
+        monkeypatch.delenv("ALPACA_LIVE_SECRET_KEY", raising=False)
+        out = _run(tmp_path, allow_real_live_submit=True)
+        assert out["result"] == "BLOCKED"
+
+
+# ---------------------------------------------------------------------------
+# TestRealAdapterGatesFail
+# ---------------------------------------------------------------------------
+
+class TestRealAdapterGatesFail:
+    """With flag but pre-gates fail → BLOCKED before TradingClient construction."""
+
+    def test_blocked_on_bad_symbol(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ALPACA_LIVE_API_KEY", "fake-key")
+        monkeypatch.setenv("ALPACA_LIVE_SECRET_KEY", "fake-secret")
+        factory = _TrackingClientCls()
+        out = _run(
+            tmp_path,
+            allow_real_live_submit=True,
+            symbol="AAPL",
+            _trading_client_cls=factory,
+        )
+        assert out["result"] == "BLOCKED"
+        assert len(factory.instances) == 0
+
+    def test_blocked_on_missing_prereq(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ALPACA_LIVE_API_KEY", "fake-key")
+        monkeypatch.setenv("ALPACA_LIVE_SECRET_KEY", "fake-secret")
+        factory = _TrackingClientCls()
+        out = _run(
+            tmp_path,
+            allow_real_live_submit=True,
+            cg_result=None,
+            _trading_client_cls=factory,
+        )
+        assert out["result"] == "BLOCKED"
+        assert len(factory.instances) == 0
+
+    def test_blocked_on_config_violation(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ALPACA_LIVE_API_KEY", "fake-key")
+        monkeypatch.setenv("ALPACA_LIVE_SECRET_KEY", "fake-secret")
+        factory = _TrackingClientCls()
+        out = _run(
+            tmp_path,
+            allow_real_live_submit=True,
+            config_overrides={"live_trading_enabled": False},
+            _trading_client_cls=factory,
+        )
+        assert out["result"] == "BLOCKED"
+        assert len(factory.instances) == 0
+
+    def test_no_submit_on_bad_notional(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ALPACA_LIVE_API_KEY", "fake-key")
+        monkeypatch.setenv("ALPACA_LIVE_SECRET_KEY", "fake-secret")
+        factory = _TrackingClientCls()
+        out = _run(
+            tmp_path,
+            allow_real_live_submit=True,
+            notional_cap=200.0,
+            _trading_client_cls=factory,
+        )
+        assert out["result"] == "BLOCKED"
+        assert len(factory.instances) == 0
+
+
+# ---------------------------------------------------------------------------
+# TestRealAdapterHappyPath
+# ---------------------------------------------------------------------------
+
+class TestRealAdapterHappyPath:
+    """With flag, all gates pass, mocked TradingClient → SUBMITTED."""
+
+    def _run_with_mocks(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        factory: _TrackingClientCls | None = None,
+    ) -> tuple[dict[str, Any], _TrackingClientCls]:
+        monkeypatch.setenv("ALPACA_LIVE_API_KEY", "fake-api-key")
+        monkeypatch.setenv("ALPACA_LIVE_SECRET_KEY", "fake-secret-key")
+        if factory is None:
+            factory = _TrackingClientCls()
+        out = _run(
+            tmp_path,
+            allow_real_live_submit=True,
+            _trading_client_cls=factory,
+            _market_order_request_cls=_FakeOrderRequest,
+            _order_side_cls=_FakeOrderSide,
+            _time_in_force_cls=_FakeTimeInForce,
+        )
+        return out, factory
+
+    def test_result_submitted(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        out, _ = self._run_with_mocks(tmp_path, monkeypatch)
+        assert out["result"] == "SUBMITTED"
+
+    def test_trading_client_paper_false(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _, factory = self._run_with_mocks(tmp_path, monkeypatch)
+        assert len(factory.instances) == 1
+        assert factory.instances[0].paper is False
+
+    def test_trading_client_constructed_exactly_once(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _, factory = self._run_with_mocks(tmp_path, monkeypatch)
+        assert len(factory.instances) == 1
+
+    def test_submit_order_called_once(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _, factory = self._run_with_mocks(tmp_path, monkeypatch)
+        assert len(factory.instances[0].submit_calls) == 1
+
+    def test_order_submitted_true(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        out, _ = self._run_with_mocks(tmp_path, monkeypatch)
+        assert out["order_submitted"] is True
+
+    def test_broker_mutation_true(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        out, _ = self._run_with_mocks(tmp_path, monkeypatch)
+        assert out["broker_mutation_calls_made"] is True
+
+    def test_broker_order_id_redacted(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        out, _ = self._run_with_mocks(tmp_path, monkeypatch)
+        assert out["broker_order_id_redacted"] == "<redacted>"
+
+    def test_ledger_written(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        out, _ = self._run_with_mocks(tmp_path, monkeypatch)
+        assert out["live_ledger_written"] is True
+
+    def test_no_violations(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        out, _ = self._run_with_mocks(tmp_path, monkeypatch)
+        assert out["violations"] == []
+
+    def test_client_order_id_not_none(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        out, _ = self._run_with_mocks(tmp_path, monkeypatch)
+        assert out["client_order_id"] is not None
+        assert out["client_order_id"].startswith("LIVE-SPY-BUY-")
+
+    def test_submitted_at_utc_not_none(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        out, _ = self._run_with_mocks(tmp_path, monkeypatch)
+        assert out["submitted_at_utc"] is not None
+
+
+# ---------------------------------------------------------------------------
+# TestRealAdapterOrderRequest
+# ---------------------------------------------------------------------------
+
+class TestRealAdapterOrderRequest:
+    """Verify the order request is constructed with correct parameters."""
+
+    def _run_with_request_capture(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        notional_cap: float = 100.0,
+    ) -> tuple[dict[str, Any], list[_FakeOrderRequest]]:
+        monkeypatch.setenv("ALPACA_LIVE_API_KEY", "fake-api-key")
+        monkeypatch.setenv("ALPACA_LIVE_SECRET_KEY", "fake-secret-key")
+
+        captured: list[_FakeOrderRequest] = []
+
+        class _CapturingClient:
+            def __init__(self, **kwargs: Any) -> None:
+                pass
+
+            def submit_order(self, *, order_data: Any) -> Any:
+                captured.append(order_data)
+
+                class _Resp:
+                    id = "mock-id"
+
+                return _Resp()
+
+        out = _run(
+            tmp_path,
+            allow_real_live_submit=True,
+            notional_cap=notional_cap,
+            _trading_client_cls=_CapturingClient,
+            _market_order_request_cls=_FakeOrderRequest,
+            _order_side_cls=_FakeOrderSide,
+            _time_in_force_cls=_FakeTimeInForce,
+        )
+        return out, captured
+
+    def test_symbol_is_spy(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _, reqs = self._run_with_request_capture(tmp_path, monkeypatch)
+        assert len(reqs) == 1
+        assert reqs[0].kwargs["symbol"] == "SPY"
+
+    def test_notional_is_correct(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _, reqs = self._run_with_request_capture(tmp_path, monkeypatch, notional_cap=75.0)
+        assert reqs[0].kwargs["notional"] == 75.0
+
+    def test_side_is_buy_enum(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _, reqs = self._run_with_request_capture(tmp_path, monkeypatch)
+        assert reqs[0].kwargs["side"] == _FakeOrderSide.BUY
+
+    def test_time_in_force_is_day_enum(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _, reqs = self._run_with_request_capture(tmp_path, monkeypatch)
+        assert reqs[0].kwargs["time_in_force"] == _FakeTimeInForce.DAY
+
+    def test_client_order_id_present(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        out, reqs = self._run_with_request_capture(tmp_path, monkeypatch)
+        assert "client_order_id" in reqs[0].kwargs
+        assert reqs[0].kwargs["client_order_id"] == out["client_order_id"]
+
+    def test_client_order_id_format(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _, reqs = self._run_with_request_capture(tmp_path, monkeypatch)
+        assert reqs[0].kwargs["client_order_id"].startswith("LIVE-SPY-BUY-")
+
+    def test_exactly_one_request_created(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _, reqs = self._run_with_request_capture(tmp_path, monkeypatch)
+        assert len(reqs) == 1
+
+
+# ---------------------------------------------------------------------------
+# TestRealAdapterExceptionRedaction
+# ---------------------------------------------------------------------------
+
+class TestRealAdapterExceptionRedaction:
+    """Exception from real broker: secret text must not appear in any output."""
+
+    def _run_with_exc(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        secret: str,
+    ) -> dict[str, Any]:
+        monkeypatch.setenv("ALPACA_LIVE_API_KEY", "fake-api-key")
+        monkeypatch.setenv("ALPACA_LIVE_SECRET_KEY", "fake-secret-key")
+        factory = _TrackingClientCls(raise_exc=RuntimeError(secret))
+        return _run(
+            tmp_path,
+            allow_real_live_submit=True,
+            _trading_client_cls=factory,
+            _market_order_request_cls=_FakeOrderRequest,
+            _order_side_cls=_FakeOrderSide,
+            _time_in_force_cls=_FakeTimeInForce,
+        )
+
+    def test_blocked_on_exception(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        out = self._run_with_exc(tmp_path, monkeypatch, "some-error")
+        assert out["result"] == "BLOCKED"
+
+    def test_secret_not_in_blocker(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        secret = "sk-REAL-SECRET-SHOULD-NOT-APPEAR"
+        out = self._run_with_exc(tmp_path, monkeypatch, secret)
+        assert secret not in (out["blocker"] or "")
+
+    def test_secret_not_in_violations(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        secret = "sk-REAL-SECRET-SHOULD-NOT-APPEAR"
+        out = self._run_with_exc(tmp_path, monkeypatch, secret)
+        for v in out["violations"]:
+            assert secret not in v
+
+    def test_secret_not_in_output_json(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        secret = "sk-REAL-SECRET-SHOULD-NOT-APPEAR"
+        out = self._run_with_exc(tmp_path, monkeypatch, secret)
+        assert secret not in json.dumps(out)
+
+    def test_submit_order_called_true(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        out = self._run_with_exc(tmp_path, monkeypatch, "err")
+        assert out["submit_order_called"] is True
+
+    def test_broker_mutation_false(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        out = self._run_with_exc(tmp_path, monkeypatch, "err")
+        assert out["broker_mutation_calls_made"] is False
+
+    def test_ledger_row_status_exception(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        out = self._run_with_exc(tmp_path, monkeypatch, "err")
+        ledger = tmp_path / "ledger.csv"
+        assert ledger.exists()
+        with ledger.open(encoding="utf-8", newline="") as fh:
+            rows = list(csv.DictReader(fh))
+        assert rows[0]["status"] == "exception"
+        assert rows[0]["error"] == "details redacted"
+
+    def test_blocker_is_generic_redacted_message(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        out = self._run_with_exc(tmp_path, monkeypatch, "highly-specific-error-text")
+        assert out["blocker"] == "broker exception during submit (details redacted)"
+
+
+# ---------------------------------------------------------------------------
 # TestSourceScans
 # ---------------------------------------------------------------------------
 
@@ -1129,10 +1734,14 @@ def _non_comment_lines() -> list[str]:
 
 
 class TestSourceScans:
-    def test_no_alpaca_import(self) -> None:
+    def test_no_module_level_alpaca_import(self) -> None:
         for line in _source_lines():
-            assert "from alpaca" not in line, f"Alpaca import found: {line!r}"
-            assert "import alpaca" not in line, f"Alpaca import found: {line!r}"
+            assert not line.startswith("from alpaca"), (
+                f"Module-level alpaca import found: {line!r}"
+            )
+            assert not line.startswith("import alpaca"), (
+                f"Module-level alpaca import found: {line!r}"
+            )
 
     def test_no_requests_import(self) -> None:
         for line in _source_lines():
@@ -1162,6 +1771,18 @@ class TestSourceScans:
     def test_no_append_live_ledger_row(self) -> None:
         for line in _non_comment_lines():
             assert "append_live_ledger_row" not in line
+
+    def test_no_retry_loop(self) -> None:
+        src = _source_text()
+        assert "while True" not in src
+        assert "for _ in range" not in src
+
+    def test_no_module_level_os_environ_get(self) -> None:
+        for line in _source_lines():
+            if line.startswith("os.environ"):
+                raise AssertionError(
+                    f"Module-level os.environ call found: {line!r}"
+                )
 
 
 # ---------------------------------------------------------------------------

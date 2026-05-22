@@ -1331,3 +1331,129 @@ All tests use a mock broker — no real Alpaca calls, no credentials read.
 > Automated and recurring live trading remain unimplemented.
 > No orders endpoint, POST/PATCH/DELETE, or `config_safety` bypass exist
 > in the current codebase.
+
+---
+
+## Milestone: Real Live Submit Adapter Complete (Mock-Only Tests)
+
+### Recommended git tag
+
+```
+live-single-manual-submit-real-adapter-complete
+```
+
+### What this milestone means
+
+| Item | State |
+|------|-------|
+| v2 approvals | Complete |
+| Enablement gate | Complete |
+| Ledger dry-run lifecycle | Complete |
+| `live_operator_config_override_review` | Complete |
+| `live_credential_presence_guard` | Complete |
+| Broker preflight design | Complete |
+| `live_broker_preflight_readonly` mock-only core | Complete |
+| `AlpacaLiveReadOnlyBroker` real adapter | Complete |
+| Manual live read-only preflight run | PASS observed |
+| Single submit attempt design | Complete |
+| `live_single_submit_approval_review` | Complete — 196 tests |
+| `live_single_manual_submit` mock-only core | Complete — 193 tests |
+| `AlpacaLiveSubmitBroker` real adapter | **Complete** — `TradingClient(paper=False)`, lazy SDK import |
+| `--allow-real-live-submit-once` CLI flag | **Complete** — required; without it CLI is always BLOCKED |
+| Tests for real adapter | **Complete** — 243 total tests, all mock-only |
+| Real live order submitted | **No** — not submitted as part of this PR |
+| Real Alpaca calls in tests | **No** — all tests use mock broker and mock `TradingClient` |
+| Automated live trading | **Not implemented** |
+| Recurring live trading | **Not implemented** |
+| `cancel_order` / `replace_order` | Absent — not implemented |
+| Retry logic | Absent — not implemented |
+| `config_safety` | **Still required** — local operator config must override all three flags |
+
+### `AlpacaLiveSubmitBroker` — what it does
+
+`AlpacaLiveSubmitBroker` wraps `alpaca-py` `TradingClient(paper=False)` and
+exposes exactly one method: `submit_order`.
+
+| Property | Value |
+|----------|-------|
+| `TradingClient` mode | `paper=False` — real live account |
+| SDK import | Lazy — inside `__init__` only; no module-level import |
+| `submit_order` | Called exactly once per run; market buy SPY with notional |
+| `client_order_id` | Generated and passed to order request if SDK supports it |
+| `broker_order_id_redacted` | Always `"<redacted>"` in output — raw ID never written |
+| Broker exception text | Redacted in all output fields, violations, blocker, stdout, ledger |
+| `cancel_order` | Absent |
+| `replace_order` | Absent |
+| Retry logic | Absent |
+| Credentials read | Only after all gates pass and `--allow-real-live-submit-once` is present |
+| Orders endpoint | Not used except the single `submit_order` SDK call |
+| POST/PATCH/DELETE | No direct HTTP mutation calls except via broker SDK submit |
+
+### Gate sequence (all must pass before `AlpacaLiveSubmitBroker` is constructed)
+
+| Gate | Blocker on failure |
+|------|--------------------|
+| Four prerequisite artifacts with `result="PASS"` | BLOCKED, no credential read, no broker |
+| `symbol` exactly `"SPY"` | BLOCKED, no credential read, no broker |
+| `side` exactly `"buy"` | BLOCKED, no credential read, no broker |
+| `order_type` exactly `"market"` | BLOCKED, no credential read, no broker |
+| `notional_cap` in (0, 100.0] — not bool, not string | BLOCKED, no credential read, no broker |
+| Local operator YAML `live_trading_enabled: true` (strict boolean) | BLOCKED, no credential read, no broker |
+| Local operator YAML `live_submit_dry_run: false` (strict boolean) | BLOCKED, no credential read, no broker |
+| Local operator YAML `live_kill_switch_enabled: false` (strict boolean) | BLOCKED, no credential read, no broker |
+| `--allow-real-live-submit-once` flag present | Without flag: BLOCKED ("real live submit adapter not implemented") |
+| `ALPACA_LIVE_API_KEY` and `ALPACA_LIVE_SECRET_KEY` non-empty in env | BLOCKED ("credentials not found in environment") |
+
+### Test coverage (this PR)
+
+243 unit tests in `tests/test_live_single_manual_submit.py`.
+Full suite: 3,819 tests passed.
+All tests use a mock broker or mock `TradingClient` — no real Alpaca calls in any test.
+
+New test classes added:
+- `TestRealAdapterFlagAbsent` — without flag, no credential read, no TradingClient, no submit
+- `TestRealAdapterMissingCredentials` — with flag, missing env vars → BLOCKED before broker
+- `TestRealAdapterGatesFail` — with flag, pre-gates fail → no TradingClient constructed
+- `TestRealAdapterHappyPath` — with flag, all gates pass, mocked TradingClient → SUBMITTED, `paper=False`
+- `TestRealAdapterOrderRequest` — order request has symbol=SPY, notional, side=BUY, time_in_force=DAY, client_order_id
+- `TestRealAdapterExceptionRedaction` — broker exception → secret absent from all output
+- `TestCLIRealFlag` — CLI with/without flag behavior via `main()`
+
+Source scan tests updated:
+- `test_no_alpaca_import` → `test_no_module_level_alpaca_import` (allows lazy imports inside methods)
+- Added `test_no_retry_loop` — no `while True` or `for _ in range` in source
+- Added `test_no_module_level_os_environ_get` — no module-level env reads
+
+### Safety invariants confirmed at this milestone
+
+- CLI without `--allow-real-live-submit-once` is always BLOCKED — tested
+- Credentials are read only after all gates pass and the flag is present — tested
+- `TradingClient` is constructed only after all gates pass — tested with `_TrackingClientCls`
+- `submit_order` is called exactly once per run — tested
+- No real order was submitted during this PR
+- No real Alpaca endpoint was contacted by any test or by this PR
+- No credential values were read, stored, printed, or written to any artifact in this PR
+- `cancel_order` and `replace_order` are absent from the adapter source — source-scanned
+- No retry loop exists in source — source-scanned
+- Broker exception text is redacted in all output — tested with secret injection
+- `broker_order_id_redacted` is always `"<redacted>"` — tested
+- Pre-submit ledger row written before `submit_order`; updated after — tested
+- `config_safety` was not bypassed — operator must explicitly override all three flags in local config
+
+### Warning
+
+> **This milestone does not approve real trading.**
+> **This milestone does not approve live order submission.**
+> **No real order has been submitted.**
+> **All tests are mock-only — no real Alpaca calls in any test.**
+> CLI requires `--allow-real-live-submit-once` plus all prerequisite artifacts
+> with `result="PASS"`, strict local operator config booleans
+> (`live_trading_enabled=true`, `live_submit_dry_run=false`, `live_kill_switch_enabled=false`),
+> and valid credentials in `ALPACA_LIVE_API_KEY` / `ALPACA_LIVE_SECRET_KEY`.
+> Without the flag, CLI is always BLOCKED.
+> `cancel_order` and `replace_order` remain unimplemented.
+> No retry logic exists — BLOCKED is a final result.
+> Automated and recurring live trading remain unimplemented.
+> The operator must satisfy all gates, set the explicit flag, and provide valid
+> credentials before a real order attempt can be made.
+> `config_safety` overrides must be reset to safe defaults immediately after any attempt.
