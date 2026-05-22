@@ -797,6 +797,82 @@ class TestRawValueRedaction:
         assert r["approval_scope"] is None
 
 
+_BOOL_FALSE_FIELDS = [
+    "recurring_trading_approved",
+    "automated_trading_approved",
+]
+
+_BOOL_TRUE_FIELDS = [
+    "one_attempt_only_acknowledged",
+    "config_safety_override_is_local_only_acknowledged",
+    "no_cancel_replace_acknowledged",
+    "live_broker_preflight_pass_confirmed",
+]
+
+
+class TestBooleanFieldRedaction:
+    """Secret strings injected as values for strict-boolean fields must not
+    appear in output JSON, violations, blocker, or stdout."""
+
+    def _check_absent(
+        self,
+        r: dict,
+        secret: str,
+        capsys: pytest.CaptureFixture,
+    ) -> None:
+        serialised = json.dumps(r)
+        assert secret not in serialised, "secret in output JSON"
+        assert all(secret not in v for v in r.get("violations", [])), (
+            "secret in violations"
+        )
+        if r.get("blocker"):
+            assert secret not in r["blocker"], "secret in blocker"
+        print_review(r)
+        out = capsys.readouterr().out
+        assert secret not in out, "secret in stdout"
+
+    @pytest.mark.parametrize("field", _BOOL_FALSE_FIELDS)
+    def test_false_field_secret_not_echoed(
+        self, tmp_path: Path, field: str, capsys: pytest.CaptureFixture
+    ) -> None:
+        secret = f"SECRET-FOR-{field}-{_INJECTED_SECRET}"
+        a = _good_artifact()
+        a[field] = secret          # inject secret as the field value
+        r = run_review(approval_path=_write_json(tmp_path, f"{field}.json", a), now_utc=_NOW)
+        assert r["result"] == "BLOCKED"
+        self._check_absent(r, secret, capsys)
+
+    @pytest.mark.parametrize("field", _BOOL_TRUE_FIELDS)
+    def test_true_field_secret_not_echoed(
+        self, tmp_path: Path, field: str, capsys: pytest.CaptureFixture
+    ) -> None:
+        secret = f"SECRET-FOR-{field}-{_INJECTED_SECRET}"
+        a = _good_artifact()
+        a[field] = secret          # inject secret as the field value
+        r = run_review(approval_path=_write_json(tmp_path, f"{field}.json", a), now_utc=_NOW)
+        assert r["result"] == "BLOCKED"
+        self._check_absent(r, secret, capsys)
+
+    @pytest.mark.parametrize("field", _BOOL_FALSE_FIELDS)
+    def test_false_field_violation_message_safe(
+        self, tmp_path: Path, field: str
+    ) -> None:
+        """Violation message must not contain the raw injected value."""
+        a = _good_artifact()
+        a[field] = "INJECTED_BAD_VALUE_XYZ"
+        r = run_review(approval_path=_write_json(tmp_path, f"{field}.json", a), now_utc=_NOW)
+        assert all("INJECTED_BAD_VALUE_XYZ" not in v for v in r["violations"])
+
+    @pytest.mark.parametrize("field", _BOOL_TRUE_FIELDS)
+    def test_true_field_violation_message_safe(
+        self, tmp_path: Path, field: str
+    ) -> None:
+        a = _good_artifact()
+        a[field] = "INJECTED_BAD_VALUE_XYZ"
+        r = run_review(approval_path=_write_json(tmp_path, f"{field}.json", a), now_utc=_NOW)
+        assert all("INJECTED_BAD_VALUE_XYZ" not in v for v in r["violations"])
+
+
 # ---------------------------------------------------------------------------
 # run_review never raises
 # ---------------------------------------------------------------------------

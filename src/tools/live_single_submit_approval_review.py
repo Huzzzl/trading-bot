@@ -22,9 +22,9 @@ PASS conditions (all must hold)
 * ``operator_name`` is a non-empty string.
 * ``approval_note`` is a non-empty string.
 * ``operator_initials`` is a non-empty string.
-* ``symbol`` == ``"SPY"`` (case-insensitive match, stored as canonical).
-* ``side`` == ``"buy"`` (case-insensitive).
-* ``order_type`` == ``"market"`` (case-insensitive).
+* ``symbol`` is exactly ``"SPY"`` (no case folding, no whitespace stripping).
+* ``side`` is exactly ``"buy"`` (no case folding, no whitespace stripping).
+* ``order_type`` is exactly ``"market"`` (no case folding, no whitespace stripping).
 * ``notional_cap`` is a number in the range (0, 100.0] (inclusive).
 * ``approval_scope`` == ``"AUTHORIZE_SINGLE_LIVE_MARKET_BUY_SPY_ONCE"`` (exact).
 * ``recurring_trading_approved`` is JSON boolean ``false`` exactly.
@@ -243,17 +243,17 @@ def validate_approval(
             f"'{_REQUIRED_SCOPE}'"
         )
 
-    # --- Strict boolean false fields ---
+    # --- Strict boolean false fields (do not echo raw value) ---
     for field in ("recurring_trading_approved", "automated_trading_approved"):
         val = artifact.get(field)
         if val is not False:
             violations.append(
-                f"{field}={val!r} -- must be JSON boolean false "
+                f"{field} must be JSON boolean false "
                 "(field must be present and explicitly false; "
                 "no recurring or automated live trading is approved)"
             )
 
-    # --- Strict boolean true acknowledgements ---
+    # --- Strict boolean true acknowledgements (do not echo raw value) ---
     for field in (
         "one_attempt_only_acknowledged",
         "config_safety_override_is_local_only_acknowledged",
@@ -263,7 +263,7 @@ def validate_approval(
         val = artifact.get(field)
         if val is not True:
             violations.append(
-                f"{field}={val!r} -- must be JSON boolean true "
+                f"{field} must be JSON boolean true "
                 "(operator must explicitly acknowledge this field)"
             )
 
