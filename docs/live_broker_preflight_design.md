@@ -1,16 +1,22 @@
 # Live Broker Preflight Design (Read-Only)
 
-Design document for a future read-only live broker API preflight tool.
+Design document for the read-only live broker API preflight tool.
 
-**This PR does not implement broker preflight.**
-**This PR does not contact Alpaca.**
-**This PR does not approve real trading.**
-**This PR does not approve live order submission.**
-**No live order may be submitted after this design PR.**
+> **Implementation complete:** `AlpacaLiveReadOnlyBroker` was added in PR #112.
+> See [Current Implementation Status](#current-implementation-status) and
+> [docs/live_readiness_status.md — milestone](live_readiness_status.md)
+> (tag: `live-broker-preflight-readonly-adapter-complete`) for the snapshot.
+
+**The design PR did not implement broker preflight.**
+**The design PR did not contact Alpaca.**
+**This design does not approve real trading.**
+**This design does not approve live order submission.**
 **Real live submit remains unimplemented. `submit_order` remains unreachable.**
+**Real broker preflight has NOT been performed yet.**
+**`--allow-live-broker-api-readonly` is required for any live API contact.**
 
-The next implementation PR, if any, must still be read-only and manually
-run. It must not submit, cancel, or modify any order or account state.
+The implementation is read-only and manually gated. It must not submit,
+cancel, or modify any order or account state.
 
 ---
 
@@ -171,7 +177,7 @@ broker response:
 
 ---
 
-## Proposed CLI
+## CLI
 
 ```bash
 python -m src.tools.live_broker_preflight_readonly \
@@ -180,10 +186,12 @@ python -m src.tools.live_broker_preflight_readonly \
     --symbol SPY \
     --side buy \
     --notional-cap 100.0 \
-    --output output/live_broker_preflight_readonly.json
+    --output output/live_broker_preflight_readonly.json \
+    --allow-live-broker-api-readonly
 ```
 
 Exit 0 on PASS; exit 1 on BLOCKED.  Always writes output JSON.
+Without `--allow-live-broker-api-readonly`: exits 1, `broker_calls_made=false`.
 
 ---
 
