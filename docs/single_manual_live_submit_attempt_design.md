@@ -3,15 +3,12 @@
 Design for a future one-time, manually approved, single live SPY buy attempt
 with notional cap ≤ $100.
 
-**This PR does NOT submit an order.**
-**This PR does NOT implement live submit.**
-**This PR does NOT call Alpaca.**
-**This PR does NOT read credentials.**
-**This PR does NOT write the live ledger.**
-**This PR does NOT enable automated trading.**
-**This PR does NOT bypass `config_safety`.**
-**Real live submit remains unimplemented after this PR.**
-**No live order can be submitted as a result of this design PR.**
+**This design doc is now paired with a complete implementation PR.**
+**No real order has been submitted.**
+**Tests are mock-only — no real Alpaca calls in any test.**
+**Real submit requires --allow-real-live-submit-once plus all safety gates.**
+**CLI without the flag remains BLOCKED.**
+**No live order can be submitted without the explicit CLI flag and all gates passing.**
 
 ---
 
@@ -435,12 +432,17 @@ All unit tests must use a mock broker. No real Alpaca calls in any test.
 | This design document | Complete — this file |
 | `src/tools/live_single_submit_approval_review.py` | **Complete** — offline read-only approval review |
 | `tests/test_live_single_submit_approval_review.py` | **Complete** — 196 tests, all pass |
-| `src/tools/live_single_manual_submit.py` | **Complete** — mock-only core framework |
-| `tests/test_live_single_manual_submit.py` | **Complete** — 193 tests, all pass |
-| Real live submit | **Not implemented** |
+| `src/tools/live_single_manual_submit.py` | **Complete** — real `AlpacaLiveSubmitBroker` adapter implemented |
+| `tests/test_live_single_manual_submit.py` | **Complete** — 255 tests, all pass (mock-only) |
+| Real live submit adapter | **Implemented** — `AlpacaLiveSubmitBroker` with lazy SDK import |
+| CLI without `--allow-real-live-submit-once` | Always BLOCKED — "real live submit adapter not implemented" |
+| CLI with flag + all gates + credentials | Constructs real adapter; calls `submit_order` exactly once |
+| Real live order submitted | **No** — not submitted as part of this PR |
+| Real Alpaca calls in tests | **No** — all tests use mock broker and mock `TradingClient` |
 | Automated live trading | **Not implemented** |
-| Real `submit_order` adapter for live | Absent — CLI always BLOCKED |
-| `config_safety` | Still the hard blocker |
+| `cancel_order` / `replace_order` | Absent — not implemented |
+| Retry logic | Absent — not implemented |
+| `config_safety` | Still the hard blocker without explicit local operator config overrides |
 
 ### `live_single_submit_approval_review` — what it does
 
@@ -466,46 +468,53 @@ PASS does not submit an order and does not enable live trading.
 
 **No live order can be submitted as a result of this PR.**
 
-### `live_single_manual_submit` — what it does (mock-only core)
+### `live_single_manual_submit` — what it does (with real adapter)
 
-`src/tools/live_single_manual_submit.py` is a mock-only core framework for a
-future one-time single live SPY buy attempt.
+`src/tools/live_single_manual_submit.py` implements the complete gate sequence
+for a one-time single live SPY buy attempt, with a real `AlpacaLiveSubmitBroker`
+adapter that is constructed only after all safety gates pass and the
+`--allow-real-live-submit-once` CLI flag is present.
 
 | Property | Value |
 |----------|-------|
-| CLI result | Always `BLOCKED` — real live submit adapter not implemented |
-| SUBMITTED result | Reachable only via injected mock broker in unit tests |
-| Calls Alpaca | No |
-| Imports Alpaca SDK | No |
-| Imports network libraries (requests/httpx/aiohttp/urllib.request) | No |
-| Reads credentials | No |
-| Calls `cancel_order` / `replace_order` | No |
-| Retries failed submit | No |
-| Writes live ledger | Only when mock broker is injected (unit tests only) |
-| Removes `config_safety` on any path | No |
+| CLI without `--allow-real-live-submit-once` | Always `BLOCKED` — "real live submit adapter not implemented" |
+| CLI with flag + all gates + credentials | Constructs `AlpacaLiveSubmitBroker`; calls `submit_order` exactly once |
+| Alpaca SDK import | Lazy — inside `AlpacaLiveSubmitBroker.__init__` only; no module-level import |
+| Reads credentials | Only after all gates pass and `--allow-real-live-submit-once` is present |
+| Calls `cancel_order` / `replace_order` | No — absent from adapter source |
+| Retries failed submit | No — single attempt; BLOCKED is final |
+| Writes live ledger | Pre-submit `attempting` row, then updated to `submitted` or `exception` |
+| Removes `config_safety` | No |
 | Approves automated or recurring trading | No |
+| Real order submitted (this PR) | No — no real order was submitted |
+| Real Alpaca calls in tests | No — all tests use mock broker and mock `TradingClient` |
 | `run_submit` raises | Never |
 
-CLI always passes `broker=None`, which triggers the gate
-`"real live submit adapter not implemented"` after all other gates pass.
-A real broker adapter must be implemented in a future PR to reach SUBMITTED
-in production.
+Without `--allow-real-live-submit-once`, CLI always passes `broker=None` to
+`run_submit()` with `allow_real_live_submit=False`, which triggers the gate
+`"real live submit adapter not implemented"`.  With the flag and all gates
+passing, `_build_live_submit_broker()` reads credentials from env and
+constructs `AlpacaLiveSubmitBroker(paper=False)`.
 
-**No live order can be submitted as a result of this PR.**
+**No real order was submitted as part of this PR.**
+**All tests are mock-only — no real Alpaca calls in any test.**
 
 ---
 
 ## Warning
 
-> **This design PR does not approve real trading.**
-> **This design PR does not approve live order submission.**
-> **This design PR does not implement any part of the submit flow.**
-> Real live submit remains unimplemented after this PR.
-> `config_safety` remains the hard blocker.
-> `submit_order`, `cancel_order`, and `replace_order` remain absent for live.
-> The implementation of this design requires its own dedicated PR, its own
-> full test suite (mock broker only), and explicit operator approval at
-> runtime — none of which are provided here.
+> **The real `AlpacaLiveSubmitBroker` adapter is now implemented.**
+> **No real order has been submitted.**
+> **All tests are mock-only — no real Alpaca calls in any test.**
+> CLI requires `--allow-real-live-submit-once` plus all prerequisite artifacts
+> with `result="PASS"`, strict local operator config booleans, and valid
+> credentials in `ALPACA_LIVE_API_KEY` / `ALPACA_LIVE_SECRET_KEY`.
+> Without the flag, CLI is always BLOCKED.
+> `cancel_order` and `replace_order` remain unimplemented.
+> No retry logic exists — BLOCKED is a final result.
+> Automated and recurring live trading remain unimplemented.
+> No orders endpoint, POST/PATCH/DELETE, or `config_safety` bypass exist
+> in the current codebase.
 
 ---
 

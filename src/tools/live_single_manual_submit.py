@@ -1,13 +1,13 @@
 """
 tools/live_single_manual_submit.py
 ------------------------------------
-Mock-only core framework for a future one-time manually approved single live
-SPY market buy attempt.
+One-time manually approved single live SPY market buy attempt via the Alpaca SDK.
 
-CLI mode is BLOCKED -- the real live submit adapter is not implemented.
-SUBMITTED is only reachable through an injected mock broker in unit tests.
+Without --allow-real-live-submit-once, CLI is always BLOCKED -- real live submit
+is not activated.  With the flag, credentials are read from environment variables
+and an AlpacaLiveSubmitBroker is constructed only after ALL safety gates pass.
 
-Usage::
+Usage (without flag -- always BLOCKED)::
 
     python -m src.tools.live_single_manual_submit \\
         --credential-guard output/live_credential_presence_guard.json \\
@@ -22,13 +22,30 @@ Usage::
         --ledger output/live_ledger.csv \\
         --output output/single_manual_live_submit_attempt.json
 
+Usage (real submit -- one attempt only, credentials required in env)::
+
+    ALPACA_LIVE_API_KEY=<key> ALPACA_LIVE_SECRET_KEY=<secret> \\
+    python -m src.tools.live_single_manual_submit \\
+        --credential-guard output/live_credential_presence_guard.json \\
+        --operator-override output/live_operator_config_override_review.json \\
+        --broker-preflight output/live_broker_preflight_readonly.json \\
+        --submit-approval output/live_single_submit_approval_review.json \\
+        --local-operator-config path/to/local_operator_config.yaml \\
+        --symbol SPY \\
+        --side buy \\
+        --order-type market \\
+        --notional-cap 100.0 \\
+        --ledger output/live_ledger.csv \\
+        --output output/single_manual_live_submit_attempt.json \\
+        --allow-real-live-submit-once
+
 Fail-closed design
 ------------------
 Every gate failure returns result="BLOCKED" with no broker calls and no ledger
-writes.  The real live submit adapter is not implemented; CLI always passes
-broker=None and always exits with BLOCKED
-("real live submit adapter not implemented").  SUBMITTED is reachable only
-through a mock broker injected in unit tests.
+writes.  Credentials and TradingClient are only constructed after ALL gates pass
+and --allow-real-live-submit-once is present.  Without the flag, broker=None is
+passed and the run always exits BLOCKED
+("real live submit adapter not implemented").
 
 Required gates (all must pass before any broker call)
 ------------------------------------------------------
@@ -45,7 +62,8 @@ Required gates (all must pass before any broker call)
    - live_trading_enabled: true  (strict boolean)
    - live_submit_dry_run: false  (strict boolean)
    - live_kill_switch_enabled: false  (strict boolean)
-7. broker must not be None -- CLI always passes None, so CLI always BLOCKED.
+7. --allow-real-live-submit-once flag must be set; credentials must be present
+   in ALPACA_LIVE_API_KEY and ALPACA_LIVE_SECRET_KEY environment variables.
 
 Output fields
 -------------
@@ -81,16 +99,17 @@ State table
 
 What it never does
 ------------------
-* Never calls any Alpaca endpoint.
-* Never imports the Alpaca SDK.
-* Never imports requests, httpx, aiohttp, or urllib.request.
-* Never reads credentials.
 * Never calls cancel_order or replace_order.
 * Never retries a failed submit.
 * Never enables automated or recurring trading.
 * Never mutates settings.yaml.
 * Never bypasses config_safety.
 * Never echoes raw invalid field values in output or stdout.
+* Never exposes credentials, account IDs, or broker exception text in output.
+* Imports the Alpaca SDK lazily (inside AlpacaLiveSubmitBroker.__init__ only --
+  never at module level).
+* Reads credentials from environment only after all gates pass and
+  --allow-real-live-submit-once is present.
 * run_submit never raises.
 """
 
@@ -98,6 +117,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import sys
 import uuid
 from datetime import datetime, timezone
@@ -116,6 +136,9 @@ _REQUIRED_SIDE       = "buy"
 _REQUIRED_ORDER_TYPE = "market"
 _MAX_NOTIONAL_CAP    = 100.0
 
+_LIVE_API_KEY_ENV    = "ALPACA_LIVE_API_KEY"
+_LIVE_SECRET_KEY_ENV = "ALPACA_LIVE_SECRET_KEY"
+
 
 # ---------------------------------------------------------------------------
 # Ledger schema
@@ -132,6 +155,103 @@ LEDGER_COLUMNS: list[str] = [
     "broker_order_id",
     "error",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Real Alpaca live submit broker
+# ---------------------------------------------------------------------------
+
+class AlpacaLiveSubmitBroker:
+    """Real Alpaca live submit broker with lazy SDK import.
+
+    All SDK imports are deferred to __init__ to allow test injection without
+    importing alpaca at module level.  Credentials are passed in; never read
+    here.  Only submit_order is implemented -- cancel_order and replace_order
+    are intentionally absent.
+    """
+
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        secret_key: str,
+        _trading_client_cls: Any = None,
+        _market_order_request_cls: Any = None,
+        _order_side_cls: Any = None,
+        _time_in_force_cls: Any = None,
+    ) -> None:
+        if _trading_client_cls is None:
+            from alpaca.trading.client import TradingClient as _tc
+            _trading_client_cls = _tc
+        if _market_order_request_cls is None:
+            from alpaca.trading.requests import MarketOrderRequest as _mor
+            _market_order_request_cls = _mor
+        if _order_side_cls is None:
+            from alpaca.trading.enums import OrderSide as _os
+            _order_side_cls = _os
+        if _time_in_force_cls is None:
+            from alpaca.trading.enums import TimeInForce as _tif
+            _time_in_force_cls = _tif
+
+        self._client              = _trading_client_cls(
+            api_key=api_key, secret_key=secret_key, paper=False
+        )
+        self._MarketOrderRequest  = _market_order_request_cls
+        self._OrderSide           = _order_side_cls
+        self._TimeInForce         = _time_in_force_cls
+
+    def submit_order(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        order_type: str,
+        notional: float,
+        client_order_id: str | None = None,
+    ) -> dict[str, Any]:
+        req_kwargs: dict[str, Any] = {
+            "symbol":        symbol,
+            "notional":      notional,
+            "side":          self._OrderSide.BUY,
+            "time_in_force": self._TimeInForce.DAY,
+        }
+        if client_order_id is not None:
+            req_kwargs["client_order_id"] = client_order_id
+        req   = self._MarketOrderRequest(**req_kwargs)
+        _order = self._client.submit_order(order_data=req)
+        return {"id": "<redacted>"}
+
+
+# ---------------------------------------------------------------------------
+# Broker factory
+# ---------------------------------------------------------------------------
+
+def _build_live_submit_broker(
+    violations: list[str],
+    *,
+    _trading_client_cls: Any = None,
+    _market_order_request_cls: Any = None,
+    _order_side_cls: Any = None,
+    _time_in_force_cls: Any = None,
+) -> Any:
+    """Read credentials from environment and construct AlpacaLiveSubmitBroker.
+
+    Returns None and appends a violation if any credential is missing or blank.
+    Credentials are read here -- never before all gates pass.
+    """
+    api_key    = os.environ.get(_LIVE_API_KEY_ENV, "").strip()
+    secret_key = os.environ.get(_LIVE_SECRET_KEY_ENV, "").strip()
+    if not api_key or not secret_key:
+        violations.append("credentials not found in environment")
+        return None
+    return AlpacaLiveSubmitBroker(
+        api_key=api_key,
+        secret_key=secret_key,
+        _trading_client_cls=_trading_client_cls,
+        _market_order_request_cls=_market_order_request_cls,
+        _order_side_cls=_order_side_cls,
+        _time_in_force_cls=_time_in_force_cls,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -360,12 +480,19 @@ def run_submit(
     notional_cap: Any,
     ledger_path: Path,
     broker: Any = None,
+    allow_real_live_submit: bool = False,
+    _trading_client_cls: Any = None,
+    _market_order_request_cls: Any = None,
+    _order_side_cls: Any = None,
+    _time_in_force_cls: Any = None,
 ) -> dict[str, Any]:
-    """Run all safety gates and, if a non-None broker is provided, submit once.
+    """Run all safety gates and, if the real adapter is enabled, submit once.
 
-    CLI always passes broker=None, so CLI always returns BLOCKED with
+    Without allow_real_live_submit=True, always returns BLOCKED with
     blocker="real live submit adapter not implemented".
-    SUBMITTED is reachable only through an injected mock broker in unit tests.
+    With allow_real_live_submit=True and all gates passing, builds an
+    AlpacaLiveSubmitBroker (reading credentials from environment) and calls
+    submit_order exactly once.
     Never raises.
     """
     checked_at = datetime.now(tz=timezone.utc).isoformat()
@@ -444,29 +571,80 @@ def run_submit(
         )
 
     # ------------------------------------------------------------------
-    # Gate: broker=None → BLOCKED (real submit adapter not implemented)
+    # Gate: broker=None → build real adapter or BLOCKED
     # ------------------------------------------------------------------
     if broker is None:
-        blocker = "real live submit adapter not implemented"
-        return _make_result(
-            checked_at=checked_at,
-            result="BLOCKED",
-            order_submitted=False,
-            broker_mutation_calls_made=False,
-            submit_order_called=False,
-            live_submit_enabled=live_submit_enabled,
-            config_safety_overridden=config_safety_overridden,
-            out_symbol=out_symbol,
-            out_side=out_side,
-            out_order_type=out_order_type,
-            out_notional=out_notional,
-            client_order_id=None,
-            submitted_at_utc=None,
-            broker_order_id_redacted=None,
-            live_ledger_written=False,
-            violations=[blocker],
-            blocker=blocker,
-        )
+        if not allow_real_live_submit:
+            blocker = "real live submit adapter not implemented"
+            return _make_result(
+                checked_at=checked_at,
+                result="BLOCKED",
+                order_submitted=False,
+                broker_mutation_calls_made=False,
+                submit_order_called=False,
+                live_submit_enabled=live_submit_enabled,
+                config_safety_overridden=config_safety_overridden,
+                out_symbol=out_symbol,
+                out_side=out_side,
+                out_order_type=out_order_type,
+                out_notional=out_notional,
+                client_order_id=None,
+                submitted_at_utc=None,
+                broker_order_id_redacted=None,
+                live_ledger_written=False,
+                violations=[blocker],
+                blocker=blocker,
+            )
+        # All pre-gates passed and flag is set: read credentials and build broker.
+        try:
+            broker = _build_live_submit_broker(
+                violations,
+                _trading_client_cls=_trading_client_cls,
+                _market_order_request_cls=_market_order_request_cls,
+                _order_side_cls=_order_side_cls,
+                _time_in_force_cls=_time_in_force_cls,
+            )
+        except Exception:
+            blocker = "live submit broker construction failed (details redacted)"
+            return _make_result(
+                checked_at=checked_at,
+                result="BLOCKED",
+                order_submitted=False,
+                broker_mutation_calls_made=False,
+                submit_order_called=False,
+                live_submit_enabled=live_submit_enabled,
+                config_safety_overridden=config_safety_overridden,
+                out_symbol=out_symbol,
+                out_side=out_side,
+                out_order_type=out_order_type,
+                out_notional=out_notional,
+                client_order_id=None,
+                submitted_at_utc=None,
+                broker_order_id_redacted=None,
+                live_ledger_written=False,
+                violations=[blocker],
+                blocker=blocker,
+            )
+        if broker is None:
+            return _make_result(
+                checked_at=checked_at,
+                result="BLOCKED",
+                order_submitted=False,
+                broker_mutation_calls_made=False,
+                submit_order_called=False,
+                live_submit_enabled=live_submit_enabled,
+                config_safety_overridden=config_safety_overridden,
+                out_symbol=out_symbol,
+                out_side=out_side,
+                out_order_type=out_order_type,
+                out_notional=out_notional,
+                client_order_id=None,
+                submitted_at_utc=None,
+                broker_order_id_redacted=None,
+                live_ledger_written=False,
+                violations=violations,
+                blocker=violations[-1],
+            )
 
     # ------------------------------------------------------------------
     # All gates passed and broker is not None.
@@ -517,6 +695,7 @@ def run_submit(
             side=_REQUIRED_SIDE,
             order_type=_REQUIRED_ORDER_TYPE,
             notional=out_notional,
+            client_order_id=client_order_id,
         )
         submitted_at_utc = datetime.now(tz=timezone.utc).isoformat()
         try:
@@ -628,10 +807,11 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="python -m src.tools.live_single_manual_submit",
         description=(
-            "Mock-only core framework for a future one-time manually approved "
-            "single live SPY market buy attempt. "
-            "CLI mode is always BLOCKED -- real live submit adapter not implemented. "
-            "Never calls Alpaca. Never reads credentials."
+            "One-time manually approved single live SPY market buy via the Alpaca SDK. "
+            "Without --allow-real-live-submit-once, CLI is always BLOCKED. "
+            "With the flag, credentials are read from environment variables "
+            "ALPACA_LIVE_API_KEY and ALPACA_LIVE_SECRET_KEY only after all safety "
+            "gates pass."
         ),
     )
     parser.add_argument(
@@ -669,6 +849,17 @@ def main(argv: list[str] | None = None) -> None:
         "--output", required=True,
         help="Path to write single_manual_live_submit_attempt.json",
     )
+    parser.add_argument(
+        "--allow-real-live-submit-once",
+        action="store_true",
+        default=False,
+        dest="allow_real_live_submit",
+        help=(
+            "Enable real Alpaca live submit.  Without this flag, CLI is always BLOCKED. "
+            "Requires ALPACA_LIVE_API_KEY and ALPACA_LIVE_SECRET_KEY in environment. "
+            "Credentials are read only after all safety gates pass."
+        ),
+    )
     args = parser.parse_args(argv)
 
     result = run_submit(
@@ -682,7 +873,8 @@ def main(argv: list[str] | None = None) -> None:
         order_type=args.order_type,
         notional_cap=args.notional_cap,
         ledger_path=Path(args.ledger),
-        broker=None,  # real live submit adapter not implemented
+        broker=None,
+        allow_real_live_submit=args.allow_real_live_submit,
     )
 
     output_path = Path(args.output)
