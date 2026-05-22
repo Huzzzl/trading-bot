@@ -433,15 +433,38 @@ All unit tests must use a mock broker. No real Alpaca calls in any test.
 | Item | State |
 |------|-------|
 | This design document | Complete — this file |
+| `src/tools/live_single_submit_approval_review.py` | **Complete** — offline read-only approval review |
+| `tests/test_live_single_submit_approval_review.py` | **Complete** — 171 tests, all pass |
 | `src/tools/live_single_manual_submit.py` | **Not implemented** |
-| `src/tools/live_single_submit_approval.py` | **Not implemented** |
 | `tests/test_live_single_manual_submit.py` | **Not implemented** |
 | Real live submit | **Not implemented** |
 | Automated live trading | **Not implemented** |
 | `submit_order` for live | Absent — no call path exists |
 | `config_safety` | Still the hard blocker |
 
-**No live order can be submitted as a result of this design PR.**
+### `live_single_submit_approval_review` — what it does
+
+Offline, read-only validation of the operator approval artifact for exactly
+one future single live SPY market buy attempt.
+
+| Property | Value |
+|----------|-------|
+| Calls Alpaca | No |
+| Imports Alpaca SDK | No |
+| Reads credentials | No |
+| Calls `submit_order` / `cancel_order` / `replace_order` | No |
+| Writes live ledger | No |
+| Removes `config_safety` on PASS | No |
+| Approves real trading on PASS | No |
+| Approves automated/recurring trading on PASS | No |
+
+PASS means the artifact is present, structurally valid, correctly scoped
+(`approval_scope="AUTHORIZE_SINGLE_LIVE_MARKET_BUY_SPY_ONCE"`), not expired,
+and contains all required explicit acknowledgements.
+
+PASS does not submit an order and does not enable live trading.
+
+**No live order can be submitted as a result of this PR.**
 
 ---
 
