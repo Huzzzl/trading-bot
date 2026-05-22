@@ -1070,3 +1070,139 @@ Full non-sensitive snapshot: [docs/live_readonly_preflight_result_snapshot.md](l
 > Real live trading requires a funded account, explicit operator config overrides
 > in a local config (not `settings.yaml`), and a dedicated reviewed PR for
 > real live submission — none of which are done here.
+
+---
+
+## Milestone: Single Submit Approval Review Complete
+
+### Recommended git tag
+
+```
+live-single-submit-approval-review-complete
+```
+
+### What this milestone means
+
+| Item | State |
+|------|-------|
+| v2 approvals | Complete |
+| Enablement gate | Complete |
+| Ledger dry-run lifecycle | Complete |
+| `live_operator_config_override_review` | Complete |
+| `live_credential_presence_guard` | Complete |
+| Broker preflight design | Complete |
+| `live_broker_preflight_readonly` mock-only core | Complete |
+| `AlpacaLiveReadOnlyBroker` real adapter | Complete |
+| Manual live read-only preflight run | PASS observed |
+| Single submit attempt design | Complete — `docs/single_manual_live_submit_attempt_design.md` |
+| `live_single_submit_approval_review` | **Complete** — offline read-only approval review |
+| Real live submit | **Not implemented** |
+| Automated live trading | **Not implemented** |
+| `submit_order` / `cancel_order` / `replace_order` | Absent — no live call path |
+| `config_safety` | **Still the hard blocker** |
+| Alpaca endpoint called by this tool | **No** |
+| Credentials read | **No** |
+| Live ledger written | **No** |
+| `config_safety` bypassed | **No** |
+
+### `live_single_submit_approval_review` — what it does
+
+`src/tools/live_single_submit_approval_review.py` is an offline, read-only CLI
+that validates a local operator approval artifact for exactly one future single
+live SPY market buy attempt.
+
+| Property | Value |
+|----------|-------|
+| Calls Alpaca | No |
+| Imports Alpaca SDK | No |
+| Imports network libraries (requests/httpx/aiohttp/urllib.request) | No |
+| Reads credentials | No |
+| Calls `submit_order` / `cancel_order` / `replace_order` | No |
+| Writes live ledger | No |
+| Removes `config_safety` on PASS | No |
+| Approves real trading on PASS | No |
+| Approves automated or recurring trading on PASS | No |
+| `run_review` raises | Never |
+
+### Validation behavior
+
+| Field | Required value |
+|-------|---------------|
+| `symbol` | Exactly `"SPY"` — no case folding, no whitespace stripping |
+| `side` | Exactly `"buy"` — no case folding, no whitespace stripping |
+| `order_type` | Exactly `"market"` — no case folding, no whitespace stripping |
+| `notional_cap` | Numeric (not string/bool/null), `> 0` and `≤ 100.0` |
+| `approval_scope` | Exactly `"AUTHORIZE_SINGLE_LIVE_MARKET_BUY_SPY_ONCE"` |
+| `recurring_trading_approved` | Strict JSON `false` only |
+| `automated_trading_approved` | Strict JSON `false` only |
+| `one_attempt_only_acknowledged` | Strict JSON `true` only |
+| `config_safety_override_is_local_only_acknowledged` | Strict JSON `true` only |
+| `no_cancel_replace_acknowledged` | Strict JSON `true` only |
+| `live_broker_preflight_pass_confirmed` | Strict JSON `true` only |
+| `approved_at_utc` / `approval_expires_at_utc` | Valid ISO-8601; expires > approved |
+| Expiry | BLOCKED if current UTC ≥ `approval_expires_at_utc` |
+| `operator_name` / `approval_note` / `operator_initials` | Non-empty strings |
+
+Raw invalid values for all string fields (`symbol`, `side`, `order_type`,
+`approval_scope`) and all strict-boolean fields are **never echoed** in
+violations, blocker, stdout, or output JSON. Fixed safe messages are used
+instead. Output fields are populated only when the raw value exactly matches
+the required canonical value — otherwise `null`.
+
+### Hardcoded output invariants (every result, PASS or BLOCKED)
+
+| Field | Invariant value |
+|-------|----------------|
+| `live_submit_enabled` | `false` always |
+| `real_submit_implemented` | `false` always |
+| `submit_order_reachable` | `false` always |
+| `broker_calls_made` | `false` always |
+| `credentials_read` | `false` always |
+| `broker_mutation_calls_made` | `false` always |
+| `live_ledger_written` | `false` always |
+| `cancel_order_called` | `false` always |
+| `replace_order_called` | `false` always |
+| `automated_trading_enabled` | `false` always |
+| `recurring_trading_enabled` | `false` always |
+| `credential_values_exposed` | `false` always |
+
+### PASS does not submit an order
+
+PASS from `live_single_submit_approval_review` confirms the artifact is
+present, structurally valid, correctly scoped, not expired, and contains
+all required explicit acknowledgements. It does NOT:
+
+- Submit any order
+- Remove or weaken `config_safety`
+- Enable live trading
+- Approve automated or recurring trading
+- Bypass any existing guard
+
+`config_safety` remains the final blocker. No live order submission path
+exists in the current codebase.
+
+### Test coverage (PR #117)
+
+196 tests in `tests/test_live_single_submit_approval_review.py`.
+Full suite: 3,576 tests passed.
+All tests are offline — no real Alpaca calls, no credentials read.
+
+### Safety invariants confirmed at this milestone
+
+- `submit_order` was never called by this tool or any test
+- No Alpaca endpoint was contacted
+- No credential values were read, stored, or printed
+- No live ledger was written
+- `config_safety` was not bypassed or removed
+- Raw invalid field values are never echoed in any output
+
+### Warning
+
+> **This milestone does not approve real trading.**
+> **This milestone does not approve live order submission.**
+> **PASS from `live_single_submit_approval_review` does not submit an order.**
+> Real live submit remains unimplemented.
+> `config_safety` remains the hard blocker.
+> `submit_order`, `cancel_order`, and `replace_order` remain unimplemented for live.
+> No orders endpoint, POST/PATCH/DELETE, live ledger writes, or `config_safety`
+> bypass exist in the current codebase.
