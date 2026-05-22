@@ -1235,6 +1235,8 @@ live-single-manual-submit-mock-core-complete
 | `live_single_manual_submit` mock-only core | **Complete** — 193 tests |
 | Real live submit adapter | **Not implemented** — CLI always BLOCKED |
 | Automated live trading | **Not implemented** |
+| Recurring live trading | **Not implemented** |
+| Retry logic on submit failure | **Not implemented** — single attempt only |
 | `cancel_order` / `replace_order` | Absent — no call path exists |
 | `config_safety` | **Still the hard blocker** |
 | Alpaca endpoint called by this tool | **No** |
@@ -1271,7 +1273,9 @@ sequence for a future one-time single live SPY buy attempt, with a
 | `side` exactly `"buy"` | BLOCKED, no ledger, no broker |
 | `order_type` exactly `"market"` | BLOCKED, no ledger, no broker |
 | `notional_cap` in (0, 100.0] — not bool, not string | BLOCKED, no ledger, no broker |
-| Local operator YAML config: three strict boolean flags | BLOCKED, no ledger, no broker |
+| Local operator YAML `live_trading_enabled: true` (strict boolean) | BLOCKED, no ledger, no broker |
+| Local operator YAML `live_submit_dry_run: false` (strict boolean) | BLOCKED, no ledger, no broker |
+| Local operator YAML `live_kill_switch_enabled: false` (strict boolean) | BLOCKED, no ledger, no broker |
 | `broker` not None | BLOCKED ("real live submit adapter not implemented") |
 
 ### State table
@@ -1308,6 +1312,8 @@ All tests use a mock broker — no real Alpaca calls, no credentials read.
 - No real order was submitted
 - No live ledger was written in production — only in unit test tmp dirs
 - `cancel_order` and `replace_order` are absent from the source
+- No retry logic exists — a single attempt; BLOCKED is final
+- Automated and recurring live trading are not implemented
 - Raw invalid field values are never echoed in output
 - `config_safety` was not bypassed or removed
 
@@ -1321,5 +1327,7 @@ All tests use a mock broker — no real Alpaca calls, no credentials read.
 > live order can be submitted.
 > `config_safety` remains the hard blocker.
 > `cancel_order` and `replace_order` remain unimplemented for live.
+> No retry logic exists — BLOCKED is a final result, no re-attempt.
+> Automated and recurring live trading remain unimplemented.
 > No orders endpoint, POST/PATCH/DELETE, or `config_safety` bypass exist
 > in the current codebase.
