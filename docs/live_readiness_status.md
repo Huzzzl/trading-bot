@@ -838,3 +838,124 @@ Without `--allow-live-broker-api-readonly`, exits 1 with zero broker calls.
 > Real live trading requires a funded account, a PASS from this tool with
 > live credentials, and explicitly overriding the three `config_safety` flags
 > in a local operator config — changes that must not be made in `settings.yaml`.
+
+---
+
+## Milestone: Live Broker Preflight Read-Only Adapter Complete
+
+### Recommended git tag
+
+```
+live-broker-preflight-readonly-adapter-complete
+```
+
+### What this milestone means
+
+| Item | State |
+|------|-------|
+| v2 approvals | Complete |
+| Enablement gate | Complete |
+| Ledger dry-run lifecycle | Complete |
+| `live_operator_config_override_review` | Complete |
+| `live_credential_presence_guard` | Complete |
+| Broker preflight design | Complete — `docs/live_broker_preflight_design.md` |
+| `live_broker_preflight_readonly` mock-only core | Complete |
+| `AlpacaLiveReadOnlyBroker` real adapter (PR #112) | **Complete — gated behind `--allow-live-broker-api-readonly`** |
+| Real broker preflight run | **Not performed** — requires `--allow-live-broker-api-readonly` + live credentials |
+| Real live submit | **Not implemented** |
+| Automated live trading | **Not implemented** |
+| `submit_order` / `cancel_order` / `replace_order` | Absent — no live call path exists |
+| `config_safety` | **Still the hard blocker** |
+| Alpaca live endpoint called by tests or this PR | **No** — tests use mocks only |
+| Credentials read, stored, or printed | **No** |
+| Real order submitted | **No** |
+| Live ledger written | **No** |
+| Orders endpoint / POST / PATCH / DELETE used | **No** |
+| `config_safety` bypassed | **No** |
+
+### What the `AlpacaLiveReadOnlyBroker` adapter provides
+
+`AlpacaLiveReadOnlyBroker` wraps `alpaca-py` `TradingClient(paper=False)` and
+exposes exactly three read-only SDK methods:
+
+- `get_account()` — account status, buying power, pattern-day-trader flag
+- `get_clock()` — market open/closed state
+- `get_asset(symbol)` — tradability check for SPY
+
+No write or mutation methods are used. `submit_order`, `cancel_order`, and
+`replace_order` are absent from the adapter source. The orders endpoint
+(`/v2/orders`) is never referenced. No POST/PATCH/DELETE calls exist.
+
+The adapter enforces a strict call sequence before any env var is read or
+`TradingClient` is constructed: credential guard artifact must exist with
+`result="PASS"`, operator override artifact must exist with `result="PASS"`,
+`symbol` must be `"SPY"`, `side` must be `"buy"`,
+`0 < notional_cap ≤ 100.0`, and `--allow-live-broker-api-readonly` must be
+present. Any failure before that point returns BLOCKED immediately with
+`broker_calls_made=false`.
+
+Exception details from broker calls are redacted — raw exception text never
+appears in output JSON, `violations`, `blocker`, or stdout.
+
+Alpaca SDK import is lazy: `from alpaca.trading.client import TradingClient`
+is inside `__init__` only — no module-level Alpaca import.
+
+### PASS from read-only preflight is not approval to trade
+
+A PASS result from `live_broker_preflight_readonly` is a **precondition check
+only**. It does NOT:
+
+- Remove or weaken `config_safety`
+- Enable live trading
+- Authorize a live order or any order submission
+- Bypass any existing guard
+
+The `config_safety` guard remains the final blocker. Real live trading still
+requires all three config flags to be explicitly overridden in a local operator
+config (`live_trading_enabled=true`, `live_submit_dry_run=false`,
+`live_kill_switch_enabled=false`) — changes that must not be made in
+`settings.yaml`.
+
+### No live API call was made
+
+- No live API call was made by tests or by this PR.
+- Tests use mocks only; the real adapter is exercised only under a mock
+  `TradingClient` — no real Alpaca network contact in any test.
+- The `--allow-live-broker-api-readonly` flag is required for any real API
+  contact. Without the flag: `result="BLOCKED"`, `broker_calls_made=false`.
+
+### Test coverage (PR #112)
+
+121 targeted tests in `tests/test_live_broker_preflight_readonly.py`.
+Full suite: 3,380 tests passed.
+All tests use a mock broker or mock `TradingClient` — no real Alpaca calls.
+
+### Safety invariants confirmed at this milestone
+
+- `submit_order` was never called during any test or by any part of this PR
+- No Alpaca live endpoint was contacted by tests or by this PR
+- No credential values were read, stored, printed, or written to any artifact
+- No real order was submitted
+- No live ledger was written
+- `config_safety` remains the final blocker with safe defaults:
+  `live_trading_enabled=false`, `live_submit_dry_run=true`,
+  `live_kill_switch_enabled=true`
+- Source scan: `submit_order(`, `cancel_order(`, `replace_order(` are absent
+  from the adapter source
+- Source scan: orders endpoint, POST, PATCH, DELETE are not used
+
+### Warning
+
+> **This milestone does not approve real trading.**
+> **This milestone does not approve live order submission.**
+> **Real broker preflight has NOT been performed yet.**
+> **No real Alpaca endpoint was called in this PR or by any test.**
+> The `--allow-live-broker-api-readonly` flag is required for any live API contact.
+> A PASS from `live_broker_preflight_readonly` is a precondition check only;
+> it does not remove `config_safety` and does not authorize a live order.
+> `submit_order`, `cancel_order`, and `replace_order` remain unimplemented for live.
+> No orders endpoint, POST/PATCH/DELETE, live ledger writes, or `config_safety`
+> bypass exist in the current codebase.
+> Real live trading requires a funded account, a PASS from this tool with live
+> credentials, and explicitly overriding the three `config_safety` flags in a
+> local operator config — changes that must not be made in `settings.yaml`.
