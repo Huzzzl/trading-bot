@@ -1520,3 +1520,61 @@ credentials or constructing any broker client.
 > runs of all four prerequisite tools, valid credentials in environment
 > variables, and explicit local operator config overrides — none of which
 > are committed to this repository.
+
+---
+
+## Milestone: Final Real Submit Operator Runbook Prepared
+
+**Branch:** `claude/docs-real-submit-final-operator-runbook`
+**Status:** Complete
+
+Final manual operator runbook created at
+`docs/real_submit_final_operator_runbook.md`.
+
+**No real order was submitted.**
+**No Alpaca endpoint was contacted.**
+**No credentials were read.**
+**No live ledger was written.**
+
+### What was added
+
+The runbook defines the complete step-by-step procedure an operator must follow
+before, during, and after one real live SPY market buy attempt using
+`--allow-real-live-submit-once`. It covers:
+
+1. All preconditions (repo state, artifact freshness, local config, env vars,
+   order parameters, broker/market state)
+2. Safety dry checks — run all four prerequisite tools and a submit dry check
+   (without the flag) confirming BLOCKED before the real attempt
+3. Final pre-submit human checklist — explicit per-item confirmation
+4. The exact real submit command (marked DANGEROUS)
+5. Expected SUBMITTED and BLOCKED output fields
+6. Immediate post-run actions — clear credentials, reset config flags, verify
+   ledger, check Alpaca UI
+7. What to report back — non-sensitive summary fields only, what not to report
+8. Abort conditions — full table of pre-submit and post-submit abort triggers
+
+### Safety invariants confirmed
+
+- This milestone does not run the submit tool
+- No real order submitted
+- No Alpaca endpoint contacted
+- No credentials read or written
+- No live ledger written
+- No code changes
+
+### Reference
+
+- `docs/real_submit_final_operator_runbook.md` — full runbook
+- Suggested git tag: `real-submit-final-operator-runbook-prepared`
+
+### Warning
+
+> **This milestone does not approve real trading.**
+> **This milestone does not approve live order submission.**
+> **No real order has been submitted.**
+> The runbook is a preparation document only. A real order attempt requires the
+> operator to satisfy all preconditions at runtime, run all prerequisite tools,
+> pass all safety dry checks, confirm every item in the pre-submit checklist,
+> and explicitly pass `--allow-real-live-submit-once` — none of which are
+> performed by this PR.
