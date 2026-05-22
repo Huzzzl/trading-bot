@@ -197,29 +197,20 @@ def validate_approval(
     if not operator_initials:
         violations.append("operator_initials must be a non-empty string")
 
-    # --- Symbol ---
-    raw_symbol = artifact.get("symbol", "")
-    symbol = str(raw_symbol).strip().upper()
-    if symbol != _REQUIRED_SYMBOL:
-        violations.append(
-            f"symbol={raw_symbol!r} -- only {_REQUIRED_SYMBOL!r} is permitted"
-        )
+    # --- Symbol (exact match — no case folding, no stripping) ---
+    raw_symbol = artifact.get("symbol")
+    if raw_symbol != _REQUIRED_SYMBOL:
+        violations.append("symbol must be exactly 'SPY'")
 
-    # --- Side ---
-    raw_side = artifact.get("side", "")
-    side = str(raw_side).strip().lower()
-    if side != _REQUIRED_SIDE:
-        violations.append(
-            f"side={raw_side!r} -- only {_REQUIRED_SIDE!r} is permitted"
-        )
+    # --- Side (exact match) ---
+    raw_side = artifact.get("side")
+    if raw_side != _REQUIRED_SIDE:
+        violations.append("side must be exactly 'buy'")
 
-    # --- Order type ---
-    raw_order_type = artifact.get("order_type", "")
-    order_type = str(raw_order_type).strip().lower()
-    if order_type != _REQUIRED_ORDER_TYPE:
-        violations.append(
-            f"order_type={raw_order_type!r} -- only {_REQUIRED_ORDER_TYPE!r} is permitted"
-        )
+    # --- Order type (exact match) ---
+    raw_order_type = artifact.get("order_type")
+    if raw_order_type != _REQUIRED_ORDER_TYPE:
+        violations.append("order_type must be exactly 'market'")
 
     # --- Notional cap ---
     notional_raw = artifact.get("notional_cap")
@@ -244,11 +235,12 @@ def validate_approval(
                     f"notional_cap={notional_valid} exceeds maximum of {_MAX_NOTIONAL_CAP}"
                 )
 
-    # --- Approval scope ---
-    scope = str(artifact.get("approval_scope", "")).strip()
+    # --- Approval scope (exact match — do not echo raw value) ---
+    scope = artifact.get("approval_scope")
     if scope != _REQUIRED_SCOPE:
         violations.append(
-            f"approval_scope={scope!r} -- must be {_REQUIRED_SCOPE!r}"
+            f"approval_scope has invalid value -- must be "
+            f"'{_REQUIRED_SCOPE}'"
         )
 
     # --- Strict boolean false fields ---
@@ -334,39 +326,25 @@ def run_review(
         violations.append(str(exc))
 
     if artifact is not None:
-        # Extract display fields before validation (do not echo raw malformed values)
-        try:
-            raw_sym = artifact.get("symbol", "")
-            if isinstance(raw_sym, str) and raw_sym.strip().upper() == _REQUIRED_SYMBOL:
-                out_symbol = _REQUIRED_SYMBOL
-        except Exception:
-            pass
-        try:
-            raw_side = artifact.get("side", "")
-            if isinstance(raw_side, str) and raw_side.strip().lower() == _REQUIRED_SIDE:
-                out_side = _REQUIRED_SIDE
-        except Exception:
-            pass
-        try:
-            raw_ot = artifact.get("order_type", "")
-            if isinstance(raw_ot, str) and raw_ot.strip().lower() == _REQUIRED_ORDER_TYPE:
-                out_order_type = _REQUIRED_ORDER_TYPE
-        except Exception:
-            pass
+        # Extract display fields before validation.
+        # Only populate when the raw value is exactly the required canonical value —
+        # never echo raw operator-supplied values in the output artifact.
+        if artifact.get("symbol") == _REQUIRED_SYMBOL:
+            out_symbol = _REQUIRED_SYMBOL
+        if artifact.get("side") == _REQUIRED_SIDE:
+            out_side = _REQUIRED_SIDE
+        if artifact.get("order_type") == _REQUIRED_ORDER_TYPE:
+            out_order_type = _REQUIRED_ORDER_TYPE
         try:
             raw_notional = artifact.get("notional_cap")
-            if raw_notional is not None and not isinstance(raw_notional, bool):
+            if raw_notional is not None and not isinstance(raw_notional, (bool, str)):
                 candidate = float(raw_notional)
                 if 0 < candidate <= _MAX_NOTIONAL_CAP:
                     out_notional = candidate
         except Exception:
             pass
-        try:
-            raw_scope = artifact.get("approval_scope", "")
-            if isinstance(raw_scope, str) and raw_scope.strip() == _REQUIRED_SCOPE:
-                out_scope = _REQUIRED_SCOPE
-        except Exception:
-            pass
+        if artifact.get("approval_scope") == _REQUIRED_SCOPE:
+            out_scope = _REQUIRED_SCOPE
 
         result_str, val_violations, approval_reviewed, single_attempt_approved = (
             validate_approval(artifact, now_utc=now_utc)

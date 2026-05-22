@@ -308,17 +308,29 @@ class TestSymbol:
         r = run_review(approval_path=_write_json(tmp_path, "a.json", a), now_utc=_NOW)
         assert r["result"] == "BLOCKED"
 
-    def test_lowercase_spy_pass(self, tmp_path: Path) -> None:
+    def test_lowercase_spy_blocked(self, tmp_path: Path) -> None:
         a = _good_artifact()
         a["symbol"] = "spy"
         r = run_review(approval_path=_write_json(tmp_path, "a.json", a), now_utc=_NOW)
-        assert r["result"] == "PASS"
+        assert r["result"] == "BLOCKED"
 
-    def test_mixed_case_spy_pass(self, tmp_path: Path) -> None:
+    def test_mixed_case_spy_blocked(self, tmp_path: Path) -> None:
         a = _good_artifact()
         a["symbol"] = "Spy"
         r = run_review(approval_path=_write_json(tmp_path, "a.json", a), now_utc=_NOW)
-        assert r["result"] == "PASS"
+        assert r["result"] == "BLOCKED"
+
+    def test_spy_with_trailing_space_blocked(self, tmp_path: Path) -> None:
+        a = _good_artifact()
+        a["symbol"] = "SPY "
+        r = run_review(approval_path=_write_json(tmp_path, "a.json", a), now_utc=_NOW)
+        assert r["result"] == "BLOCKED"
+
+    def test_spy_with_leading_space_blocked(self, tmp_path: Path) -> None:
+        a = _good_artifact()
+        a["symbol"] = " SPY"
+        r = run_review(approval_path=_write_json(tmp_path, "a.json", a), now_utc=_NOW)
+        assert r["result"] == "BLOCKED"
 
     def test_numeric_symbol_blocked(self, tmp_path: Path) -> None:
         a = _good_artifact()
@@ -350,11 +362,17 @@ class TestSide:
         r = run_review(approval_path=_write_json(tmp_path, "a.json", a), now_utc=_NOW)
         assert r["result"] == "BLOCKED"
 
-    def test_uppercase_buy_pass(self, tmp_path: Path) -> None:
+    def test_uppercase_buy_blocked(self, tmp_path: Path) -> None:
         a = _good_artifact()
         a["side"] = "BUY"
         r = run_review(approval_path=_write_json(tmp_path, "a.json", a), now_utc=_NOW)
-        assert r["result"] == "PASS"
+        assert r["result"] == "BLOCKED"
+
+    def test_buy_with_trailing_space_blocked(self, tmp_path: Path) -> None:
+        a = _good_artifact()
+        a["side"] = "buy "
+        r = run_review(approval_path=_write_json(tmp_path, "a.json", a), now_utc=_NOW)
+        assert r["result"] == "BLOCKED"
 
 
 # ---------------------------------------------------------------------------
@@ -380,11 +398,23 @@ class TestOrderType:
         r = run_review(approval_path=_write_json(tmp_path, "a.json", a), now_utc=_NOW)
         assert r["result"] == "BLOCKED"
 
-    def test_uppercase_market_pass(self, tmp_path: Path) -> None:
+    def test_uppercase_market_blocked(self, tmp_path: Path) -> None:
         a = _good_artifact()
         a["order_type"] = "MARKET"
         r = run_review(approval_path=_write_json(tmp_path, "a.json", a), now_utc=_NOW)
-        assert r["result"] == "PASS"
+        assert r["result"] == "BLOCKED"
+
+    def test_market_with_trailing_space_blocked(self, tmp_path: Path) -> None:
+        a = _good_artifact()
+        a["order_type"] = "market "
+        r = run_review(approval_path=_write_json(tmp_path, "a.json", a), now_utc=_NOW)
+        assert r["result"] == "BLOCKED"
+
+    def test_mixed_case_market_blocked(self, tmp_path: Path) -> None:
+        a = _good_artifact()
+        a["order_type"] = "Market"
+        r = run_review(approval_path=_write_json(tmp_path, "a.json", a), now_utc=_NOW)
+        assert r["result"] == "BLOCKED"
 
 
 # ---------------------------------------------------------------------------
@@ -690,6 +720,81 @@ class TestNoCredentialLeakage:
         p.write_text(f"{{broken json {_INJECTED_SECRET}", encoding="utf-8")
         r = run_review(approval_path=p, now_utc=_NOW)
         assert _INJECTED_SECRET not in json.dumps(r)
+
+
+class TestRawValueRedaction:
+    """Invalid string field values must never appear in output JSON, violations,
+    blocker, or stdout — even when the value looks like a secret."""
+
+    def _check_absent(self, r: dict, secret: str, *, capsys=None) -> None:
+        serialised = json.dumps(r)
+        assert secret not in serialised, "secret in output JSON"
+        assert all(secret not in v for v in r.get("violations", [])), (
+            "secret in violations"
+        )
+        if r.get("blocker"):
+            assert secret not in r["blocker"], "secret in blocker"
+        if capsys is not None:
+            print_review(r)
+            out = capsys.readouterr().out
+            assert secret not in out, "secret in stdout"
+
+    def test_invalid_symbol_not_echoed(self, tmp_path: Path, capsys) -> None:
+        secret = f"SYM-{_INJECTED_SECRET}"
+        a = _good_artifact()
+        a["symbol"] = secret
+        r = run_review(approval_path=_write_json(tmp_path, "a.json", a), now_utc=_NOW)
+        assert r["result"] == "BLOCKED"
+        self._check_absent(r, secret, capsys=capsys)
+
+    def test_invalid_side_not_echoed(self, tmp_path: Path, capsys) -> None:
+        secret = f"SIDE-{_INJECTED_SECRET}"
+        a = _good_artifact()
+        a["side"] = secret
+        r = run_review(approval_path=_write_json(tmp_path, "a.json", a), now_utc=_NOW)
+        assert r["result"] == "BLOCKED"
+        self._check_absent(r, secret, capsys=capsys)
+
+    def test_invalid_order_type_not_echoed(self, tmp_path: Path, capsys) -> None:
+        secret = f"OT-{_INJECTED_SECRET}"
+        a = _good_artifact()
+        a["order_type"] = secret
+        r = run_review(approval_path=_write_json(tmp_path, "a.json", a), now_utc=_NOW)
+        assert r["result"] == "BLOCKED"
+        self._check_absent(r, secret, capsys=capsys)
+
+    def test_invalid_approval_scope_not_echoed(self, tmp_path: Path, capsys) -> None:
+        secret = f"SCOPE-{_INJECTED_SECRET}"
+        a = _good_artifact()
+        a["approval_scope"] = secret
+        r = run_review(approval_path=_write_json(tmp_path, "a.json", a), now_utc=_NOW)
+        assert r["result"] == "BLOCKED"
+        self._check_absent(r, secret, capsys=capsys)
+
+    def test_exact_match_required_symbol_not_null_on_exact(self, tmp_path: Path) -> None:
+        """symbol output field is set only on exact 'SPY', null otherwise."""
+        a = _good_artifact()
+        a["symbol"] = "spy"
+        r = run_review(approval_path=_write_json(tmp_path, "a.json", a), now_utc=_NOW)
+        assert r["symbol"] is None
+
+    def test_exact_match_required_side_not_null_on_exact(self, tmp_path: Path) -> None:
+        a = _good_artifact()
+        a["side"] = "BUY"
+        r = run_review(approval_path=_write_json(tmp_path, "a.json", a), now_utc=_NOW)
+        assert r["side"] is None
+
+    def test_exact_match_order_type_not_null_on_exact(self, tmp_path: Path) -> None:
+        a = _good_artifact()
+        a["order_type"] = "Market"
+        r = run_review(approval_path=_write_json(tmp_path, "a.json", a), now_utc=_NOW)
+        assert r["order_type"] is None
+
+    def test_exact_match_scope_not_null_on_exact(self, tmp_path: Path) -> None:
+        a = _good_artifact()
+        a["approval_scope"] = "WRONG_SCOPE"
+        r = run_review(approval_path=_write_json(tmp_path, "a.json", a), now_utc=_NOW)
+        assert r["approval_scope"] is None
 
 
 # ---------------------------------------------------------------------------
