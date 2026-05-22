@@ -1360,7 +1360,7 @@ live-single-manual-submit-real-adapter-complete
 | `live_single_manual_submit` mock-only core | Complete — 193 tests |
 | `AlpacaLiveSubmitBroker` real adapter | **Complete** — `TradingClient(paper=False)`, lazy SDK import |
 | `--allow-real-live-submit-once` CLI flag | **Complete** — required; without it CLI is always BLOCKED |
-| Tests for real adapter | **Complete** — 243 total tests, all mock-only |
+| Tests for real adapter | **Complete** — 255 total tests, all mock-only |
 | Real live order submitted | **No** — not submitted as part of this PR |
 | Real Alpaca calls in tests | **No** — all tests use mock broker and mock `TradingClient` |
 | Automated live trading | **Not implemented** |
@@ -1406,8 +1406,8 @@ exposes exactly one method: `submit_order`.
 
 ### Test coverage (this PR)
 
-243 unit tests in `tests/test_live_single_manual_submit.py`.
-Full suite: 3,819 tests passed.
+255 unit tests in `tests/test_live_single_manual_submit.py`.
+Full suite: 3,831 tests passed.
 All tests use a mock broker or mock `TradingClient` — no real Alpaca calls in any test.
 
 New test classes added:
@@ -1417,6 +1417,7 @@ New test classes added:
 - `TestRealAdapterHappyPath` — with flag, all gates pass, mocked TradingClient → SUBMITTED, `paper=False`
 - `TestRealAdapterOrderRequest` — order request has symbol=SPY, notional, side=BUY, time_in_force=DAY, client_order_id
 - `TestRealAdapterExceptionRedaction` — broker exception → secret absent from all output
+- `TestRealAdapterBrokerConstructionFails` — lazy SDK import / TradingClient construction raises → BLOCKED, details redacted, no ledger write, no submit call, `run_submit()` never raises
 - `TestCLIRealFlag` — CLI with/without flag behavior via `main()`
 
 Source scan tests updated:
