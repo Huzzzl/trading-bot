@@ -20,7 +20,14 @@ All of the following must be true before proceeding to any step in this runbook.
 
 ### Repository state
 
-- [ ] `main` branch is synced through at least PR #123
+> **Do not use this runbook until PR #124 is merged to `main`.**
+> Before any real submit attempt, sync your local `main`:
+> ```sh
+> git checkout main && git pull origin main
+> ```
+
+- [ ] PR #124 (this runbook) is merged to `main`
+- [ ] Local `main` is synced: `git checkout main && git pull origin main`
 - [ ] `git diff origin/main` shows no local uncommitted changes to any tracked file
 - [ ] `settings.yaml` is unchanged — verified via `git diff` (no diff output)
 
