@@ -959,3 +959,114 @@ All tests use a mock broker or mock `TradingClient` — no real Alpaca calls.
 > Real live trading requires a funded account, a PASS from this tool with live
 > credentials, and explicitly overriding the three `config_safety` flags in a
 > local operator config — changes that must not be made in `settings.yaml`.
+
+---
+
+## Milestone: Live Read-Only Broker Preflight PASS Observed
+
+### Recommended git tag
+
+```
+live-readonly-preflight-pass-observed
+```
+
+### What this milestone means
+
+| Item | State |
+|------|-------|
+| v2 approvals | Complete |
+| Enablement gate | Complete |
+| Ledger dry-run lifecycle | Complete |
+| `live_operator_config_override_review` | Complete |
+| `live_credential_presence_guard` | Complete |
+| Broker preflight design | Complete |
+| `live_broker_preflight_readonly` mock-only core | Complete |
+| `AlpacaLiveReadOnlyBroker` real adapter | Complete |
+| Manual live read-only preflight run | **PASS observed** |
+| Account status check | PASS — account active |
+| Market clock check | PASS — market open |
+| SPY asset check | PASS — tradable and fractionable |
+| Real live submit | **Not implemented** |
+| Automated live trading | **Not implemented** |
+| `submit_order` / `cancel_order` / `replace_order` | Absent — no live call path |
+| `config_safety` | **Still the hard blocker** |
+| Order submitted | **No** |
+| Live ledger written | **No** |
+| Credential values exposed | **No** |
+| `config_safety` bypassed | **No** |
+
+### Read-only checks confirmed (PASS run)
+
+Three read-only GET calls were made via `AlpacaLiveReadOnlyBroker`:
+
+| Call | Endpoint | Result |
+|------|----------|--------|
+| `get_account()` | `GET /v2/account` | PASS — account active |
+| `get_clock()` | `GET /v2/clock` | PASS — market open |
+| `get_asset("SPY")` | `GET /v2/assets/SPY` | PASS — tradable and fractionable |
+
+No other endpoints were contacted. No POST/PATCH/DELETE. No orders endpoint.
+
+### Output invariants confirmed
+
+All seven hardcoded invariants held in the PASS run:
+
+| Field | Required | Observed |
+|-------|---------|---------|
+| `broker_mutation_calls_made` | `false` | `false` ✓ |
+| `credential_values_exposed` | `false` | `false` ✓ |
+| `live_submit_enabled` | `false` | `false` ✓ |
+| `real_submit_implemented` | `false` | `false` ✓ |
+| `submit_order_reachable` | `false` | `false` ✓ |
+| `config_safety_still_blocks` | `true` | `true` ✓ |
+| `broker_calls_readonly` | `true` | `true` ✓ |
+
+### PASS is not approval to trade
+
+PASS from `live_broker_preflight_readonly` confirms the broker API was
+reachable and the account/clock/SPY checks passed at the time of the run.
+It does NOT:
+
+- Remove or weaken `config_safety`
+- Enable live trading
+- Authorize any live order submission
+- Bypass any existing guard
+
+`config_safety` remains the final blocker. No order submission path exists
+in the current codebase.
+
+### Sensitive data excluded
+
+The following were not committed and do not appear in this doc or any PR artifact:
+
+- Raw `output/live_broker_preflight_readonly.json`
+- Account ID or account number
+- Credential fragments
+- Exact buying power or portfolio balance values
+- Any other sensitive account metadata
+
+Full non-sensitive snapshot: [docs/live_readonly_preflight_result_snapshot.md](live_readonly_preflight_result_snapshot.md)
+
+### Safety invariants confirmed at this milestone
+
+- `submit_order` was never called
+- No order was submitted
+- No order was cancelled or replaced
+- No live ledger was written
+- No credential values were exposed, stored, or printed
+- `config_safety` was not bypassed or removed
+- No POST/PATCH/DELETE broker calls were made
+- The orders endpoint (`/v2/orders`) was not contacted
+
+### Warning
+
+> **This milestone does not approve real trading.**
+> **This milestone does not approve live order submission.**
+> **PASS is a precondition check only — not approval to submit a live order.**
+> `config_safety` remains the hard blocker.
+> `submit_order`, `cancel_order`, and `replace_order` remain unimplemented for live.
+> No orders endpoint, POST/PATCH/DELETE, live ledger writes, or `config_safety`
+> bypass exist in the current codebase.
+> Real live trading requires a funded account, explicit operator config overrides
+> in a local config (not `settings.yaml`), and a dedicated reviewed PR for
+> real live submission — none of which are done here.
