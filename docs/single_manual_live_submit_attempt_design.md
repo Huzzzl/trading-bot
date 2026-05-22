@@ -433,7 +433,7 @@ All unit tests must use a mock broker. No real Alpaca calls in any test.
 | `src/tools/live_single_submit_approval_review.py` | **Complete** — offline read-only approval review |
 | `tests/test_live_single_submit_approval_review.py` | **Complete** — 196 tests, all pass |
 | `src/tools/live_single_manual_submit.py` | **Complete** — real `AlpacaLiveSubmitBroker` adapter implemented |
-| `tests/test_live_single_manual_submit.py` | **Complete** — 243 tests, all pass (mock-only) |
+| `tests/test_live_single_manual_submit.py` | **Complete** — 255 tests, all pass (mock-only) |
 | Real live submit adapter | **Implemented** — `AlpacaLiveSubmitBroker` with lazy SDK import |
 | CLI without `--allow-real-live-submit-once` | Always BLOCKED — "real live submit adapter not implemented" |
 | CLI with flag + all gates + credentials | Constructs real adapter; calls `submit_order` exactly once |
