@@ -596,13 +596,35 @@ def run_submit(
                 blocker=blocker,
             )
         # All pre-gates passed and flag is set: read credentials and build broker.
-        broker = _build_live_submit_broker(
-            violations,
-            _trading_client_cls=_trading_client_cls,
-            _market_order_request_cls=_market_order_request_cls,
-            _order_side_cls=_order_side_cls,
-            _time_in_force_cls=_time_in_force_cls,
-        )
+        try:
+            broker = _build_live_submit_broker(
+                violations,
+                _trading_client_cls=_trading_client_cls,
+                _market_order_request_cls=_market_order_request_cls,
+                _order_side_cls=_order_side_cls,
+                _time_in_force_cls=_time_in_force_cls,
+            )
+        except Exception:
+            blocker = "live submit broker construction failed (details redacted)"
+            return _make_result(
+                checked_at=checked_at,
+                result="BLOCKED",
+                order_submitted=False,
+                broker_mutation_calls_made=False,
+                submit_order_called=False,
+                live_submit_enabled=live_submit_enabled,
+                config_safety_overridden=config_safety_overridden,
+                out_symbol=out_symbol,
+                out_side=out_side,
+                out_order_type=out_order_type,
+                out_notional=out_notional,
+                client_order_id=None,
+                submitted_at_utc=None,
+                broker_order_id_redacted=None,
+                live_ledger_written=False,
+                violations=[blocker],
+                blocker=blocker,
+            )
         if broker is None:
             return _make_result(
                 checked_at=checked_at,

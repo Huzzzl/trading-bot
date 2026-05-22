@@ -1715,6 +1715,139 @@ class TestRealAdapterExceptionRedaction:
 
 
 # ---------------------------------------------------------------------------
+# TestRealAdapterBrokerConstructionFails
+# ---------------------------------------------------------------------------
+
+class TestRealAdapterBrokerConstructionFails:
+    """TradingClient constructor raises → BLOCKED, redacted, no submit, no ledger."""
+
+    def _run_with_raising_constructor(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        secret: str,
+    ) -> dict[str, Any]:
+        monkeypatch.setenv("ALPACA_LIVE_API_KEY", "fake-api-key")
+        monkeypatch.setenv("ALPACA_LIVE_SECRET_KEY", "fake-secret-key")
+
+        class _RaisingCls:
+            def __init__(self, **kwargs: Any) -> None:
+                raise RuntimeError(secret)
+
+        return _run(
+            tmp_path,
+            allow_real_live_submit=True,
+            _trading_client_cls=_RaisingCls,
+            _market_order_request_cls=_FakeOrderRequest,
+            _order_side_cls=_FakeOrderSide,
+            _time_in_force_cls=_FakeTimeInForce,
+        )
+
+    def test_blocked_on_constructor_raise(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        out = self._run_with_raising_constructor(tmp_path, monkeypatch, "construction-err")
+        assert out["result"] == "BLOCKED"
+
+    def test_no_submit_order_called(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        out = self._run_with_raising_constructor(tmp_path, monkeypatch, "construction-err")
+        assert out["submit_order_called"] is False
+
+    def test_no_ledger_written(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        out = self._run_with_raising_constructor(tmp_path, monkeypatch, "construction-err")
+        assert out["live_ledger_written"] is False
+        assert not (tmp_path / "ledger.csv").exists()
+
+    def test_order_submitted_false(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        out = self._run_with_raising_constructor(tmp_path, monkeypatch, "construction-err")
+        assert out["order_submitted"] is False
+
+    def test_broker_mutation_false(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        out = self._run_with_raising_constructor(tmp_path, monkeypatch, "construction-err")
+        assert out["broker_mutation_calls_made"] is False
+
+    def test_secret_not_in_blocker(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        secret = "sk-CONSTRUCTOR-SECRET-SHOULD-NOT-APPEAR"
+        out = self._run_with_raising_constructor(tmp_path, monkeypatch, secret)
+        assert secret not in (out["blocker"] or "")
+
+    def test_secret_not_in_violations(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        secret = "sk-CONSTRUCTOR-SECRET-SHOULD-NOT-APPEAR"
+        out = self._run_with_raising_constructor(tmp_path, monkeypatch, secret)
+        for v in out["violations"]:
+            assert secret not in v
+
+    def test_secret_not_in_output_json(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        secret = "sk-CONSTRUCTOR-SECRET-SHOULD-NOT-APPEAR"
+        out = self._run_with_raising_constructor(tmp_path, monkeypatch, secret)
+        assert secret not in json.dumps(out)
+
+    def test_blocker_message_is_generic(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        out = self._run_with_raising_constructor(tmp_path, monkeypatch, "any-error")
+        assert out["blocker"] == "live submit broker construction failed (details redacted)"
+
+    def test_run_submit_never_raises(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ALPACA_LIVE_API_KEY", "fake-api-key")
+        monkeypatch.setenv("ALPACA_LIVE_SECRET_KEY", "fake-secret-key")
+
+        class _AlwaysRaises:
+            def __init__(self, **kwargs: Any) -> None:
+                raise RuntimeError("boom from constructor")
+
+        out = _run(
+            tmp_path,
+            allow_real_live_submit=True,
+            _trading_client_cls=_AlwaysRaises,
+        )
+        assert isinstance(out, dict)
+        assert out["result"] == "BLOCKED"
+
+    def test_import_failure_also_blocked(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ALPACA_LIVE_API_KEY", "fake-api-key")
+        monkeypatch.setenv("ALPACA_LIVE_SECRET_KEY", "fake-secret-key")
+
+        class _ImportErrorCls:
+            def __init__(self, **kwargs: Any) -> None:
+                raise ImportError("alpaca SDK not available")
+
+        out = _run(
+            tmp_path,
+            allow_real_live_submit=True,
+            _trading_client_cls=_ImportErrorCls,
+        )
+        assert out["result"] == "BLOCKED"
+        assert out["submit_order_called"] is False
+        assert out["live_ledger_written"] is False
+        assert "alpaca SDK not available" not in json.dumps(out)
+
+    def test_credential_values_exposed_false(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        out = self._run_with_raising_constructor(tmp_path, monkeypatch, "err")
+        assert out["credential_values_exposed"] is False
+
+
+# ---------------------------------------------------------------------------
 # TestSourceScans
 # ---------------------------------------------------------------------------
 
