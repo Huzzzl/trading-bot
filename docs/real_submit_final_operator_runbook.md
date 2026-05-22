@@ -102,10 +102,17 @@ Run these commands **in order** before the real submit attempt.
 All must return `result="PASS"` (or `result="BLOCKED"` for the final submit
 dry check).  Stop and do not proceed if any step fails.
 
+> **Note on shell syntax:** Commands below use Unix `\` line continuations.
+> On Windows PowerShell replace `\` with `` ` `` (backtick), or write the
+> command as a single line with no line continuations.
+
 ### Step 2a — Credential presence guard
 
 ```sh
-python -m src.tools.live_credential_presence_guard
+python -m src.tools.live_credential_presence_guard \
+    --required-env ALPACA_LIVE_API_KEY \
+    --required-env ALPACA_LIVE_SECRET_KEY \
+    --output output/live_credential_presence_guard.json
 ```
 
 Expected: `result="PASS"`
@@ -115,7 +122,9 @@ Expected: `result="PASS"`
 ### Step 2b — Operator config override review
 
 ```sh
-python -m src.tools.live_operator_config_override_review
+python -m src.tools.live_operator_config_override_review \
+    --override-artifact output/live_operator_config_override.json \
+    --output output/live_operator_config_override_review.json
 ```
 
 Expected: `result="PASS"`
@@ -125,7 +134,14 @@ Expected: `result="PASS"`
 ### Step 2c — Live broker read-only preflight
 
 ```sh
-python -m src.tools.live_broker_preflight_readonly
+python -m src.tools.live_broker_preflight_readonly \
+    --credential-guard output/live_credential_presence_guard.json \
+    --operator-override output/live_operator_config_override_review.json \
+    --symbol SPY \
+    --side buy \
+    --notional-cap <value> \
+    --output output/live_broker_preflight_readonly.json \
+    --allow-live-broker-api-readonly
 ```
 
 Expected: `result="PASS"` — account ACTIVE, buying power ≥ notional_cap,
@@ -138,7 +154,9 @@ market open, SPY tradable and fractionable.
 ### Step 2d — Single submit approval review
 
 ```sh
-python -m src.tools.live_single_submit_approval_review
+python -m src.tools.live_single_submit_approval_review \
+    --approval-artifact output/live_single_submit_approval.json \
+    --output output/live_single_submit_approval_review.json
 ```
 
 Expected: `result="PASS"`, `approval_expires_at_utc` strictly after current UTC.
@@ -150,9 +168,17 @@ Expected: `result="PASS"`, `approval_expires_at_utc` strictly after current UTC.
 
 ```sh
 python -m src.tools.live_single_manual_submit \
+    --credential-guard output/live_credential_presence_guard.json \
+    --operator-override output/live_operator_config_override_review.json \
+    --broker-preflight output/live_broker_preflight_readonly.json \
+    --submit-approval output/live_single_submit_approval_review.json \
+    --local-operator-config <local-config-path> \
+    --symbol SPY \
+    --side buy \
+    --order-type market \
     --notional-cap <value> \
-    --operator-config-path <local-config-path> \
-    --output-path output/live_single_manual_submit_drycheck.json
+    --ledger <local-ledger-path> \
+    --output output/live_single_manual_submit_drycheck.json
 ```
 
 Expected output fields:
@@ -205,14 +231,23 @@ Confirm every item personally before issuing the real submit command.
 
 ```sh
 python -m src.tools.live_single_manual_submit \
+    --credential-guard output/live_credential_presence_guard.json \
+    --operator-override output/live_operator_config_override_review.json \
+    --broker-preflight output/live_broker_preflight_readonly.json \
+    --submit-approval output/live_single_submit_approval_review.json \
+    --local-operator-config <local-config-path> \
+    --symbol SPY \
+    --side buy \
+    --order-type market \
     --notional-cap <value> \
-    --operator-config-path <local-config-path> \
-    --output-path output/live_single_manual_submit_attempt.json \
+    --ledger <local-ledger-path> \
+    --output output/live_single_manual_submit_attempt.json \
     --allow-real-live-submit-once
 ```
 
 Replace `<value>` with the exact notional cap (e.g. `50`).
 Replace `<local-config-path>` with the path to the local operator config file.
+Replace `<local-ledger-path>` with the path to the local ledger CSV file.
 
 **Only one run.**  If the result is BLOCKED, do not retry.  Inspect the
 `blocker` field, resolve the underlying condition, obtain a fresh approval
@@ -289,7 +324,8 @@ live_kill_switch_enabled: true
 
 ```sh
 python -m src.tools.live_ledger_verify \
-    --ledger-path <local-ledger-path>
+    --ledger <local-ledger-path> \
+    --output output/live_ledger_verify.json
 ```
 
 Expected: ledger row with `status="submitted"`, `broker_order_id="<redacted>"`.
