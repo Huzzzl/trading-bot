@@ -1206,3 +1206,120 @@ All tests are offline — no real Alpaca calls, no credentials read.
 > `submit_order`, `cancel_order`, and `replace_order` remain unimplemented for live.
 > No orders endpoint, POST/PATCH/DELETE, live ledger writes, or `config_safety`
 > bypass exist in the current codebase.
+
+---
+
+## Milestone: Single Manual Submit Mock-Only Core Complete
+
+### Recommended git tag
+
+```
+live-single-manual-submit-mock-core-complete
+```
+
+### What this milestone means
+
+| Item | State |
+|------|-------|
+| v2 approvals | Complete |
+| Enablement gate | Complete |
+| Ledger dry-run lifecycle | Complete |
+| `live_operator_config_override_review` | Complete |
+| `live_credential_presence_guard` | Complete |
+| Broker preflight design | Complete |
+| `live_broker_preflight_readonly` mock-only core | Complete |
+| `AlpacaLiveReadOnlyBroker` real adapter | Complete |
+| Manual live read-only preflight run | PASS observed |
+| Single submit attempt design | Complete |
+| `live_single_submit_approval_review` | Complete — 196 tests |
+| `live_single_manual_submit` mock-only core | **Complete** — 193 tests |
+| Real live submit adapter | **Not implemented** — CLI always BLOCKED |
+| Automated live trading | **Not implemented** |
+| `cancel_order` / `replace_order` | Absent — no call path exists |
+| `config_safety` | **Still the hard blocker** |
+| Alpaca endpoint called by this tool | **No** |
+| Credentials read | **No** |
+| Real order submitted | **No** |
+| Live ledger written (in production) | **No** — only via mock broker in unit tests |
+| `config_safety` bypassed | **No** |
+
+### `live_single_manual_submit` — what it does (mock-only core)
+
+`src/tools/live_single_manual_submit.py` implements the complete gate
+sequence for a future one-time single live SPY buy attempt, with a
+`broker=None` placeholder instead of a real Alpaca submit adapter.
+
+| Property | Value |
+|----------|-------|
+| CLI result | Always `BLOCKED` — "real live submit adapter not implemented" |
+| SUBMITTED result | Reachable only via injected mock broker in unit tests |
+| Calls Alpaca | No |
+| Imports Alpaca SDK | No |
+| Imports network libraries | No |
+| Reads credentials | No |
+| Calls `cancel_order` / `replace_order` | No |
+| Retries failed submit | No |
+| Removes `config_safety` | No |
+| `run_submit` raises | Never |
+
+### Gates implemented (all must pass before broker call)
+
+| Gate | Blocker on failure |
+|------|--------------------|
+| Four prerequisite artifacts with `result="PASS"` | BLOCKED, no ledger, no broker |
+| `symbol` exactly `"SPY"` | BLOCKED, no ledger, no broker |
+| `side` exactly `"buy"` | BLOCKED, no ledger, no broker |
+| `order_type` exactly `"market"` | BLOCKED, no ledger, no broker |
+| `notional_cap` in (0, 100.0] — not bool, not string | BLOCKED, no ledger, no broker |
+| Local operator YAML config: three strict boolean flags | BLOCKED, no ledger, no broker |
+| `broker` not None | BLOCKED ("real live submit adapter not implemented") |
+
+### State table
+
+| State | `order_submitted` | `submit_order_called` | `broker_mutation_calls_made` |
+|-------|------------------|-----------------------|-----------------------------|
+| BLOCKED (pre-broker gates) | `false` | `false` | `false` |
+| BLOCKED (`broker=None`) | `false` | `false` | `false` |
+| SUBMITTED | `true` | `true` | `true` |
+| BLOCKED (exception) | `false` | `true` | `false` |
+
+### Hardcoded output invariants (every result)
+
+| Field | Invariant value |
+|-------|----------------|
+| `cancel_order_called` | `false` always |
+| `replace_order_called` | `false` always |
+| `automated_trading_enabled` | `false` always |
+| `recurring_trading_enabled` | `false` always |
+| `credential_values_exposed` | `false` always |
+
+### Test coverage
+
+193 unit tests in `tests/test_live_single_manual_submit.py`.
+Full suite: 3,769 tests passed.
+All tests use a mock broker — no real Alpaca calls, no credentials read.
+
+### Safety invariants confirmed at this milestone
+
+- CLI always exits with BLOCKED — real submit adapter not implemented
+- `submit_order` is called only via an injected mock in unit tests
+- No Alpaca endpoint was contacted by any test or tool
+- No credential values were read, stored, or printed
+- No real order was submitted
+- No live ledger was written in production — only in unit test tmp dirs
+- `cancel_order` and `replace_order` are absent from the source
+- Raw invalid field values are never echoed in output
+- `config_safety` was not bypassed or removed
+
+### Warning
+
+> **This milestone does not approve real trading.**
+> **This milestone does not approve live order submission.**
+> **CLI mode is always BLOCKED — real live submit adapter not implemented.**
+> SUBMITTED is reachable only through an injected mock broker in unit tests.
+> A real broker adapter must be implemented in a future PR before any
+> live order can be submitted.
+> `config_safety` remains the hard blocker.
+> `cancel_order` and `replace_order` remain unimplemented for live.
+> No orders endpoint, POST/PATCH/DELETE, or `config_safety` bypass exist
+> in the current codebase.

@@ -434,12 +434,12 @@ All unit tests must use a mock broker. No real Alpaca calls in any test.
 |------|-------|
 | This design document | Complete — this file |
 | `src/tools/live_single_submit_approval_review.py` | **Complete** — offline read-only approval review |
-| `tests/test_live_single_submit_approval_review.py` | **Complete** — 171 tests, all pass |
-| `src/tools/live_single_manual_submit.py` | **Not implemented** |
-| `tests/test_live_single_manual_submit.py` | **Not implemented** |
+| `tests/test_live_single_submit_approval_review.py` | **Complete** — 196 tests, all pass |
+| `src/tools/live_single_manual_submit.py` | **Complete** — mock-only core framework |
+| `tests/test_live_single_manual_submit.py` | **Complete** — 193 tests, all pass |
 | Real live submit | **Not implemented** |
 | Automated live trading | **Not implemented** |
-| `submit_order` for live | Absent — no call path exists |
+| Real `submit_order` adapter for live | Absent — CLI always BLOCKED |
 | `config_safety` | Still the hard blocker |
 
 ### `live_single_submit_approval_review` — what it does
@@ -463,6 +463,33 @@ PASS means the artifact is present, structurally valid, correctly scoped
 and contains all required explicit acknowledgements.
 
 PASS does not submit an order and does not enable live trading.
+
+**No live order can be submitted as a result of this PR.**
+
+### `live_single_manual_submit` — what it does (mock-only core)
+
+`src/tools/live_single_manual_submit.py` is a mock-only core framework for a
+future one-time single live SPY buy attempt.
+
+| Property | Value |
+|----------|-------|
+| CLI result | Always `BLOCKED` — real live submit adapter not implemented |
+| SUBMITTED result | Reachable only via injected mock broker in unit tests |
+| Calls Alpaca | No |
+| Imports Alpaca SDK | No |
+| Imports network libraries (requests/httpx/aiohttp/urllib.request) | No |
+| Reads credentials | No |
+| Calls `cancel_order` / `replace_order` | No |
+| Retries failed submit | No |
+| Writes live ledger | Only when mock broker is injected (unit tests only) |
+| Removes `config_safety` on any path | No |
+| Approves automated or recurring trading | No |
+| `run_submit` raises | Never |
+
+CLI always passes `broker=None`, which triggers the gate
+`"real live submit adapter not implemented"` after all other gates pass.
+A real broker adapter must be implemented in a future PR to reach SUBMITTED
+in production.
 
 **No live order can be submitted as a result of this PR.**
 
