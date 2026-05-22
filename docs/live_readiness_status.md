@@ -1458,3 +1458,65 @@ Source scan tests updated:
 > The operator must satisfy all gates, set the explicit flag, and provide valid
 > credentials before a real order attempt can be made.
 > `config_safety` overrides must be reset to safe defaults immediately after any attempt.
+
+---
+
+## Milestone: Real Submit Without Flag — BLOCKED Observed
+
+**Branch:** `claude/docs-snapshot-real-submit-without-flag-blocked`
+**Status:** Complete
+
+Dry-run snapshot taken after PR #122 merged to `main`, confirming the
+BLOCKED gate operates correctly without the `--allow-real-live-submit-once` flag.
+
+**No real order was submitted.**
+**No Alpaca endpoint was contacted.**
+**No credential values were read or exposed.**
+**No live ledger was written.**
+
+### What was confirmed
+
+| Run | Tool | Result |
+|-----|------|--------|
+| 1 | `live_single_submit_approval_review` | PASS |
+| 2 | `live_single_manual_submit` (without `--allow-real-live-submit-once`) | BLOCKED |
+
+Run 1 (`live_single_submit_approval_review`) confirmed that the approval artifact
+is structurally valid, correctly scoped
+(`approval_scope="AUTHORIZE_SINGLE_LIVE_MARKET_BUY_SPY_ONCE"`), not expired,
+and contains all required strict-boolean acknowledgements.
+
+Run 2 (`live_single_manual_submit`) confirmed that even with all prerequisite
+artifacts present (`result="PASS"`) and a valid local operator config, the CLI
+returns BLOCKED with `blocker="real live submit adapter not implemented"` when
+the `--allow-real-live-submit-once` flag is absent — before reading any
+credentials or constructing any broker client.
+
+### Safety invariants confirmed
+
+| Invariant | Confirmed |
+|-----------|----------|
+| No real order submitted | ✓ |
+| No Alpaca endpoint contacted | ✓ |
+| No credential values read or exposed | ✓ |
+| No live ledger written | ✓ |
+| `submit_order_called=false` | ✓ |
+| `broker_mutation_calls_made=false` | ✓ |
+| `--allow-real-live-submit-once` required | ✓ — BLOCKED without it |
+
+### Reference
+
+- `docs/real_submit_without_flag_blocked_snapshot.md` — full snapshot document
+- Suggested git tag: `real-submit-without-flag-blocked-observed`
+
+### Warning
+
+> **This milestone does not approve real trading.**
+> **This milestone does not approve live order submission.**
+> **No real order has been submitted.**
+> The `--allow-real-live-submit-once` flag is required for any real submit
+> attempt. Without it, CLI is always BLOCKED.
+> A real order attempt additionally requires a funded account, fresh PASS
+> runs of all four prerequisite tools, valid credentials in environment
+> variables, and explicit local operator config overrides — none of which
+> are committed to this repository.
