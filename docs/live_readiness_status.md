@@ -1823,3 +1823,103 @@ A future PR must add:
 > The real broker adapter is not implemented — a future PR is required.
 > Any future real adapter must be mock-only in tests, require explicit
 > operator flag, and read credentials only after all gates pass.
+
+---
+
+## Milestone: Live Position Reconciliation Read-Only — Real Adapter Complete
+
+**PR:** `add-live-position-reconciliation-readonly-alpaca-adapter`
+**Status:** Complete
+
+Real `AlpacaLivePositionBroker` adapter implemented and merged:
+- `src/tools/live_position_reconciliation_readonly.py` — real adapter added (exists on `main`)
+- `tests/test_live_position_reconciliation_readonly.py` — 106 tests (exists on `main`)
+
+**CLI requires `--allow-live-broker-api-readonly` flag.**
+**Without the flag: CLI always returns BLOCKED ("readonly broker api flag not set").**
+**Without the flag: credentials are never read, TradingClient is never constructed.**
+**With the flag + valid artifacts + valid credentials: real Alpaca read-only calls are made.**
+**No Alpaca SDK imported at module level.**
+**Alpaca SDK import is lazy — inside `AlpacaLivePositionBroker.__init__` only.**
+**No orders submitted, sold, cancelled, or replaced.**
+**No `cancel_order`, `replace_order`, `close_position`, `close_all_positions` methods.**
+**No live ledger written.**
+**No config_safety mutated.**
+**No automated position decision made.**
+**Broker exception text redacted — never in output, violations, blocker, or stdout.**
+**All tests use mock `TradingClient` — no real Alpaca calls in any test.**
+
+### `AlpacaLivePositionBroker` — what it does
+
+`AlpacaLivePositionBroker` wraps `alpaca-py` `TradingClient(paper=False)` and
+exposes exactly two read-only methods:
+
+- `get_position(symbol)` — calls `get_open_position`; returns `{"position_exists": True}` or `None` (404 → `None`, not error)
+- `get_open_orders(symbol)` — calls `get_orders` with `status=OPEN, symbols=[symbol]`; returns `[{}]` per order (no IDs/prices)
+
+| Property | Value |
+|----------|-------|
+| `TradingClient` mode | `paper=False` — real live account |
+| SDK import | Lazy — inside `__init__` only; no module-level import |
+| `cancel_order` / `replace_order` / `close_position` / `close_all_positions` | Absent |
+| Orders endpoint (POST/PATCH/DELETE) | Not used |
+| Broker exception text | Redacted in all output — raw exception never written |
+| `position_observed` / `open_order_observed` | Boolean flags only — no IDs/prices/quantities |
+| Credentials read | Only after all gates pass and `--allow-live-broker-api-readonly` present |
+
+### Gate sequence (all must pass before credentials read or TradingClient constructed)
+
+| Gate | Blocker on failure |
+|------|--------------------|
+| `credential_guard` artifact present and `result="PASS"` | BLOCKED, `credentials_read=false` |
+| `operator_override` artifact present and `result="PASS"` | BLOCKED, `credentials_read=false` |
+| `symbol` exactly `"SPY"` | BLOCKED, `credentials_read=false` |
+| `--allow-live-broker-api-readonly` flag present | BLOCKED ("readonly broker api flag not set"), `credentials_read=false` |
+| `ALPACA_LIVE_API_KEY` and `ALPACA_LIVE_SECRET_KEY` non-empty in env | BLOCKED ("credentials not found in environment"), `credentials_read=true` |
+
+### Test coverage
+
+106 unit tests in `tests/test_live_position_reconciliation_readonly.py`.
+All tests use mock `_FakeTradingClient` / `_TrackingClientCls` — no real Alpaca calls in any test.
+
+New test classes added:
+- `TestRealAdapterFlagAbsent` (5) — without flag: BLOCKED, `credentials_read=false`, no TradingClient, no broker calls
+- `TestRealAdapterGatesFail` (4) — flag present but artifact/symbol gates fail: `credentials_read=false`
+- `TestRealAdapterCredentialsMissing` (4) — flag + gates pass but env vars absent: BLOCKED, `credentials_read=true`
+- `TestRealAdapterConstruction` (5) — TradingClient constructed with `paper=False`, api_key passed, `credentials_read=true`, `QueryOrderStatus.OPEN` passed to `GetOrdersRequest`
+- `TestRealAdapterHappyPath` (6) — PASS, `position_observed=true/false`, `open_order_observed=true/false`, mutation fields false
+- `TestRealAdapterNoPositionSignal` (3) — 404-style exceptions → `position_observed=false`, `result="PASS"` (not BLOCKED)
+- `TestRealAdapterExceptionRedaction` (5) — broker/construction exceptions with secret → BLOCKED, secret absent from output
+- `TestRealAdapterBrokerConstructionFails` (3) — TradingClient raises → BLOCKED, `credentials_read=true`, `broker_calls_made=false`
+- `TestCLIRealAdapterFlag` (3) — CLI with/without flag: correct blocker messages, output always written
+
+Source scan tests added:
+- `test_no_close_position_call` — no `close_position(` in non-comment source
+- `test_no_close_all_positions_call` — no `close_all_positions(` in non-comment source
+
+### Safety invariants confirmed at this milestone
+
+- CLI without `--allow-live-broker-api-readonly` is always BLOCKED — tested
+- Credentials are read only after all gates pass and the flag is present — tested
+- `TradingClient` is constructed only after all gates pass — tested with `_TrackingClientCls`
+- `paper=False` enforced — tested
+- No real Alpaca endpoint was contacted by any test or by this PR
+- No credential values were read, stored, printed, or written to any artifact in this PR
+- `cancel_order`, `replace_order`, `close_position`, `close_all_positions` absent from source — source-scanned
+- No POST/PATCH/DELETE calls in source — source-scanned
+- Broker exception text is redacted in all output — tested with secret injection
+- `position_observed` and `open_order_observed` are boolean flags only — no IDs/prices/quantities
+- No automated position decision made
+
+### Warning
+
+> **This milestone does not approve real trading.**
+> **This milestone does not approve live order submission.**
+> **No real Alpaca endpoint was called in this PR (tests use mocks only).**
+> The `--allow-live-broker-api-readonly` flag is required for any live API
+> contact. A PASS from this tool is a status check only — it does not
+> decide whether to hold or sell any position (that remains manual), does
+> not remove `config_safety`, and does not authorize any order submission.
+> `cancel_order`, `replace_order`, `close_position`, and `close_all_positions`
+> are absent from the adapter source.
+> Emergency actions remain manual via the Alpaca broker UI only.
