@@ -79,7 +79,7 @@ def _run(
     allow_live_readonly: bool = False,
     _trading_client_cls: Any = None,
     _get_orders_request_cls: Any = None,
-    _order_status_cls: Any = None,
+    _query_order_status_cls: Any = None,
 ) -> dict[str, Any]:
     cg_path = (
         tmp_path / "missing_cg.json"
@@ -99,7 +99,7 @@ def _run(
         allow_live_readonly=allow_live_readonly,
         _trading_client_cls=_trading_client_cls,
         _get_orders_request_cls=_get_orders_request_cls,
-        _order_status_cls=_order_status_cls,
+        _query_order_status_cls=_query_order_status_cls,
     )
 
 
@@ -190,8 +190,8 @@ class _FakeGetOrdersRequest:
         self.kwargs = kwargs
 
 
-class _FakeOrderStatus:
-    OPEN = "OPEN"
+class _FakeQueryOrderStatus:
+    OPEN = "open"
 
 
 def _make_tracking_cls() -> _TrackingClientCls:
@@ -830,7 +830,7 @@ class TestRealAdapterConstruction:
             allow_live_readonly=True,
             _trading_client_cls=tracker,
             _get_orders_request_cls=_FakeGetOrdersRequest,
-            _order_status_cls=_FakeOrderStatus,
+            _query_order_status_cls=_FakeQueryOrderStatus,
         )
         assert len(tracker.instances) == 1
         assert tracker.instances[0].paper is False
@@ -846,7 +846,7 @@ class TestRealAdapterConstruction:
             allow_live_readonly=True,
             _trading_client_cls=tracker,
             _get_orders_request_cls=_FakeGetOrdersRequest,
-            _order_status_cls=_FakeOrderStatus,
+            _query_order_status_cls=_FakeQueryOrderStatus,
         )
         assert tracker.instances[0].api_key == "my-api-key-xyz"
 
@@ -860,7 +860,7 @@ class TestRealAdapterConstruction:
             allow_live_readonly=True,
             _trading_client_cls=_make_tracking_cls(),
             _get_orders_request_cls=_FakeGetOrdersRequest,
-            _order_status_cls=_FakeOrderStatus,
+            _query_order_status_cls=_FakeQueryOrderStatus,
         )
         assert result["credentials_read"] is True
 
@@ -874,9 +874,33 @@ class TestRealAdapterConstruction:
             allow_live_readonly=True,
             _trading_client_cls=_make_tracking_cls(),
             _get_orders_request_cls=_FakeGetOrdersRequest,
-            _order_status_cls=_FakeOrderStatus,
+            _query_order_status_cls=_FakeQueryOrderStatus,
         )
         assert result["broker_calls_made"] is True
+
+    def test_get_orders_request_uses_query_order_status_open(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """GetOrdersRequest must receive QueryOrderStatus.OPEN, not OrderStatus."""
+        monkeypatch.setenv("ALPACA_LIVE_API_KEY", "test-key")
+        monkeypatch.setenv("ALPACA_LIVE_SECRET_KEY", "test-secret")
+        captured_requests: list[_FakeGetOrdersRequest] = []
+
+        class _CapturingGetOrdersRequest(_FakeGetOrdersRequest):
+            def __init__(self, **kwargs: Any) -> None:
+                super().__init__(**kwargs)
+                captured_requests.append(self)
+
+        _run(
+            tmp_path,
+            allow_live_readonly=True,
+            _trading_client_cls=_make_tracking_cls(),
+            _get_orders_request_cls=_CapturingGetOrdersRequest,
+            _query_order_status_cls=_FakeQueryOrderStatus,
+        )
+        assert len(captured_requests) == 1
+        assert captured_requests[0].kwargs.get("status") == _FakeQueryOrderStatus.OPEN
+        assert captured_requests[0].kwargs.get("status") == "open"
 
 
 # ---------------------------------------------------------------------------
@@ -902,7 +926,7 @@ class TestRealAdapterHappyPath:
             allow_live_readonly=True,
             _trading_client_cls=tracker,
             _get_orders_request_cls=_FakeGetOrdersRequest,
-            _order_status_cls=_FakeOrderStatus,
+            _query_order_status_cls=_FakeQueryOrderStatus,
         )
         if tracker.instances:
             tracker.instances[0]._has_position = has_position
@@ -920,7 +944,7 @@ class TestRealAdapterHappyPath:
             allow_live_readonly=True,
             _trading_client_cls=tracker,
             _get_orders_request_cls=_FakeGetOrdersRequest,
-            _order_status_cls=_FakeOrderStatus,
+            _query_order_status_cls=_FakeQueryOrderStatus,
         )
         assert result["result"] == "PASS"
 
@@ -935,7 +959,7 @@ class TestRealAdapterHappyPath:
             allow_live_readonly=True,
             _trading_client_cls=tracker,
             _get_orders_request_cls=_FakeGetOrdersRequest,
-            _order_status_cls=_FakeOrderStatus,
+            _query_order_status_cls=_FakeQueryOrderStatus,
         )
         assert result["position_observed"] is True
 
@@ -962,7 +986,7 @@ class TestRealAdapterHappyPath:
             allow_live_readonly=True,
             _trading_client_cls=_WithOrdersCls(),
             _get_orders_request_cls=_FakeGetOrdersRequest,
-            _order_status_cls=_FakeOrderStatus,
+            _query_order_status_cls=_FakeQueryOrderStatus,
         )
         assert result["open_order_observed"] is True
 
@@ -977,7 +1001,7 @@ class TestRealAdapterHappyPath:
             allow_live_readonly=True,
             _trading_client_cls=tracker,
             _get_orders_request_cls=_FakeGetOrdersRequest,
-            _order_status_cls=_FakeOrderStatus,
+            _query_order_status_cls=_FakeQueryOrderStatus,
         )
         assert result["open_order_observed"] is False
 
@@ -991,7 +1015,7 @@ class TestRealAdapterHappyPath:
             allow_live_readonly=True,
             _trading_client_cls=_make_tracking_cls(),
             _get_orders_request_cls=_FakeGetOrdersRequest,
-            _order_status_cls=_FakeOrderStatus,
+            _query_order_status_cls=_FakeQueryOrderStatus,
         )
         assert result["credentials_read"] is True
 
@@ -1005,7 +1029,7 @@ class TestRealAdapterHappyPath:
             allow_live_readonly=True,
             _trading_client_cls=_make_tracking_cls(),
             _get_orders_request_cls=_FakeGetOrdersRequest,
-            _order_status_cls=_FakeOrderStatus,
+            _query_order_status_cls=_FakeQueryOrderStatus,
         )
         assert result["broker_mutation_calls_made"] is False
         assert result["submit_order_reachable"] is False
@@ -1035,7 +1059,7 @@ class TestRealAdapterNoPositionSignal:
             allow_live_readonly=True,
             _trading_client_cls=tracker,
             _get_orders_request_cls=_FakeGetOrdersRequest,
-            _order_status_cls=_FakeOrderStatus,
+            _query_order_status_cls=_FakeQueryOrderStatus,
         )
         if tracker.instances:
             tracker.instances[0]._raise_on_get_position = Exception(exc_msg)
@@ -1044,7 +1068,7 @@ class TestRealAdapterNoPositionSignal:
             allow_live_readonly=True,
             _trading_client_cls=tracker,
             _get_orders_request_cls=_FakeGetOrdersRequest,
-            _order_status_cls=_FakeOrderStatus,
+            _query_order_status_cls=_FakeQueryOrderStatus,
         )
 
     def test_404_signal_gives_no_position(
@@ -1066,7 +1090,7 @@ class TestRealAdapterNoPositionSignal:
             allow_live_readonly=True,
             _trading_client_cls=_NoPositionCls(),
             _get_orders_request_cls=_FakeGetOrdersRequest,
-            _order_status_cls=_FakeOrderStatus,
+            _query_order_status_cls=_FakeQueryOrderStatus,
         )
         assert result["position_observed"] is False
         assert result["result"] == "PASS"
@@ -1105,7 +1129,7 @@ class TestRealAdapterExceptionRedaction:
             allow_live_readonly=True,
             _trading_client_cls=_raising_cls,
             _get_orders_request_cls=_FakeGetOrdersRequest,
-            _order_status_cls=_FakeOrderStatus,
+            _query_order_status_cls=_FakeQueryOrderStatus,
         )
         assert result["result"] == "BLOCKED"
 
@@ -1123,7 +1147,7 @@ class TestRealAdapterExceptionRedaction:
             allow_live_readonly=True,
             _trading_client_cls=_raising_cls,
             _get_orders_request_cls=_FakeGetOrdersRequest,
-            _order_status_cls=_FakeOrderStatus,
+            _query_order_status_cls=_FakeQueryOrderStatus,
         )
         assert self._SECRET not in json.dumps(result)
 
@@ -1141,7 +1165,7 @@ class TestRealAdapterExceptionRedaction:
             allow_live_readonly=True,
             _trading_client_cls=_raising_cls,
             _get_orders_request_cls=_FakeGetOrdersRequest,
-            _order_status_cls=_FakeOrderStatus,
+            _query_order_status_cls=_FakeQueryOrderStatus,
         )
         assert any("redacted" in v for v in result["violations"])
 
@@ -1165,7 +1189,7 @@ class TestRealAdapterExceptionRedaction:
             allow_live_readonly=True,
             _trading_client_cls=_RaisingCls(),
             _get_orders_request_cls=_FakeGetOrdersRequest,
-            _order_status_cls=_FakeOrderStatus,
+            _query_order_status_cls=_FakeQueryOrderStatus,
         )
         assert self._SECRET not in json.dumps(result)
         assert result["result"] == "BLOCKED"
@@ -1190,7 +1214,7 @@ class TestRealAdapterExceptionRedaction:
             allow_live_readonly=True,
             _trading_client_cls=_RaisingCls(),
             _get_orders_request_cls=_FakeGetOrdersRequest,
-            _order_status_cls=_FakeOrderStatus,
+            _query_order_status_cls=_FakeQueryOrderStatus,
         )
         assert self._SECRET not in json.dumps(result)
         assert result["result"] == "BLOCKED"
@@ -1217,7 +1241,7 @@ class TestRealAdapterBrokerConstructionFails:
             allow_live_readonly=True,
             _trading_client_cls=_fail,
             _get_orders_request_cls=_FakeGetOrdersRequest,
-            _order_status_cls=_FakeOrderStatus,
+            _query_order_status_cls=_FakeQueryOrderStatus,
         )
         assert result["result"] == "BLOCKED"
 
@@ -1235,7 +1259,7 @@ class TestRealAdapterBrokerConstructionFails:
             allow_live_readonly=True,
             _trading_client_cls=_fail,
             _get_orders_request_cls=_FakeGetOrdersRequest,
-            _order_status_cls=_FakeOrderStatus,
+            _query_order_status_cls=_FakeQueryOrderStatus,
         )
         assert result["credentials_read"] is True
 
@@ -1253,7 +1277,7 @@ class TestRealAdapterBrokerConstructionFails:
             allow_live_readonly=True,
             _trading_client_cls=_fail,
             _get_orders_request_cls=_FakeGetOrdersRequest,
-            _order_status_cls=_FakeOrderStatus,
+            _query_order_status_cls=_FakeQueryOrderStatus,
         )
         assert result["broker_calls_made"] is False
 

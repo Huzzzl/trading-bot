@@ -150,7 +150,7 @@ class AlpacaLivePositionBroker:
         secret_key: str,
         _trading_client_cls: Any = None,
         _get_orders_request_cls: Any = None,
-        _order_status_cls: Any = None,
+        _query_order_status_cls: Any = None,
     ) -> None:
         if _trading_client_cls is None:
             from alpaca.trading.client import TradingClient as _tc  # lazy import
@@ -158,14 +158,14 @@ class AlpacaLivePositionBroker:
         if _get_orders_request_cls is None:
             from alpaca.trading.requests import GetOrdersRequest as _gor  # lazy import
             _get_orders_request_cls = _gor
-        if _order_status_cls is None:
-            from alpaca.trading.enums import OrderStatus as _os  # lazy import
-            _order_status_cls = _os
+        if _query_order_status_cls is None:
+            from alpaca.trading.enums import QueryOrderStatus as _qos  # lazy import
+            _query_order_status_cls = _qos
         self._client = _trading_client_cls(
             api_key=api_key, secret_key=secret_key, paper=False
         )
         self._GetOrdersRequest = _get_orders_request_cls
-        self._OrderStatus = _order_status_cls
+        self._QueryOrderStatus = _query_order_status_cls
 
     def get_position(self, symbol: str) -> dict[str, Any] | None:
         """Return minimal presence dict if position exists; None if no position.
@@ -185,7 +185,7 @@ class AlpacaLivePositionBroker:
     def get_open_orders(self, symbol: str) -> list[dict[str, Any]]:
         """Return minimal presence list for open orders (no IDs or prices)."""
         req = self._GetOrdersRequest(
-            status=self._OrderStatus.OPEN, symbols=[symbol]
+            status=self._QueryOrderStatus.OPEN, symbols=[symbol]
         )
         orders = self._client.get_orders(filter=req)
         return [{} for _ in orders]
@@ -196,7 +196,7 @@ def _build_alpaca_live_position_broker(
     *,
     _trading_client_cls: Any = None,
     _get_orders_request_cls: Any = None,
-    _order_status_cls: Any = None,
+    _query_order_status_cls: Any = None,
 ) -> tuple[AlpacaLivePositionBroker | None, bool]:
     """Read credentials from env and construct AlpacaLivePositionBroker.
 
@@ -220,7 +220,7 @@ def _build_alpaca_live_position_broker(
             secret_key=secret_key,
             _trading_client_cls=_trading_client_cls,
             _get_orders_request_cls=_get_orders_request_cls,
-            _order_status_cls=_order_status_cls,
+            _query_order_status_cls=_query_order_status_cls,
         )
         return broker, True
     except Exception:
@@ -333,7 +333,7 @@ def run_reconciliation(
     allow_live_readonly: bool = False,
     _trading_client_cls: Any = None,
     _get_orders_request_cls: Any = None,
-    _order_status_cls: Any = None,
+    _query_order_status_cls: Any = None,
 ) -> dict[str, Any]:
     """Run the read-only position reconciliation check.
 
@@ -366,8 +366,9 @@ def run_reconciliation(
     allow_live_readonly:
         Must be ``True`` to enable real broker API access.  Set by the CLI
         flag ``--allow-live-broker-api-readonly``.
-    _trading_client_cls, _get_orders_request_cls, _order_status_cls:
+    _trading_client_cls, _get_orders_request_cls, _query_order_status_cls:
         Injectable replacements for Alpaca SDK classes (unit tests only).
+        ``_query_order_status_cls`` replaces ``QueryOrderStatus`` (not ``OrderStatus``).
     """
     checked_at = datetime.now(tz=timezone.utc).isoformat()
     violations: list[str] = []
@@ -441,7 +442,7 @@ def run_reconciliation(
             violations,
             _trading_client_cls=_trading_client_cls,
             _get_orders_request_cls=_get_orders_request_cls,
-            _order_status_cls=_order_status_cls,
+            _query_order_status_cls=_query_order_status_cls,
         )
         if violations:
             return _make_result(
