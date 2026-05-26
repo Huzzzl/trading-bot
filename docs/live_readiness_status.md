@@ -2265,7 +2265,7 @@ any position decision. Key design decisions:
 
 Mock-only core implemented and merged:
 - `src/tools/manual_position_status_checker_readonly.py` — mock-only core
-- `tests/test_manual_position_status_checker_readonly.py` — 74 tests
+- `tests/test_manual_position_status_checker_readonly.py` — 88 tests
 
 **CLI always returns BLOCKED ("real broker adapter not implemented").**
 **PASS is only reachable through an injected mock broker in unit tests.**
@@ -2294,12 +2294,12 @@ Mock-only core implemented and merged:
 New output fields vs. `live_position_reconciliation_readonly`:
 - `close_position_reachable=false` — always
 - `position_decision_made=false` — always
-- `market_session_status` — optional string from broker if method present, else `null`
+- `market_session_status` — allowlisted string or null; allowed values: `"open"`, `"closed"`, `"pre_market"`, `"after_hours"`, `null`; any other return value → BLOCKED, raw value not echoed
 
 ### Test coverage
 
-74 unit tests in `tests/test_manual_position_status_checker_readonly.py`.
-Full suite: 4011 tests passed.
+88 unit tests in `tests/test_manual_position_status_checker_readonly.py`.
+Full suite: 4025 tests passed.
 All tests use injected mock brokers — no real Alpaca calls.
 
 Test classes:
@@ -2308,7 +2308,8 @@ Test classes:
 - `TestInputSecretRedaction` (9) — secrets in cg result, oo result, symbol → absent from output, violations, blocker, stdout
 - `TestBrokerNone` (7) — CLI broker=None → BLOCKED, correct blocker message, all null presence fields
 - `TestHappyPath` (8) — injected mock broker → PASS with position/order/session flags; broker_calls_readonly=true; violations empty
-- `TestMarketSessionStatus` (4) — open/closed/null return/no method → market_session_status field correct
+- `TestMarketSessionStatus` (6) — open/closed/pre_market/after_hours/null return/no method → market_session_status field correct
+- `TestMarketSessionStatusRedaction` (13) — invalid/secret/whitespace/case variants → BLOCKED; raw value absent from output JSON, violations, blocker, stdout
 - `TestBrokerException` (7) — position/orders/session raises with secret → BLOCKED, secret absent from output and stdout
 - `TestOutputInvariants` (5) — all hardcoded safety fields checked on gate failure, broker None, and PASS paths; broker_calls_readonly mirrors broker_calls_made
 - `TestOutputAlwaysWritten` (3) — output artifact written for all BLOCKED paths via CLI; exit 1 confirmed
@@ -2328,6 +2329,7 @@ Test classes:
 - CLI always BLOCKED — tested via `main()` with `SystemExit(1)`
 - Broker exception text redacted — secret string absent from output and stdout
 - Raw invalid input values (cg result, oo result, symbol) never echoed — `TestInputSecretRedaction` (9 tests)
+- `market_session_status` allowlisted — secret/invalid/whitespace/case return values → BLOCKED, raw value not echoed — `TestMarketSessionStatusRedaction` (13 tests)
 - `broker_calls_readonly` mirrors `broker_calls_made` — false on gate failures, true only after broker calls
 - All output invariant fields hardcoded safe regardless of path
 
@@ -2343,7 +2345,7 @@ A future PR must add:
 ### Reference
 
 - `src/tools/manual_position_status_checker_readonly.py` — mock-only core
-- `tests/test_manual_position_status_checker_readonly.py` — 74 tests
+- `tests/test_manual_position_status_checker_readonly.py` — 88 tests
 - `docs/manual_position_status_checker_readonly_design.md` — design document
 - Suggested git tag: `manual-position-status-checker-readonly-mock-core-complete`
 

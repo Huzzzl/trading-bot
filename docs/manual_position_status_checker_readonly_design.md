@@ -158,7 +158,7 @@ All output fields below must be present in every result (PASS or BLOCKED).
 | `symbol` | `str \| null` | Echoed only if exactly `"SPY"` — otherwise `null` |
 | `position_observed` | `bool \| null` | `null` if BLOCKED before broker call |
 | `open_order_observed` | `bool \| null` | `null` if BLOCKED before broker call |
-| `market_session_status` | `str \| null` | `"open"`, `"closed"`, or `null` if not checked |
+| `market_session_status` | `str \| null` | Allowlisted: `"open"`, `"closed"`, `"pre_market"`, `"after_hours"`, or `null`; any other broker return value → BLOCKED, raw value not echoed |
 | `violations` | `list[str]` | Non-empty on BLOCKED |
 | `blocker` | `str \| null` | Set on BLOCKED; `null` on PASS |
 
