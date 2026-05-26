@@ -1923,3 +1923,74 @@ Source scan tests added:
 > `cancel_order`, `replace_order`, `close_position`, and `close_all_positions`
 > are absent from the adapter source.
 > Emergency actions remain manual via the Alpaca broker UI only.
+
+---
+
+## Milestone: Position Reconciliation Without Flag — BLOCKED Observed
+
+**Branch:** `claude/docs-snapshot-position-reconciliation-without-flag-blocked`
+**Status:** Complete
+
+Dry-run snapshot taken after PR #130 merged to `main`, confirming the flag
+gate fires correctly when `--allow-live-broker-api-readonly` is absent.
+
+**No Alpaca endpoint was contacted.**
+**No credentials were read.**
+**No TradingClient was constructed.**
+**No orders were submitted, sold, cancelled, or replaced.**
+**No live ledger was written.**
+**No config was mutated.**
+**No position decision was made.**
+
+### What was confirmed
+
+| Run | Tool | Result |
+|-----|------|--------|
+| 1 | `live_position_reconciliation_readonly` (without `--allow-live-broker-api-readonly`) | BLOCKED |
+
+The tool returned BLOCKED at gate 4 (flag check) before reading any
+environment variable, constructing any `TradingClient`, or making any
+broker API call.
+
+### Key observed fields
+
+| Field | Observed |
+|-------|---------|
+| `result` | `"BLOCKED"` |
+| `broker_calls_made` | `false` |
+| `credentials_read` | `false` |
+| `broker_mutation_calls_made` | `false` |
+| `position_observed` | `null` |
+| `open_order_observed` | `null` |
+| `blocker` | `"readonly broker api flag not set"` |
+
+### Safety invariants confirmed
+
+| Invariant | Confirmed |
+|-----------|----------|
+| No Alpaca endpoint contacted | ✓ |
+| No credentials read | ✓ (`credentials_read=false`) |
+| No TradingClient constructed | ✓ |
+| No submit/cancel/replace called | ✓ |
+| No broker mutation calls | ✓ |
+| No live ledger written | ✓ |
+| No config mutated | ✓ |
+| No position decision made | ✓ |
+| `--allow-live-broker-api-readonly` required | ✓ — BLOCKED without it |
+
+### Reference
+
+- `docs/position_reconciliation_without_flag_blocked_snapshot.md` — full snapshot document
+- Suggested git tag: `position-reconciliation-without-flag-blocked-observed`
+
+### Warning
+
+> **This milestone does not approve real trading.**
+> **This milestone does not approve future broker calls.**
+> **No Alpaca endpoint was contacted.**
+> **No credentials were read.**
+> **No position decision was made.**
+> The `--allow-live-broker-api-readonly` flag remains required for any live
+> read-only broker contact. Any position decision remains a manual operator
+> action. Emergency actions remain manual via the Alpaca broker UI only.
+
