@@ -30,3 +30,6 @@ outputs/
 .idea/
 .vscode/
 *.swp
+
+# Claude Code internal state
+.claude/
