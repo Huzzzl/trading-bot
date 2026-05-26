@@ -1,14 +1,19 @@
 # Live Position Reconciliation Read-Only Tool — Design
 
-Design document for a future read-only tool that inspects current live
-account positions and open orders after a live buy has been submitted.
+Design document for the read-only position / open-order reconciliation tool.
 
-**This PR does NOT trade.**
-**This PR does NOT submit, sell, cancel, or replace any order.**
-**This PR does NOT contact Alpaca.**
-**This PR does NOT read credentials.**
-**This PR does NOT implement the reconciliation tool.**
-**This PR does NOT approve future trading.**
+**Mock-only core implemented in PR `add-live-position-reconciliation-readonly-mock-core`.**
+**CLI always returns BLOCKED ("real broker adapter not implemented").**
+**PASS is only reachable through an injected mock broker in unit tests.**
+**55 unit tests — all mock-only, no real Alpaca calls.**
+**Real Alpaca adapter not yet implemented — separate future PR required.**
+
+**No Alpaca SDK is imported.**
+**No network requests are made.**
+**No credentials are read on any code path.**
+**No orders are submitted, sold, cancelled, or replaced.**
+**No live ledger is written.**
+**No config_safety is mutated.**
 **Any position decision remains manual.**
 
 ---
