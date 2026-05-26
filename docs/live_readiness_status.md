@@ -1739,20 +1739,27 @@ remains a manual operator decision.
 
 ## Milestone: Live Position Reconciliation Read-Only — Mock-Only Core Complete
 
-**Branch:** `claude/add-live-position-reconciliation-readonly-mock-core`
+**PRs:** `add-live-position-reconciliation-readonly-mock-core` (#128), snapshot (#this)
 **Status:** Complete
 
-Mock-only core implemented in:
-- `src/tools/live_position_reconciliation_readonly.py`
-- `tests/test_live_position_reconciliation_readonly.py`
+Mock-only core implemented and merged:
+- `src/tools/live_position_reconciliation_readonly.py` — mock-only core (exists on `main`)
+- `tests/test_live_position_reconciliation_readonly.py` — 66 tests (exists on `main`)
 
+**Mock-only core is complete.**
 **CLI always returns BLOCKED ("real broker adapter not implemented").**
 **PASS is only reachable through an injected mock broker in unit tests.**
+**Real Alpaca adapter is NOT implemented.**
 **No Alpaca SDK imported.**
 **No network requests made.**
 **No credentials read on any code path.**
+**No `os.environ` access anywhere in source.**
 **No orders submitted, sold, cancelled, or replaced.**
 **No live ledger written.**
+**No config_safety mutated.**
+**No automated position decision made.**
+**`broker_calls_readonly` mirrors `broker_calls_made`.**
+**Raw invalid input values are redacted — never echoed in output, violations, or stdout.**
 
 ### Test coverage
 
@@ -1761,28 +1768,33 @@ Full suite: 3,897 tests passed.
 All tests mock-only — no real Alpaca calls.
 
 Test classes:
-- `TestArtifactGates` — missing/non-PASS credential guard and operator override artifacts → BLOCKED, no broker call
-- `TestSymbolValidation` — wrong symbol, lowercase, whitespace, empty → BLOCKED
-- `TestBrokerNone` — CLI broker=None → BLOCKED, no credentials read, `position_observed=null`, `open_order_observed=null`
-- `TestHappyPath` — injected mock broker, all gate combinations → PASS with `position_observed`/`open_order_observed`
-- `TestBrokerException` — broker raises with secret string → BLOCKED, secret absent from output and stdout
-- `TestOutputInvariants` — mutation/credential/submit/cancel/replace fields always false; broker_ids/account_identifiers always redacted
-- `TestOutputAlwaysWritten` — output artifact written for all BLOCKED paths via CLI
-- `TestNeverRaises` — `run_reconciliation()` never raises on any exception path
-- `TestNoRawIds` — no raw IDs or fill details in output JSON or stdout
-- `TestSourceScans` — no Alpaca/network imports, no `os.environ`, no `submit_order(`/`cancel_order(`/`replace_order(`, no POST/PATCH/DELETE, no ledger writes
+- `TestArtifactGates` (7) — missing/non-PASS credential guard and operator override → BLOCKED, no broker call
+- `TestSymbolValidation` (4) — wrong symbol, lowercase, whitespace, empty → BLOCKED
+- `TestInputSecretRedaction` (9) — secret in cg/oo result or symbol → absent from output, violations, blocker, stdout
+- `TestBrokerNone` (6) — CLI broker=None → BLOCKED, no credentials read, `position_observed=null`, `open_order_observed=null`, `broker_calls_readonly=false`
+- `TestHappyPath` (8) — injected mock broker → PASS with `position_observed`/`open_order_observed`, `broker_calls_readonly=true`
+- `TestBrokerException` (7) — broker raises with secret string → BLOCKED, secret absent from output and stdout
+- `TestOutputInvariants` (5) — mutation/credential/submit/cancel/replace fields always false; `broker_calls_readonly` mirrors `broker_calls_made`; broker_ids/account_identifiers always redacted
+- `TestOutputAlwaysWritten` (3) — output artifact written for all BLOCKED paths via CLI
+- `TestNeverRaises` (4) — `run_reconciliation()` never raises on any exception path
+- `TestNoRawIds` (2) — no raw IDs or fill details in output JSON or stdout
+- `TestSourceScans` (11) — no Alpaca/network imports, no `os.environ`, no `submit_order(`/`cancel_order(`/`replace_order(`, no POST/PATCH/DELETE, no ledger writes
 
 ### Safety invariants confirmed
 
-- No Alpaca SDK imported (source-scanned)
-- No network imports (source-scanned)
-- No `os.environ` at module level (source-scanned)
-- No `submit_order(`/`cancel_order(`/`replace_order(` in source (source-scanned)
-- No POST/PATCH/DELETE mutation markers in source (source-scanned)
-- No ledger writes in source (source-scanned)
+- No Alpaca SDK imported — source-scanned
+- No network imports — source-scanned
+- No `os.environ` access at any level — source-scanned
+- No `submit_order(`/`cancel_order(`/`replace_order(` in source — source-scanned
+- No POST/PATCH/DELETE mutation markers in source — source-scanned
+- No ledger writes in source — source-scanned
+- No config mutation
+- No automated position decision
 - CLI always BLOCKED — tested via `main()` with `SystemExit(1)`
 - Broker exception text redacted — secret string absent from output and stdout
-- All output invariant fields hardcoded false/true regardless of path
+- Raw invalid input values (cg result, oo result, symbol) never echoed in output, violations, blocker, or stdout — `TestInputSecretRedaction` (9 tests)
+- `broker_calls_readonly` mirrors `broker_calls_made` — `false` on gate failures, `true` only after broker calls
+- All output invariant fields hardcoded safe regardless of path
 
 ### What remains
 
@@ -1807,6 +1819,7 @@ A future PR must add:
 > **No Alpaca endpoint was contacted.**
 > **No credentials were read.**
 > **No orders were submitted, sold, cancelled, or replaced.**
+> **No automated position decision is made.**
 > The real broker adapter is not implemented — a future PR is required.
 > Any future real adapter must be mock-only in tests, require explicit
 > operator flag, and read credentials only after all gates pass.
