@@ -2168,3 +2168,91 @@ A framework document defining:
 > explicit operator action, and an explicit CLI flag.
 > The hold/sell decision for the current SPY position remains entirely manual.
 
+---
+
+## Milestone: Manual Position Status Checker Read-Only — Design Complete
+
+**Branch:** `claude/docs-design-manual-position-status-checker-readonly`
+**Status:** Complete
+
+Design document created at
+`docs/manual_position_status_checker_readonly_design.md`.
+
+**No trade was executed.**
+**No order was submitted, sold, cancelled, replaced, or closed.**
+**No Alpaca endpoint was contacted.**
+**No credentials were read.**
+**No code was implemented.**
+**No automated monitoring was implemented.**
+**No stop-loss, take-profit, trailing stop, recurring job, sell adapter, or close adapter was implemented.**
+**The current SPY position remains a manual operator decision.**
+
+### What was designed
+
+A future read-only manual position status checker that lets the operator
+re-check SPY position and open-order presence on demand, without making
+any position decision. Key design decisions:
+
+- **Reuse or wrap `live_position_reconciliation_readonly`** — gate sequence,
+  broker adapter, and safety invariant fields preserved exactly; no new mutation
+  logic introduced
+- **Gate sequence preserved** — credential guard → operator override → symbol →
+  explicit flag → credential read → `TradingClient` construction → GET-only calls
+- **Boolean flags only** — `position_observed`, `open_order_observed`,
+  `market_session_status`; no size/price/quantity/PnL/IDs in any output field
+- **New hardcoded safety fields** — `close_position_reachable=false`,
+  `position_decision_made=false` in addition to all existing invariants
+- **`--allow-live-broker-api-readonly` flag required** — BLOCKED without it;
+  credentials never read without the flag
+- **Manual-run only** — no scheduling, no automation, no recurring jobs
+- **Mock-only tests required** — no real Alpaca calls in any test; source scans
+  for mutation methods, network imports, and POST/PATCH/DELETE patterns
+
+### Proposed output fields
+
+| Field | Value |
+|-------|-------|
+| `broker_mutation_calls_made` | `false` always |
+| `credential_values_exposed` | `false` always |
+| `submit_order_reachable` | `false` always |
+| `cancel_order_reachable` | `false` always |
+| `replace_order_reachable` | `false` always |
+| `close_position_reachable` | `false` always (new) |
+| `position_decision_made` | `false` always (new) |
+| `broker_ids_redacted` | `true` always |
+| `account_identifiers_redacted` | `true` always |
+| `raw_broker_response_included` | `false` always |
+| `position_observed` | `bool \| null` |
+| `open_order_observed` | `bool \| null` |
+| `market_session_status` | `str \| null` |
+
+### Safety invariants confirmed
+
+- No code changes
+- No Alpaca endpoint contacted
+- No credentials read or written
+- No order submitted, sold, cancelled, replaced, or closed
+- No live ledger written
+- No automated position decision made
+- No stop-loss, take-profit, or trailing stop designed
+- No recurring or automated monitoring designed
+- No sell or close adapter designed
+
+### Reference
+
+- `docs/manual_position_status_checker_readonly_design.md` — full design document
+- Suggested git tag: `manual-position-status-checker-readonly-designed`
+
+### Warning
+
+> **This milestone does not approve holding or selling the observed position.**
+> **This milestone does not approve future trading.**
+> **This milestone does not approve future broker calls.**
+> **No code was implemented. No Alpaca endpoint was contacted. No credentials were read.**
+> The design document is a planning document only.
+> Any future implementation requires its own PR, mock-only tests, safety review,
+> and all gates confirmed in the implementation PR.
+> PASS from the future checker means only that the status check completed —
+> it does not recommend hold or sell.
+> All position decisions remain entirely manual.
+
