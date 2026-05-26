@@ -52,7 +52,10 @@ Output invariants
 -----------------
 The following fields are always hardcoded regardless of broker response:
 
-    broker_calls_readonly           : true
+    broker_calls_readonly           : mirrors broker_calls_made
+                                      (false when no broker call was made;
+                                       true only after mock broker read-only
+                                       calls succeed)
     broker_mutation_calls_made      : false
     credential_values_exposed       : false
     credentials_read                : false

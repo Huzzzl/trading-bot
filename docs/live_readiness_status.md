@@ -1756,8 +1756,8 @@ Mock-only core implemented in:
 
 ### Test coverage
 
-55 unit tests in `tests/test_live_position_reconciliation_readonly.py`.
-Full suite: 3,886 tests passed.
+66 unit tests in `tests/test_live_position_reconciliation_readonly.py`.
+Full suite: 3,897 tests passed.
 All tests mock-only — no real Alpaca calls.
 
 Test classes:
@@ -1796,7 +1796,7 @@ A future PR must add:
 ### Reference
 
 - `src/tools/live_position_reconciliation_readonly.py` — mock-only core
-- `tests/test_live_position_reconciliation_readonly.py` — 55 tests
+- `tests/test_live_position_reconciliation_readonly.py` — 66 tests
 - `docs/live_position_reconciliation_readonly_design.md` — design document
 - Suggested git tag: `live-position-reconciliation-readonly-mock-core-complete`
 
