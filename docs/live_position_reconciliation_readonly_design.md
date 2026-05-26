@@ -3,14 +3,14 @@
 Design document for the read-only position / open-order reconciliation tool.
 
 **Mock-only core implemented in PR `add-live-position-reconciliation-readonly-mock-core`.**
-**CLI always returns BLOCKED ("real broker adapter not implemented").**
-**PASS is only reachable through an injected mock broker in unit tests.**
-**66 unit tests — all mock-only, no real Alpaca calls.**
-**Real Alpaca adapter not yet implemented — separate future PR required.**
+**Real Alpaca adapter implemented in PR `add-live-position-reconciliation-readonly-alpaca-adapter`.**
+**CLI requires `--allow-live-broker-api-readonly` flag; without it CLI always returns BLOCKED.**
+**Without the flag: credentials are never read, TradingClient is never constructed.**
+**105 unit tests — all mock-only, no real Alpaca calls.**
 
-**No Alpaca SDK is imported.**
-**No network requests are made.**
-**No credentials are read on any code path.**
+**No Alpaca SDK is imported at module level.**
+**No network requests are made at import time.**
+**No credentials are read before all gates pass and flag is present.**
 **No orders are submitted, sold, cancelled, or replaced.**
 **No live ledger is written.**
 **No config_safety is mutated.**

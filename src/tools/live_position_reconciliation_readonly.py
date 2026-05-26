@@ -1,35 +1,34 @@
 """
 tools/live_position_reconciliation_readonly.py
 -----------------------------------------------
-Mock-only core for a future read-only live position / open-order
-reconciliation tool.
+Read-only live position / open-order reconciliation tool.
 
-Inspects whether a live SPY position and/or open SPY orders exist, using
-an injected mock broker in tests.  The real Alpaca adapter is NOT implemented
-in this PR.
+Real Alpaca adapter added.  CLI requires ``--allow-live-broker-api-readonly``
+flag and valid ``ALPACA_LIVE_API_KEY`` / ``ALPACA_LIVE_SECRET_KEY`` env vars.
+Without the flag the CLI returns BLOCKED ("readonly broker api flag not set").
+PASS is reachable via the real adapter (CLI + flag + credentials) or an
+injected mock broker (unit tests).
 
-**CLI always returns BLOCKED ("real broker adapter not implemented").**
-**PASS is only reachable through an injected mock broker in unit tests.**
-**No Alpaca SDK is imported.**
-**No network requests are made.**
-**No credentials are read on any code path.**
+**No Alpaca SDK is imported at module level.**
+**No network requests are made at import time.**
+**No credentials are read until all gates pass and the flag is present.**
 **No orders are submitted, sold, cancelled, or replaced.**
 **No live ledger is written.**
 **No config_safety is mutated.**
 **No position decision is made — that remains a manual operator action.**
 
-Usage (mock-only core — always BLOCKED from CLI)::
+Usage::
 
     python -m src.tools.live_position_reconciliation_readonly \\
         --credential-guard output/live_credential_presence_guard.json \\
         --operator-override output/live_operator_config_override_review.json \\
         --symbol SPY \\
-        --output output/live_position_reconciliation_readonly.json
+        --output output/live_position_reconciliation_readonly.json \\
+        --allow-live-broker-api-readonly
 
-The real adapter (``AlpacaLivePositionBroker``) and the
-``--allow-live-broker-api-readonly`` flag will be added in a future PR.
-Until that PR merges, the CLI always returns BLOCKED with
-``"real broker adapter not implemented"``.
+Without ``--allow-live-broker-api-readonly`` the CLI always returns BLOCKED.
+Credentials (``ALPACA_LIVE_API_KEY``, ``ALPACA_LIVE_SECRET_KEY``) are read
+only after all gates pass and the flag is present.
 
 Broker client interface
 -----------------------
@@ -54,11 +53,10 @@ The following fields are always hardcoded regardless of broker response:
 
     broker_calls_readonly           : mirrors broker_calls_made
                                       (false when no broker call was made;
-                                       true only after mock broker read-only
-                                       calls succeed)
+                                       true only after read-only broker calls
+                                       succeed)
     broker_mutation_calls_made      : false
     credential_values_exposed       : false
-    credentials_read                : false
     live_submit_enabled             : false
     submit_order_reachable          : false
     cancel_order_reachable          : false
@@ -71,9 +69,10 @@ What it never does
 ------------------
 * Never calls submit_order, cancel_order, or replace_order.
 * Never calls any POST/PATCH/DELETE broker endpoint.
-* Never imports or uses the Alpaca SDK.
+* Never imports Alpaca SDK at module level.
 * Never imports requests, httpx, aiohttp, or urllib.request.
-* Never reads ALPACA_LIVE_API_KEY, ALPACA_LIVE_SECRET_KEY, or any env var.
+* Never reads ALPACA_LIVE_API_KEY or ALPACA_LIVE_SECRET_KEY before all gates
+  pass and --allow-live-broker-api-readonly is present.
 * Never writes or modifies a live ledger file.
 * Never mutates config_safety or settings.yaml.
 * Never makes any position management decision.
@@ -83,12 +82,23 @@ What it never does
 from __future__ import annotations
 
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 _REQUIRED_SYMBOL = "SPY"
+_LIVE_API_KEY_ENV = "ALPACA_LIVE_API_KEY"
+_LIVE_SECRET_KEY_ENV = "ALPACA_LIVE_SECRET_KEY"
+
+_POSITION_NOT_FOUND_SIGNALS = ("404", "position does not exist", "no position")
+
+
+def _is_position_not_found(exc: Exception) -> bool:
+    """Return True if the exception signals that no position exists (not a real error)."""
+    msg = str(exc).lower()
+    return any(signal in msg for signal in _POSITION_NOT_FOUND_SIGNALS)
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +132,103 @@ class PositionBrokerClient(Protocol):
 
 
 # ---------------------------------------------------------------------------
+# Real Alpaca read-only adapter (lazy SDK import — never at module level)
+# ---------------------------------------------------------------------------
+
+class AlpacaLivePositionBroker:
+    """Read-only Alpaca live position broker.
+
+    Alpaca SDK is imported lazily inside ``__init__`` only — never at module
+    level.  No submit_order, cancel_order, replace_order, close_position,
+    close_all_positions, or any mutation method is present.
+    """
+
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        secret_key: str,
+        _trading_client_cls: Any = None,
+        _get_orders_request_cls: Any = None,
+        _order_status_cls: Any = None,
+    ) -> None:
+        if _trading_client_cls is None:
+            from alpaca.trading.client import TradingClient as _tc  # lazy import
+            _trading_client_cls = _tc
+        if _get_orders_request_cls is None:
+            from alpaca.trading.requests import GetOrdersRequest as _gor  # lazy import
+            _get_orders_request_cls = _gor
+        if _order_status_cls is None:
+            from alpaca.trading.enums import OrderStatus as _os  # lazy import
+            _order_status_cls = _os
+        self._client = _trading_client_cls(
+            api_key=api_key, secret_key=secret_key, paper=False
+        )
+        self._GetOrdersRequest = _get_orders_request_cls
+        self._OrderStatus = _order_status_cls
+
+    def get_position(self, symbol: str) -> dict[str, Any] | None:
+        """Return minimal presence dict if position exists; None if no position.
+
+        Alpaca raises a 404-like exception when no position exists — that is
+        treated as ``None`` (position_observed=False), not as a broker error.
+        Any other exception is re-raised for the caller to handle.
+        """
+        try:
+            self._client.get_open_position(symbol)
+            return {"position_exists": True}
+        except Exception as exc:
+            if _is_position_not_found(exc):
+                return None
+            raise
+
+    def get_open_orders(self, symbol: str) -> list[dict[str, Any]]:
+        """Return minimal presence list for open orders (no IDs or prices)."""
+        req = self._GetOrdersRequest(
+            status=self._OrderStatus.OPEN, symbols=[symbol]
+        )
+        orders = self._client.get_orders(filter=req)
+        return [{} for _ in orders]
+
+
+def _build_alpaca_live_position_broker(
+    violations: list[str],
+    *,
+    _trading_client_cls: Any = None,
+    _get_orders_request_cls: Any = None,
+    _order_status_cls: Any = None,
+) -> tuple[AlpacaLivePositionBroker | None, bool]:
+    """Read credentials from env and construct AlpacaLivePositionBroker.
+
+    Returns ``(broker, credentials_read)``.  ``credentials_read`` is True
+    whenever ``os.environ.get`` was called (even if credentials were absent
+    or construction failed).  Exception details are always redacted.
+    """
+    api_key = os.environ.get(_LIVE_API_KEY_ENV, "").strip()
+    secret_key = os.environ.get(_LIVE_SECRET_KEY_ENV, "").strip()
+    missing = []
+    if not api_key:
+        missing.append(_LIVE_API_KEY_ENV)
+    if not secret_key:
+        missing.append(_LIVE_SECRET_KEY_ENV)
+    if missing:
+        violations.append("credentials not found in environment")
+        return None, True
+    try:
+        broker = AlpacaLivePositionBroker(
+            api_key=api_key,
+            secret_key=secret_key,
+            _trading_client_cls=_trading_client_cls,
+            _get_orders_request_cls=_get_orders_request_cls,
+            _order_status_cls=_order_status_cls,
+        )
+        return broker, True
+    except Exception:
+        violations.append("live broker construction failed (details redacted)")
+        return None, True
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -151,6 +258,7 @@ def _make_result(
     checked_at: str,
     violations: list[str],
     broker_calls_made: bool,
+    credentials_read: bool = False,
     symbol: str,
     position_observed: bool | None,
     open_order_observed: bool | None,
@@ -163,7 +271,7 @@ def _make_result(
         "broker_calls_readonly":       broker_calls_made,
         "broker_mutation_calls_made":  False,
         "credential_values_exposed":   False,
-        "credentials_read":            False,
+        "credentials_read":            credentials_read,
         "live_submit_enabled":         False,
         "submit_order_reachable":      False,
         "cancel_order_reachable":      False,
@@ -222,12 +330,17 @@ def run_reconciliation(
     operator_override_path: Path,
     symbol: str,
     broker: PositionBrokerClient | None = None,
+    allow_live_readonly: bool = False,
+    _trading_client_cls: Any = None,
+    _get_orders_request_cls: Any = None,
+    _order_status_cls: Any = None,
 ) -> dict[str, Any]:
     """Run the read-only position reconciliation check.
 
     Never raises.  All errors are captured as violations → BLOCKED.
 
-    No env vars are ever read.  No credentials are ever accessed.
+    No env vars are read until all artifact/symbol gates pass and
+    ``allow_live_readonly`` is True (or an explicit broker is injected).
 
     Gate order
     ----------
@@ -235,21 +348,31 @@ def run_reconciliation(
     2. ``operator_override`` artifact must exist and have ``result="PASS"``
     3. ``symbol`` must be exactly ``"SPY"``
     4. If any gate above fails → BLOCKED immediately, no broker calls
-    5. ``broker`` must not be None (real adapter not yet implemented)
-    6. Broker calls: ``get_position``, ``get_open_orders`` (each wrapped in
+    5. If ``broker is None`` and not ``allow_live_readonly`` → BLOCKED
+       (``"readonly broker api flag not set"``)
+    6. If ``broker is None`` → read credentials, construct
+       ``AlpacaLivePositionBroker`` (credentials read ONLY here)
+    7. Broker calls: ``get_position``, ``get_open_orders`` (each wrapped in
        try/except — exception detail is redacted)
 
     Parameters
     ----------
     broker:
-        When ``None`` (CLI default), returns BLOCKED with
-        ``"real broker adapter not implemented"``.
-        When provided (test path), the mock broker is called and its
-        results are used to set ``position_observed`` / ``open_order_observed``.
+        When ``None`` and ``allow_live_readonly`` is True, the real Alpaca
+        adapter is constructed using credentials from the environment.
+        When ``None`` and ``allow_live_readonly`` is False, returns BLOCKED.
+        When provided (test path), the injected broker is used directly —
+        no credentials are read.
+    allow_live_readonly:
+        Must be ``True`` to enable real broker API access.  Set by the CLI
+        flag ``--allow-live-broker-api-readonly``.
+    _trading_client_cls, _get_orders_request_cls, _order_status_cls:
+        Injectable replacements for Alpaca SDK classes (unit tests only).
     """
     checked_at = datetime.now(tz=timezone.utc).isoformat()
     violations: list[str] = []
     broker_calls_made = False
+    credentials_read = False
     position_observed: bool | None = None
     open_order_observed: bool | None = None
 
@@ -289,24 +412,47 @@ def run_reconciliation(
             checked_at=checked_at,
             violations=violations,
             broker_calls_made=broker_calls_made,
+            credentials_read=credentials_read,
             symbol=safe_symbol,
             position_observed=position_observed,
             open_order_observed=open_order_observed,
         )
 
     # ------------------------------------------------------------------
-    # Gate 4 — broker must be injected (real adapter not implemented yet)
+    # Gate 4 — flag check (only when no broker is injected)
     # ------------------------------------------------------------------
-    if broker is None:
-        blocker = "real broker adapter not implemented"
+    if broker is None and not allow_live_readonly:
+        violations.append("readonly broker api flag not set")
         return _make_result(
             checked_at=checked_at,
-            violations=[blocker],
+            violations=violations,
             broker_calls_made=broker_calls_made,
+            credentials_read=credentials_read,
             symbol=safe_symbol,
             position_observed=position_observed,
             open_order_observed=open_order_observed,
         )
+
+    # ------------------------------------------------------------------
+    # Gate 5 — build real adapter (credentials read ONLY here)
+    # ------------------------------------------------------------------
+    if broker is None:
+        broker, credentials_read = _build_alpaca_live_position_broker(
+            violations,
+            _trading_client_cls=_trading_client_cls,
+            _get_orders_request_cls=_get_orders_request_cls,
+            _order_status_cls=_order_status_cls,
+        )
+        if violations:
+            return _make_result(
+                checked_at=checked_at,
+                violations=violations,
+                broker_calls_made=broker_calls_made,
+                credentials_read=credentials_read,
+                symbol=safe_symbol,
+                position_observed=position_observed,
+                open_order_observed=open_order_observed,
+            )
 
     # ------------------------------------------------------------------
     # Broker calls — all wrapped in try/except; exception detail redacted.
@@ -314,7 +460,7 @@ def run_reconciliation(
     broker_calls_made = True
 
     try:
-        position = broker.get_position(_REQUIRED_SYMBOL)
+        position = broker.get_position(_REQUIRED_SYMBOL)  # type: ignore[union-attr]
         position_observed = position is not None
     except Exception:
         violations.append("position check: broker error — details redacted")
@@ -322,13 +468,14 @@ def run_reconciliation(
             checked_at=checked_at,
             violations=violations,
             broker_calls_made=broker_calls_made,
+            credentials_read=credentials_read,
             symbol=safe_symbol,
             position_observed=None,
             open_order_observed=None,
         )
 
     try:
-        open_orders = broker.get_open_orders(_REQUIRED_SYMBOL)
+        open_orders = broker.get_open_orders(_REQUIRED_SYMBOL)  # type: ignore[union-attr]
         open_order_observed = len(open_orders) > 0
     except Exception:
         violations.append("open orders check: broker error — details redacted")
@@ -336,6 +483,7 @@ def run_reconciliation(
             checked_at=checked_at,
             violations=violations,
             broker_calls_made=broker_calls_made,
+            credentials_read=credentials_read,
             symbol=safe_symbol,
             position_observed=position_observed,
             open_order_observed=None,
@@ -345,7 +493,8 @@ def run_reconciliation(
         checked_at=checked_at,
         violations=violations,
         broker_calls_made=broker_calls_made,
-        symbol=symbol,
+        credentials_read=credentials_read,
+        symbol=safe_symbol,
         position_observed=position_observed,
         open_order_observed=open_order_observed,
     )
@@ -361,10 +510,11 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="python -m src.tools.live_position_reconciliation_readonly",
         description=(
-            "Read-only live position / open-order reconciliation (mock-only core). "
-            "Real Alpaca adapter not yet implemented — CLI always returns BLOCKED. "
-            "PASS is only reachable through an injected mock broker in unit tests. "
-            "Never imports Alpaca SDK. Never reads credentials. Never trades."
+            "Read-only live position / open-order reconciliation. "
+            "Requires --allow-live-broker-api-readonly flag and valid credentials. "
+            "Without the flag, CLI always returns BLOCKED. "
+            "Never imports Alpaca SDK at module level. "
+            "Never reads credentials without the flag. Never trades."
         ),
     )
     parser.add_argument(
@@ -383,6 +533,18 @@ def main(argv: list[str] | None = None) -> None:
         "--output", required=True,
         help="Path to write live_position_reconciliation_readonly.json",
     )
+    parser.add_argument(
+        "--allow-live-broker-api-readonly",
+        action="store_true",
+        dest="allow_live_readonly",
+        default=False,
+        help=(
+            "Enable real Alpaca broker API read-only access. "
+            "Without this flag, CLI always returns BLOCKED. "
+            "Credentials are read from environment only after this flag is set "
+            "and all prerequisite gates pass."
+        ),
+    )
     args = parser.parse_args(argv)
 
     result = run_reconciliation(
@@ -390,6 +552,7 @@ def main(argv: list[str] | None = None) -> None:
         operator_override_path=Path(args.operator_override),
         symbol=args.symbol,
         broker=None,
+        allow_live_readonly=args.allow_live_readonly,
     )
 
     output_path = Path(args.output)

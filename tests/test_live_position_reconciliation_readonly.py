@@ -4,7 +4,7 @@ Tests for src/tools/live_position_reconciliation_readonly.py
 Coverage:
 - Prerequisite artifact gating (missing, malformed, non-PASS)
 - Symbol validation (exact match — wrong value, wrong case, whitespace)
-- CLI / broker-None gate → BLOCKED, no broker call, no credential read
+- CLI without flag → BLOCKED ("readonly broker api flag not set"), no credential read
 - Mock happy paths (no position/no order; position only; order only; both)
 - Broker exception → BLOCKED, secret text absent from all output
 - Output always written (PASS and BLOCKED paths)
@@ -12,8 +12,11 @@ Coverage:
 - Output invariants (mutation/credential/submit/cancel/replace fields always
   false; broker_ids_redacted, account_identifiers_redacted always true)
 - No raw IDs in output or stdout
-- Source scans: no Alpaca/network imports, no os.environ, no mutation
-  method names, no POST/PATCH/DELETE strings, no ledger writes
+- Source scans: no Alpaca/network imports at module level, no os.environ at
+  module level, no mutation method names, no POST/PATCH/DELETE strings, no
+  ledger writes, no close_position/close_all_positions calls
+- Real adapter: flag gate, credential gate, construction gate, happy path,
+  no-position signal (404), exception redaction, paper=False enforced
 """
 
 from __future__ import annotations
@@ -28,6 +31,10 @@ import pytest
 
 from src.tools.live_position_reconciliation_readonly import (
     _REQUIRED_SYMBOL,
+    _POSITION_NOT_FOUND_SIGNALS,
+    _is_position_not_found,
+    _build_alpaca_live_position_broker,
+    AlpacaLivePositionBroker,
     _read_artifact,
     run_reconciliation,
     main,
@@ -69,6 +76,10 @@ def _run(
     oo_missing: bool = False,
     symbol: str = _REQUIRED_SYMBOL,
     broker: Any = None,
+    allow_live_readonly: bool = False,
+    _trading_client_cls: Any = None,
+    _get_orders_request_cls: Any = None,
+    _order_status_cls: Any = None,
 ) -> dict[str, Any]:
     cg_path = (
         tmp_path / "missing_cg.json"
@@ -85,11 +96,15 @@ def _run(
         operator_override_path=oo_path,
         symbol=symbol,
         broker=broker,
+        allow_live_readonly=allow_live_readonly,
+        _trading_client_cls=_trading_client_cls,
+        _get_orders_request_cls=_get_orders_request_cls,
+        _order_status_cls=_order_status_cls,
     )
 
 
 # ---------------------------------------------------------------------------
-# Mock broker
+# Mock broker (for existing mock-path tests)
 # ---------------------------------------------------------------------------
 
 class MockPositionBroker:
@@ -122,6 +137,70 @@ class MockPositionBroker:
             raise self._raise_on_get_open_orders
         return self._open_orders
 
+
+# ---------------------------------------------------------------------------
+# Mock helpers for real adapter tests
+# ---------------------------------------------------------------------------
+
+class _FakePosition:
+    pass
+
+
+class _FakeOrder:
+    pass
+
+
+class _FakeTradingClient:
+    def __init__(self, *, api_key: str, secret_key: str, paper: bool) -> None:
+        self.api_key = api_key
+        self.secret_key = secret_key
+        self.paper = paper
+        self._has_position: bool = True
+        self._orders: list[_FakeOrder] = []
+        self._raise_on_get_position: Exception | None = None
+        self._raise_on_get_orders: Exception | None = None
+
+    def get_open_position(self, symbol: str) -> _FakePosition:
+        if self._raise_on_get_position is not None:
+            raise self._raise_on_get_position
+        if not self._has_position:
+            raise Exception("404 position does not exist")
+        return _FakePosition()
+
+    def get_orders(self, *, filter: Any = None) -> list[_FakeOrder]:
+        if self._raise_on_get_orders is not None:
+            raise self._raise_on_get_orders
+        return self._orders
+
+
+class _TrackingClientCls:
+    """Records every _FakeTradingClient instance created so tests can inspect them."""
+
+    def __init__(self) -> None:
+        self.instances: list[_FakeTradingClient] = []
+
+    def __call__(self, *, api_key: str, secret_key: str, paper: bool) -> _FakeTradingClient:
+        inst = _FakeTradingClient(api_key=api_key, secret_key=secret_key, paper=paper)
+        self.instances.append(inst)
+        return inst
+
+
+class _FakeGetOrdersRequest:
+    def __init__(self, **kwargs: Any) -> None:
+        self.kwargs = kwargs
+
+
+class _FakeOrderStatus:
+    OPEN = "OPEN"
+
+
+def _make_tracking_cls() -> _TrackingClientCls:
+    return _TrackingClientCls()
+
+
+# ---------------------------------------------------------------------------
+# Source line helpers
+# ---------------------------------------------------------------------------
 
 def _source_lines() -> list[str]:
     import src.tools.live_position_reconciliation_readonly as mod
@@ -220,7 +299,7 @@ class TestSymbolValidation:
 
 
 # ---------------------------------------------------------------------------
-# TestBrokerNone
+# TestInputSecretRedaction
 # ---------------------------------------------------------------------------
 
 class TestInputSecretRedaction:
@@ -283,14 +362,14 @@ class TestInputSecretRedaction:
 
 
 # ---------------------------------------------------------------------------
-# TestBrokerNone
+# TestBrokerNone  (no flag — BLOCKED at flag gate, not credential gate)
 # ---------------------------------------------------------------------------
 
 class TestBrokerNone:
     def test_broker_none_blocked(self, tmp_path: Path) -> None:
         result = _run(tmp_path)
         assert result["result"] == "BLOCKED"
-        assert result["blocker"] == "real broker adapter not implemented"
+        assert result["blocker"] == "readonly broker api flag not set"
 
     def test_broker_none_no_broker_calls(self, tmp_path: Path) -> None:
         result = _run(tmp_path)
@@ -324,11 +403,11 @@ class TestBrokerNone:
         assert out.exists()
         data = json.loads(out.read_text())
         assert data["result"] == "BLOCKED"
-        assert data["blocker"] == "real broker adapter not implemented"
+        assert data["blocker"] == "readonly broker api flag not set"
 
 
 # ---------------------------------------------------------------------------
-# TestHappyPath
+# TestHappyPath  (mock broker injected)
 # ---------------------------------------------------------------------------
 
 class TestHappyPath:
@@ -467,7 +546,7 @@ class TestBrokerException:
 
 
 # ---------------------------------------------------------------------------
-# TestOutputInvariants
+# TestOutputInvariants  (mock broker paths only)
 # ---------------------------------------------------------------------------
 
 class TestOutputInvariants:
@@ -528,7 +607,7 @@ class TestOutputAlwaysWritten:
         assert out.exists(), "output file must be written even on BLOCKED"
         return json.loads(out.read_text())
 
-    def test_output_written_on_blocked_no_broker(self, tmp_path: Path) -> None:
+    def test_output_written_on_blocked_no_flag(self, tmp_path: Path) -> None:
         data = self._run_via_main(tmp_path)
         assert data["result"] == "BLOCKED"
 
@@ -591,7 +670,6 @@ class TestNoRawIds:
     ) -> None:
         cg = _write_cg(tmp_path)
         oo = _write_oo(tmp_path)
-        out = _output_path(tmp_path)
         broker = MockPositionBroker(
             position={"account_id": "ACC-12345"},
         )
@@ -603,6 +681,646 @@ class TestNoRawIds:
         )
         captured = capsys.readouterr()
         assert "ACC-12345" not in captured.out
+
+
+# ---------------------------------------------------------------------------
+# TestRealAdapterFlagAbsent
+# ---------------------------------------------------------------------------
+
+class TestRealAdapterFlagAbsent:
+    """Without --allow-live-broker-api-readonly (allow_live_readonly=False),
+    CLI/API must be BLOCKED before reading credentials or constructing client."""
+
+    def test_no_flag_blocked(self, tmp_path: Path) -> None:
+        result = _run(tmp_path)
+        assert result["result"] == "BLOCKED"
+        assert result["blocker"] == "readonly broker api flag not set"
+
+    def test_no_flag_credentials_not_read(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ALPACA_LIVE_API_KEY", "fake-key")
+        monkeypatch.setenv("ALPACA_LIVE_SECRET_KEY", "fake-secret")
+        result = _run(tmp_path)
+        assert result["credentials_read"] is False
+
+    def test_no_flag_no_trading_client_constructed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ALPACA_LIVE_API_KEY", "fake-key")
+        monkeypatch.setenv("ALPACA_LIVE_SECRET_KEY", "fake-secret")
+        tracker = _make_tracking_cls()
+        result = _run(tmp_path, _trading_client_cls=tracker)
+        assert len(tracker.instances) == 0
+        assert result["credentials_read"] is False
+
+    def test_no_flag_broker_calls_not_made(self, tmp_path: Path) -> None:
+        result = _run(tmp_path)
+        assert result["broker_calls_made"] is False
+        assert result["broker_calls_readonly"] is False
+
+    def test_no_flag_position_and_order_null(self, tmp_path: Path) -> None:
+        result = _run(tmp_path)
+        assert result["position_observed"] is None
+        assert result["open_order_observed"] is None
+
+
+# ---------------------------------------------------------------------------
+# TestRealAdapterGatesFail
+# ---------------------------------------------------------------------------
+
+class TestRealAdapterGatesFail:
+    """Even with allow_live_readonly=True, early gates must block before credentials."""
+
+    def test_missing_cg_with_flag_credentials_not_read(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ALPACA_LIVE_API_KEY", "fake-key")
+        monkeypatch.setenv("ALPACA_LIVE_SECRET_KEY", "fake-secret")
+        result = _run(tmp_path, cg_missing=True, allow_live_readonly=True)
+        assert result["result"] == "BLOCKED"
+        assert result["credentials_read"] is False
+
+    def test_non_pass_oo_with_flag_credentials_not_read(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ALPACA_LIVE_API_KEY", "fake-key")
+        monkeypatch.setenv("ALPACA_LIVE_SECRET_KEY", "fake-secret")
+        result = _run(tmp_path, oo_data={"result": "FAIL"}, allow_live_readonly=True)
+        assert result["result"] == "BLOCKED"
+        assert result["credentials_read"] is False
+
+    def test_bad_symbol_with_flag_credentials_not_read(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ALPACA_LIVE_API_KEY", "fake-key")
+        monkeypatch.setenv("ALPACA_LIVE_SECRET_KEY", "fake-secret")
+        result = _run(tmp_path, symbol="AAPL", allow_live_readonly=True)
+        assert result["result"] == "BLOCKED"
+        assert result["credentials_read"] is False
+
+    def test_bad_symbol_with_flag_no_trading_client_constructed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ALPACA_LIVE_API_KEY", "fake-key")
+        monkeypatch.setenv("ALPACA_LIVE_SECRET_KEY", "fake-secret")
+        tracker = _make_tracking_cls()
+        _run(tmp_path, symbol="AAPL", allow_live_readonly=True, _trading_client_cls=tracker)
+        assert len(tracker.instances) == 0
+
+
+# ---------------------------------------------------------------------------
+# TestRealAdapterCredentialsMissing
+# ---------------------------------------------------------------------------
+
+class TestRealAdapterCredentialsMissing:
+    """Flag present and gates pass, but env vars absent → BLOCKED."""
+
+    def test_both_credentials_missing_blocked(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("ALPACA_LIVE_API_KEY", raising=False)
+        monkeypatch.delenv("ALPACA_LIVE_SECRET_KEY", raising=False)
+        result = _run(tmp_path, allow_live_readonly=True)
+        assert result["result"] == "BLOCKED"
+        assert result["blocker"] == "credentials not found in environment"
+
+    def test_both_credentials_missing_credentials_read_true(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("ALPACA_LIVE_API_KEY", raising=False)
+        monkeypatch.delenv("ALPACA_LIVE_SECRET_KEY", raising=False)
+        result = _run(tmp_path, allow_live_readonly=True)
+        assert result["credentials_read"] is True
+
+    def test_only_api_key_missing_blocked(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("ALPACA_LIVE_API_KEY", raising=False)
+        monkeypatch.setenv("ALPACA_LIVE_SECRET_KEY", "fake-secret")
+        result = _run(tmp_path, allow_live_readonly=True)
+        assert result["result"] == "BLOCKED"
+        assert result["credentials_read"] is True
+
+    def test_only_secret_key_missing_blocked(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ALPACA_LIVE_API_KEY", "fake-key")
+        monkeypatch.delenv("ALPACA_LIVE_SECRET_KEY", raising=False)
+        result = _run(tmp_path, allow_live_readonly=True)
+        assert result["result"] == "BLOCKED"
+        assert result["credentials_read"] is True
+
+
+# ---------------------------------------------------------------------------
+# TestRealAdapterConstruction
+# ---------------------------------------------------------------------------
+
+class TestRealAdapterConstruction:
+    """Real adapter builds TradingClient with paper=False and injects credentials."""
+
+    def test_paper_false_enforced(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ALPACA_LIVE_API_KEY", "test-key")
+        monkeypatch.setenv("ALPACA_LIVE_SECRET_KEY", "test-secret")
+        tracker = _make_tracking_cls()
+        _run(
+            tmp_path,
+            allow_live_readonly=True,
+            _trading_client_cls=tracker,
+            _get_orders_request_cls=_FakeGetOrdersRequest,
+            _order_status_cls=_FakeOrderStatus,
+        )
+        assert len(tracker.instances) == 1
+        assert tracker.instances[0].paper is False
+
+    def test_api_key_passed_to_client(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ALPACA_LIVE_API_KEY", "my-api-key-xyz")
+        monkeypatch.setenv("ALPACA_LIVE_SECRET_KEY", "my-secret-xyz")
+        tracker = _make_tracking_cls()
+        _run(
+            tmp_path,
+            allow_live_readonly=True,
+            _trading_client_cls=tracker,
+            _get_orders_request_cls=_FakeGetOrdersRequest,
+            _order_status_cls=_FakeOrderStatus,
+        )
+        assert tracker.instances[0].api_key == "my-api-key-xyz"
+
+    def test_credentials_read_true_after_construction(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ALPACA_LIVE_API_KEY", "test-key")
+        monkeypatch.setenv("ALPACA_LIVE_SECRET_KEY", "test-secret")
+        result = _run(
+            tmp_path,
+            allow_live_readonly=True,
+            _trading_client_cls=_make_tracking_cls(),
+            _get_orders_request_cls=_FakeGetOrdersRequest,
+            _order_status_cls=_FakeOrderStatus,
+        )
+        assert result["credentials_read"] is True
+
+    def test_broker_calls_made_true_after_construction(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ALPACA_LIVE_API_KEY", "test-key")
+        monkeypatch.setenv("ALPACA_LIVE_SECRET_KEY", "test-secret")
+        result = _run(
+            tmp_path,
+            allow_live_readonly=True,
+            _trading_client_cls=_make_tracking_cls(),
+            _get_orders_request_cls=_FakeGetOrdersRequest,
+            _order_status_cls=_FakeOrderStatus,
+        )
+        assert result["broker_calls_made"] is True
+
+
+# ---------------------------------------------------------------------------
+# TestRealAdapterHappyPath
+# ---------------------------------------------------------------------------
+
+class TestRealAdapterHappyPath:
+    """Real adapter (with injected fake client) — PASS paths."""
+
+    def _run_real(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        tracker: _TrackingClientCls,
+        has_position: bool = True,
+        orders: list[_FakeOrder] | None = None,
+    ) -> dict[str, Any]:
+        monkeypatch.setenv("ALPACA_LIVE_API_KEY", "test-key")
+        monkeypatch.setenv("ALPACA_LIVE_SECRET_KEY", "test-secret")
+        result = _run(
+            tmp_path,
+            allow_live_readonly=True,
+            _trading_client_cls=tracker,
+            _get_orders_request_cls=_FakeGetOrdersRequest,
+            _order_status_cls=_FakeOrderStatus,
+        )
+        if tracker.instances:
+            tracker.instances[0]._has_position = has_position
+            tracker.instances[0]._orders = orders or []
+        return result
+
+    def test_pass_result_on_success(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ALPACA_LIVE_API_KEY", "test-key")
+        monkeypatch.setenv("ALPACA_LIVE_SECRET_KEY", "test-secret")
+        tracker = _make_tracking_cls()
+        result = _run(
+            tmp_path,
+            allow_live_readonly=True,
+            _trading_client_cls=tracker,
+            _get_orders_request_cls=_FakeGetOrdersRequest,
+            _order_status_cls=_FakeOrderStatus,
+        )
+        assert result["result"] == "PASS"
+
+    def test_position_observed_true(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ALPACA_LIVE_API_KEY", "test-key")
+        monkeypatch.setenv("ALPACA_LIVE_SECRET_KEY", "test-secret")
+        tracker = _make_tracking_cls()
+        result = _run(
+            tmp_path,
+            allow_live_readonly=True,
+            _trading_client_cls=tracker,
+            _get_orders_request_cls=_FakeGetOrdersRequest,
+            _order_status_cls=_FakeOrderStatus,
+        )
+        assert result["position_observed"] is True
+
+    def test_open_order_observed_true_when_orders_present(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ALPACA_LIVE_API_KEY", "test-key")
+        monkeypatch.setenv("ALPACA_LIVE_SECRET_KEY", "test-secret")
+
+        class _WithOrdersClient(_FakeTradingClient):
+            def get_orders(self, *, filter: Any = None) -> list[_FakeOrder]:
+                return [_FakeOrder()]
+
+        class _WithOrdersCls:
+            def __call__(
+                self, *, api_key: str, secret_key: str, paper: bool
+            ) -> _WithOrdersClient:
+                return _WithOrdersClient(
+                    api_key=api_key, secret_key=secret_key, paper=paper
+                )
+
+        result = _run(
+            tmp_path,
+            allow_live_readonly=True,
+            _trading_client_cls=_WithOrdersCls(),
+            _get_orders_request_cls=_FakeGetOrdersRequest,
+            _order_status_cls=_FakeOrderStatus,
+        )
+        assert result["open_order_observed"] is True
+
+    def test_open_order_observed_false_when_no_orders(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ALPACA_LIVE_API_KEY", "test-key")
+        monkeypatch.setenv("ALPACA_LIVE_SECRET_KEY", "test-secret")
+        tracker = _make_tracking_cls()
+        result = _run(
+            tmp_path,
+            allow_live_readonly=True,
+            _trading_client_cls=tracker,
+            _get_orders_request_cls=_FakeGetOrdersRequest,
+            _order_status_cls=_FakeOrderStatus,
+        )
+        assert result["open_order_observed"] is False
+
+    def test_credentials_read_true_on_pass(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ALPACA_LIVE_API_KEY", "test-key")
+        monkeypatch.setenv("ALPACA_LIVE_SECRET_KEY", "test-secret")
+        result = _run(
+            tmp_path,
+            allow_live_readonly=True,
+            _trading_client_cls=_make_tracking_cls(),
+            _get_orders_request_cls=_FakeGetOrdersRequest,
+            _order_status_cls=_FakeOrderStatus,
+        )
+        assert result["credentials_read"] is True
+
+    def test_mutation_fields_false_on_pass(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ALPACA_LIVE_API_KEY", "test-key")
+        monkeypatch.setenv("ALPACA_LIVE_SECRET_KEY", "test-secret")
+        result = _run(
+            tmp_path,
+            allow_live_readonly=True,
+            _trading_client_cls=_make_tracking_cls(),
+            _get_orders_request_cls=_FakeGetOrdersRequest,
+            _order_status_cls=_FakeOrderStatus,
+        )
+        assert result["broker_mutation_calls_made"] is False
+        assert result["submit_order_reachable"] is False
+        assert result["cancel_order_reachable"] is False
+        assert result["replace_order_reachable"] is False
+        assert result["live_submit_enabled"] is False
+
+
+# ---------------------------------------------------------------------------
+# TestRealAdapterNoPositionSignal
+# ---------------------------------------------------------------------------
+
+class TestRealAdapterNoPositionSignal:
+    """Alpaca 404-style exceptions → position_observed=False, result=PASS."""
+
+    def _run_with_position_exc(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        exc_msg: str,
+    ) -> dict[str, Any]:
+        monkeypatch.setenv("ALPACA_LIVE_API_KEY", "test-key")
+        monkeypatch.setenv("ALPACA_LIVE_SECRET_KEY", "test-secret")
+        tracker = _make_tracking_cls()
+        result = _run(
+            tmp_path,
+            allow_live_readonly=True,
+            _trading_client_cls=tracker,
+            _get_orders_request_cls=_FakeGetOrdersRequest,
+            _order_status_cls=_FakeOrderStatus,
+        )
+        if tracker.instances:
+            tracker.instances[0]._raise_on_get_position = Exception(exc_msg)
+        return _run(
+            tmp_path,
+            allow_live_readonly=True,
+            _trading_client_cls=tracker,
+            _get_orders_request_cls=_FakeGetOrdersRequest,
+            _order_status_cls=_FakeOrderStatus,
+        )
+
+    def test_404_signal_gives_no_position(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ALPACA_LIVE_API_KEY", "test-key")
+        monkeypatch.setenv("ALPACA_LIVE_SECRET_KEY", "test-secret")
+
+        class _NoPositionClient(_FakeTradingClient):
+            def get_open_position(self, symbol: str) -> _FakePosition:
+                raise Exception("404 position does not exist")
+
+        class _NoPositionCls:
+            def __call__(self, *, api_key: str, secret_key: str, paper: bool) -> _NoPositionClient:
+                return _NoPositionClient(api_key=api_key, secret_key=secret_key, paper=paper)
+
+        result = _run(
+            tmp_path,
+            allow_live_readonly=True,
+            _trading_client_cls=_NoPositionCls(),
+            _get_orders_request_cls=_FakeGetOrdersRequest,
+            _order_status_cls=_FakeOrderStatus,
+        )
+        assert result["position_observed"] is False
+        assert result["result"] == "PASS"
+
+    def test_no_position_signal_passes(self, tmp_path: Path) -> None:
+        assert _is_position_not_found(Exception("404"))
+        assert _is_position_not_found(Exception("position does not exist"))
+        assert _is_position_not_found(Exception("no position found"))
+
+    def test_unrelated_exception_not_a_no_position_signal(self, tmp_path: Path) -> None:
+        assert not _is_position_not_found(Exception("network timeout"))
+        assert not _is_position_not_found(Exception("500 internal server error"))
+        assert not _is_position_not_found(Exception("unauthorized"))
+
+
+# ---------------------------------------------------------------------------
+# TestRealAdapterExceptionRedaction
+# ---------------------------------------------------------------------------
+
+class TestRealAdapterExceptionRedaction:
+    """Broker/construction exceptions must not leak secret text to output or stdout."""
+
+    _SECRET = "very-secret-broker-token-9z3x"
+
+    def test_construction_exception_blocked(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ALPACA_LIVE_API_KEY", "test-key")
+        monkeypatch.setenv("ALPACA_LIVE_SECRET_KEY", "test-secret")
+
+        def _raising_cls(**kwargs: Any) -> None:
+            raise RuntimeError(self._SECRET)
+
+        result = _run(
+            tmp_path,
+            allow_live_readonly=True,
+            _trading_client_cls=_raising_cls,
+            _get_orders_request_cls=_FakeGetOrdersRequest,
+            _order_status_cls=_FakeOrderStatus,
+        )
+        assert result["result"] == "BLOCKED"
+
+    def test_construction_exception_secret_not_in_output(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ALPACA_LIVE_API_KEY", "test-key")
+        monkeypatch.setenv("ALPACA_LIVE_SECRET_KEY", "test-secret")
+
+        def _raising_cls(**kwargs: Any) -> None:
+            raise RuntimeError(self._SECRET)
+
+        result = _run(
+            tmp_path,
+            allow_live_readonly=True,
+            _trading_client_cls=_raising_cls,
+            _get_orders_request_cls=_FakeGetOrdersRequest,
+            _order_status_cls=_FakeOrderStatus,
+        )
+        assert self._SECRET not in json.dumps(result)
+
+    def test_construction_exception_message_redacted(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ALPACA_LIVE_API_KEY", "test-key")
+        monkeypatch.setenv("ALPACA_LIVE_SECRET_KEY", "test-secret")
+
+        def _raising_cls(**kwargs: Any) -> None:
+            raise RuntimeError(self._SECRET)
+
+        result = _run(
+            tmp_path,
+            allow_live_readonly=True,
+            _trading_client_cls=_raising_cls,
+            _get_orders_request_cls=_FakeGetOrdersRequest,
+            _order_status_cls=_FakeOrderStatus,
+        )
+        assert any("redacted" in v for v in result["violations"])
+
+    def test_get_position_exception_secret_not_in_output(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ALPACA_LIVE_API_KEY", "test-key")
+        monkeypatch.setenv("ALPACA_LIVE_SECRET_KEY", "test-secret")
+
+        class _RaisingClient(_FakeTradingClient):
+            def get_open_position(self, symbol: str) -> _FakePosition:
+                raise RuntimeError(self._SECRET)
+
+        class _RaisingCls:
+            _SECRET = "very-secret-broker-token-9z3x"
+            def __call__(self, *, api_key: str, secret_key: str, paper: bool) -> "_RaisingClient":
+                return _RaisingClient(api_key=api_key, secret_key=secret_key, paper=paper)
+
+        result = _run(
+            tmp_path,
+            allow_live_readonly=True,
+            _trading_client_cls=_RaisingCls(),
+            _get_orders_request_cls=_FakeGetOrdersRequest,
+            _order_status_cls=_FakeOrderStatus,
+        )
+        assert self._SECRET not in json.dumps(result)
+        assert result["result"] == "BLOCKED"
+
+    def test_get_orders_exception_secret_not_in_output(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ALPACA_LIVE_API_KEY", "test-key")
+        monkeypatch.setenv("ALPACA_LIVE_SECRET_KEY", "test-secret")
+        SECRET = self._SECRET
+
+        class _RaisingClient(_FakeTradingClient):
+            def get_orders(self, *, filter: Any = None) -> list:
+                raise RuntimeError(SECRET)
+
+        class _RaisingCls:
+            def __call__(self, *, api_key: str, secret_key: str, paper: bool) -> "_RaisingClient":
+                return _RaisingClient(api_key=api_key, secret_key=secret_key, paper=paper)
+
+        result = _run(
+            tmp_path,
+            allow_live_readonly=True,
+            _trading_client_cls=_RaisingCls(),
+            _get_orders_request_cls=_FakeGetOrdersRequest,
+            _order_status_cls=_FakeOrderStatus,
+        )
+        assert self._SECRET not in json.dumps(result)
+        assert result["result"] == "BLOCKED"
+
+
+# ---------------------------------------------------------------------------
+# TestRealAdapterBrokerConstructionFails
+# ---------------------------------------------------------------------------
+
+class TestRealAdapterBrokerConstructionFails:
+    """TradingClient constructor raises → BLOCKED, credentials_read=True."""
+
+    def test_construction_raises_blocked(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ALPACA_LIVE_API_KEY", "test-key")
+        monkeypatch.setenv("ALPACA_LIVE_SECRET_KEY", "test-secret")
+
+        def _fail(**kwargs: Any) -> None:
+            raise ConnectionError("network failure")
+
+        result = _run(
+            tmp_path,
+            allow_live_readonly=True,
+            _trading_client_cls=_fail,
+            _get_orders_request_cls=_FakeGetOrdersRequest,
+            _order_status_cls=_FakeOrderStatus,
+        )
+        assert result["result"] == "BLOCKED"
+
+    def test_construction_raises_credentials_read_true(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ALPACA_LIVE_API_KEY", "test-key")
+        monkeypatch.setenv("ALPACA_LIVE_SECRET_KEY", "test-secret")
+
+        def _fail(**kwargs: Any) -> None:
+            raise ConnectionError("network failure")
+
+        result = _run(
+            tmp_path,
+            allow_live_readonly=True,
+            _trading_client_cls=_fail,
+            _get_orders_request_cls=_FakeGetOrdersRequest,
+            _order_status_cls=_FakeOrderStatus,
+        )
+        assert result["credentials_read"] is True
+
+    def test_construction_raises_broker_calls_not_made(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ALPACA_LIVE_API_KEY", "test-key")
+        monkeypatch.setenv("ALPACA_LIVE_SECRET_KEY", "test-secret")
+
+        def _fail(**kwargs: Any) -> None:
+            raise ConnectionError("network failure")
+
+        result = _run(
+            tmp_path,
+            allow_live_readonly=True,
+            _trading_client_cls=_fail,
+            _get_orders_request_cls=_FakeGetOrdersRequest,
+            _order_status_cls=_FakeOrderStatus,
+        )
+        assert result["broker_calls_made"] is False
+
+
+# ---------------------------------------------------------------------------
+# TestCLIRealAdapterFlag
+# ---------------------------------------------------------------------------
+
+class TestCLIRealAdapterFlag:
+    """CLI tests for --allow-live-broker-api-readonly flag."""
+
+    def test_cli_without_flag_blocked_flag_message(self, tmp_path: Path) -> None:
+        cg = _write_cg(tmp_path)
+        oo = _write_oo(tmp_path)
+        out = _output_path(tmp_path)
+        with pytest.raises(SystemExit) as exc_info:
+            main([
+                "--credential-guard", str(cg),
+                "--operator-override", str(oo),
+                "--symbol", "SPY",
+                "--output", str(out),
+            ])
+        assert exc_info.value.code == 1
+        data = json.loads(out.read_text())
+        assert data["blocker"] == "readonly broker api flag not set"
+        assert data["credentials_read"] is False
+
+    def test_cli_with_flag_no_credentials_blocked(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("ALPACA_LIVE_API_KEY", raising=False)
+        monkeypatch.delenv("ALPACA_LIVE_SECRET_KEY", raising=False)
+        cg = _write_cg(tmp_path)
+        oo = _write_oo(tmp_path)
+        out = _output_path(tmp_path)
+        with pytest.raises(SystemExit) as exc_info:
+            main([
+                "--credential-guard", str(cg),
+                "--operator-override", str(oo),
+                "--symbol", "SPY",
+                "--output", str(out),
+                "--allow-live-broker-api-readonly",
+            ])
+        assert exc_info.value.code == 1
+        data = json.loads(out.read_text())
+        assert data["blocker"] == "credentials not found in environment"
+        assert data["credentials_read"] is True
+
+    def test_cli_output_always_written_with_flag(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("ALPACA_LIVE_API_KEY", raising=False)
+        monkeypatch.delenv("ALPACA_LIVE_SECRET_KEY", raising=False)
+        cg = _write_cg(tmp_path)
+        oo = _write_oo(tmp_path)
+        out = _output_path(tmp_path)
+        try:
+            main([
+                "--credential-guard", str(cg),
+                "--operator-override", str(oo),
+                "--symbol", "SPY",
+                "--output", str(out),
+                "--allow-live-broker-api-readonly",
+            ])
+        except SystemExit:
+            pass
+        assert out.exists()
 
 
 # ---------------------------------------------------------------------------
@@ -652,6 +1370,18 @@ class TestSourceScans:
         for line in _non_comment_lines():
             assert "replace_order(" not in line, (
                 f"replace_order( found: {line!r}"
+            )
+
+    def test_no_close_position_call(self) -> None:
+        for line in _non_comment_lines():
+            assert "close_position(" not in line, (
+                f"close_position( found: {line!r}"
+            )
+
+    def test_no_close_all_positions_call(self) -> None:
+        for line in _non_comment_lines():
+            assert "close_all_positions(" not in line, (
+                f"close_all_positions( found: {line!r}"
             )
 
     def test_no_post_patch_delete_endpoints(self) -> None:
