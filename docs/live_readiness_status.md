@@ -2256,3 +2256,111 @@ any position decision. Key design decisions:
 > it does not recommend hold or sell.
 > All position decisions remain entirely manual.
 
+---
+
+## Milestone: Manual Position Status Checker Read-Only — Mock-Only Core Complete
+
+**PR:** `add-manual-position-status-checker-readonly-mock-core` (#135)
+**Status:** Complete
+
+Mock-only core implemented and merged:
+- `src/tools/manual_position_status_checker_readonly.py` — mock-only core
+- `tests/test_manual_position_status_checker_readonly.py` — 88 tests
+
+**CLI always returns BLOCKED ("real broker adapter not implemented").**
+**PASS is only reachable through an injected mock broker in unit tests.**
+**Real Alpaca adapter is NOT implemented.**
+**No Alpaca SDK imported.**
+**No network requests made.**
+**No credentials read on any code path.**
+**No os.environ access anywhere in source.**
+**No orders submitted, sold, cancelled, replaced, or closed.**
+**No live ledger written.**
+**No config mutated.**
+**No automated position decision made.**
+
+### What was implemented
+
+`run_status_check()` with gate sequence:
+
+| Gate | Blocker on failure |
+|------|--------------------|
+| `credential_guard` artifact present and `result="PASS"` | BLOCKED, `broker_calls_made=false` |
+| `operator_override` artifact present and `result="PASS"` | BLOCKED, `broker_calls_made=false` |
+| `symbol` exactly `"SPY"` | BLOCKED, invalid symbol not echoed |
+| `broker` injected (real adapter not implemented) | BLOCKED, `"real broker adapter not implemented"` |
+| Broker read-only calls succeed | BLOCKED on exception, details redacted |
+
+New output fields vs. `live_position_reconciliation_readonly`:
+- `close_position_reachable=false` — always
+- `position_decision_made=false` — always
+- `market_session_status` — allowlisted string or null; allowed values: `"open"`, `"closed"`, `"pre_market"`, `"after_hours"`, `null`; any other return value → BLOCKED, raw value not echoed
+
+### Test coverage
+
+88 unit tests in `tests/test_manual_position_status_checker_readonly.py`.
+Full suite: 4025 tests passed.
+All tests use injected mock brokers — no real Alpaca calls.
+
+Test classes:
+- `TestArtifactGates` (7) — missing/non-PASS/malformed cg and oo → BLOCKED, no broker call
+- `TestSymbolValidation` (4) — wrong/lowercase/whitespace/empty symbol → BLOCKED
+- `TestInputSecretRedaction` (9) — secrets in cg result, oo result, symbol → absent from output, violations, blocker, stdout
+- `TestBrokerNone` (7) — CLI broker=None → BLOCKED, correct blocker message, all null presence fields
+- `TestHappyPath` (8) — injected mock broker → PASS with position/order/session flags; broker_calls_readonly=true; violations empty
+- `TestMarketSessionStatus` (6) — open/closed/pre_market/after_hours/null return/no method → market_session_status field correct
+- `TestMarketSessionStatusRedaction` (13) — invalid/secret/whitespace/case variants → BLOCKED; raw value absent from output JSON, violations, blocker, stdout
+- `TestBrokerException` (7) — position/orders/session raises with secret → BLOCKED, secret absent from output and stdout
+- `TestOutputInvariants` (5) — all hardcoded safety fields checked on gate failure, broker None, and PASS paths; broker_calls_readonly mirrors broker_calls_made
+- `TestOutputAlwaysWritten` (3) — output artifact written for all BLOCKED paths via CLI; exit 1 confirmed
+- `TestNeverRaises` (4) — `run_status_check()` never raises on any exception path
+- `TestNoRawIds` (2) — position/order broker dict values not leaked into output JSON
+- `TestSourceScans` (14) — no alpaca/network imports, no os.environ.get/[], no submit_order(/cancel_order(/replace_order(/close_position(/close_all_positions(, no POST/PATCH/DELETE mutation markers
+
+### Safety invariants confirmed
+
+- No Alpaca SDK imported — source-scanned
+- No network imports — source-scanned
+- No `os.environ` access — source-scanned
+- No `submit_order(`/`cancel_order(`/`replace_order(`/`close_position(`/`close_all_positions(` in source — source-scanned
+- No POST/PATCH/DELETE mutation markers in source — source-scanned
+- No config mutation
+- No automated position decision
+- CLI always BLOCKED — tested via `main()` with `SystemExit(1)`
+- Broker exception text redacted — secret string absent from output and stdout
+- Raw invalid input values (cg result, oo result, symbol) never echoed — `TestInputSecretRedaction` (9 tests)
+- `market_session_status` allowlisted — secret/invalid/whitespace/case return values → BLOCKED, raw value not echoed — `TestMarketSessionStatusRedaction` (13 tests)
+- `broker_calls_readonly` mirrors `broker_calls_made` — false on gate failures, true only after broker calls
+- All output invariant fields hardcoded safe regardless of path
+
+### What remains
+
+The real `AlpacaLivePositionBroker`-based adapter is NOT implemented.
+A future PR must add:
+- `--allow-live-broker-api-readonly` CLI flag
+- Credential read only after all gates pass and flag present
+- `TradingClient(paper=False)` constructed only after credentials confirmed
+- Real adapter tests (mock `TradingClient`, no real Alpaca calls)
+
+### Reference
+
+- `src/tools/manual_position_status_checker_readonly.py` — mock-only core
+- `tests/test_manual_position_status_checker_readonly.py` — 88 tests
+- `docs/manual_position_status_checker_readonly_design.md` — design document
+- Suggested git tag: `manual-position-status-checker-readonly-mock-core-complete`
+
+### Warning
+
+> **This milestone does not approve real trading.**
+> **CLI always returns BLOCKED.**
+> **No Alpaca endpoint was contacted.**
+> **No credentials were read.**
+> **No orders were submitted, sold, cancelled, replaced, or closed.**
+> **No automated position decision is made.**
+> The real broker adapter is not implemented — a future PR is required.
+> Any future real adapter must be mock-only in tests, require explicit
+> operator flag, and read credentials only after all gates pass.
+> PASS from the checker means only that the status check completed —
+> it does not recommend hold or sell.
+> All position decisions remain entirely manual.
+
