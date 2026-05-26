@@ -320,6 +320,16 @@ class TestMarketSessionStatus:
         assert r["result"] == "PASS"
         assert r["market_session_status"] == "closed"
 
+    def test_market_session_pre_market(self, tmp_path: Path) -> None:
+        r = _run(tmp_path, broker=_FakeBrokerWithSession(market_session="pre_market"))
+        assert r["result"] == "PASS"
+        assert r["market_session_status"] == "pre_market"
+
+    def test_market_session_after_hours(self, tmp_path: Path) -> None:
+        r = _run(tmp_path, broker=_FakeBrokerWithSession(market_session="after_hours"))
+        assert r["result"] == "PASS"
+        assert r["market_session_status"] == "after_hours"
+
     def test_market_session_method_returns_none(self, tmp_path: Path) -> None:
         r = _run(tmp_path, broker=_FakeBrokerWithSession(market_session=None))
         assert r["result"] == "PASS"
@@ -328,6 +338,70 @@ class TestMarketSessionStatus:
     def test_market_session_no_method_null(self, tmp_path: Path) -> None:
         r = _run(tmp_path, broker=_FakeBroker())
         assert r["market_session_status"] is None
+
+
+# ---------------------------------------------------------------------------
+# TestMarketSessionStatusRedaction
+# ---------------------------------------------------------------------------
+
+class TestMarketSessionStatusRedaction:
+    def test_invalid_value_blocked(self, tmp_path: Path) -> None:
+        r = _run(tmp_path, broker=_FakeBrokerWithSession(market_session="OPEN"))
+        assert r["result"] == "BLOCKED"
+        assert r["blocker"] == "market session status invalid"
+
+    def test_invalid_value_market_session_null_in_output(self, tmp_path: Path) -> None:
+        r = _run(tmp_path, broker=_FakeBrokerWithSession(market_session="OPEN"))
+        assert r["market_session_status"] is None
+
+    def test_secret_value_blocked(self, tmp_path: Path) -> None:
+        r = _run(tmp_path, broker=_FakeBrokerWithSession(market_session=_SECRET))
+        assert r["result"] == "BLOCKED"
+
+    def test_secret_value_absent_from_output_json(self, tmp_path: Path) -> None:
+        r = _run(tmp_path, broker=_FakeBrokerWithSession(market_session=_SECRET))
+        assert _SECRET not in json.dumps(r)
+
+    def test_secret_value_absent_from_violations(self, tmp_path: Path) -> None:
+        r = _run(tmp_path, broker=_FakeBrokerWithSession(market_session=_SECRET))
+        for v in r["violations"]:
+            assert _SECRET not in v
+
+    def test_secret_value_absent_from_blocker(self, tmp_path: Path) -> None:
+        r = _run(tmp_path, broker=_FakeBrokerWithSession(market_session=_SECRET))
+        assert _SECRET not in (r["blocker"] or "")
+
+    def test_secret_value_absent_from_stdout(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        _run(tmp_path, broker=_FakeBrokerWithSession(market_session=_SECRET))
+        captured = capsys.readouterr()
+        assert _SECRET not in captured.out
+        assert _SECRET not in captured.err
+
+    def test_whitespace_variant_blocked(self, tmp_path: Path) -> None:
+        r = _run(tmp_path, broker=_FakeBrokerWithSession(market_session="open "))
+        assert r["result"] == "BLOCKED"
+        assert r["market_session_status"] is None
+
+    def test_uppercase_variant_blocked(self, tmp_path: Path) -> None:
+        r = _run(tmp_path, broker=_FakeBrokerWithSession(market_session="Open"))
+        assert r["result"] == "BLOCKED"
+
+    def test_all_caps_variant_blocked(self, tmp_path: Path) -> None:
+        r = _run(tmp_path, broker=_FakeBrokerWithSession(market_session=" OPEN"))
+        assert r["result"] == "BLOCKED"
+
+    def test_invalid_raw_value_not_echoed_in_output(self, tmp_path: Path) -> None:
+        bad_value = "unexpected-session-value-xyz"
+        r = _run(tmp_path, broker=_FakeBrokerWithSession(market_session=bad_value))
+        assert bad_value not in json.dumps(r)
+
+    def test_invalid_raw_value_not_echoed_in_violations(self, tmp_path: Path) -> None:
+        bad_value = "unexpected-session-value-xyz"
+        r = _run(tmp_path, broker=_FakeBrokerWithSession(market_session=bad_value))
+        for v in r["violations"]:
+            assert bad_value not in v
 
 
 # ---------------------------------------------------------------------------

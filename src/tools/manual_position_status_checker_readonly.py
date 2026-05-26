@@ -41,10 +41,17 @@ Any broker injected into ``run_status_check()`` must implement::
 Optionally::
 
     def get_market_session_status(self) -> str | None:
-        ...  # Returns "open", "closed", or None
+        ...  # Returns one of: "open", "closed", "pre_market", "after_hours", or None
 
 If the broker does not have ``get_market_session_status``,
 ``market_session_status`` is ``null`` in the output.
+
+The returned value is validated against an allowlist before output.
+Allowed values: ``"open"``, ``"closed"``, ``"pre_market"``, ``"after_hours"``,
+or ``None``.  Any other value (including whitespace variants, wrong case, or
+unexpected strings) results in BLOCKED with
+``violation="market session status invalid"``.  The raw invalid value is never
+echoed in output, violations, blocker, or stdout.
 
 The tool consumes only boolean presence from broker calls:
 ``position_observed = (get_position(...) is not None)``
@@ -94,6 +101,10 @@ from pathlib import Path
 from typing import Any
 
 _REQUIRED_SYMBOL = "SPY"
+
+_ALLOWED_MARKET_SESSION_VALUES: frozenset[str] = frozenset(
+    {"open", "closed", "pre_market", "after_hours"}
+)
 
 
 # ---------------------------------------------------------------------------
@@ -330,12 +341,30 @@ def run_status_check(
             market_session_status=None,
         )
 
-    # Optional market session status — only called if broker supports it
+    # Optional market session status — only called if broker supports it.
+    # Raw return value is validated against an allowlist before output.
+    # Any value outside the allowlist is treated as invalid — BLOCKED,
+    # violation added, raw value never echoed.
     if hasattr(broker, "get_market_session_status"):
         try:
-            market_session_status = broker.get_market_session_status()
+            raw_session = broker.get_market_session_status()
         except Exception:
             violations.append("market session check: broker error — details redacted")
+            return _make_result(
+                checked_at=checked_at,
+                violations=violations,
+                broker_calls_made=broker_calls_made,
+                symbol=safe_symbol,
+                position_observed=position_observed,
+                open_order_observed=open_order_observed,
+                market_session_status=None,
+            )
+        if raw_session is None:
+            market_session_status = None
+        elif raw_session in _ALLOWED_MARKET_SESSION_VALUES:
+            market_session_status = raw_session
+        else:
+            violations.append("market session status invalid")
             return _make_result(
                 checked_at=checked_at,
                 violations=violations,
