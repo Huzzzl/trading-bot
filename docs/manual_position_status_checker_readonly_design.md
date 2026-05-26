@@ -1,8 +1,8 @@
 # Manual Position Status Checker — Read-Only Design
 
-Design document for a future read-only manual position status checker that
-lets the operator manually re-check SPY position and open-order presence
-without making any position decision.
+Design document and implementation status for the manual read-only position
+status checker. Mock-only core implemented in PR #135.
+Real Alpaca adapter requires a future PR with `--allow-live-broker-api-readonly`.
 
 **This document does NOT trade.**
 **This document does NOT submit, sell, cancel, replace, or close positions.**
