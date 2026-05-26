@@ -1687,3 +1687,50 @@ returns `result="SUBMITTED"`, covering:
 > Any future buy or sell attempt requires fresh design, fresh approval,
 > fresh preflight, and explicit operator action.
 > Emergency actions remain manual via the Alpaca broker UI only.
+
+---
+
+## Milestone: Live Position Reconciliation Read-Only Tool — Design Complete
+
+**Branch:** `claude/docs-design-live-position-reconciliation-readonly`
+**Status:** Complete
+
+Design document created at
+`docs/live_position_reconciliation_readonly_design.md`.
+
+**No code was implemented.**
+**No Alpaca endpoint was contacted.**
+**No credentials were read.**
+**No trading action was performed.**
+
+### What was designed
+
+A future read-only tool (`live_position_reconciliation_readonly`) that:
+
+- Inspects current live account positions and open orders for SPY only
+- Requires `--allow-live-broker-api-readonly` flag and both prerequisite
+  artifact gates before reading credentials or constructing a broker client
+- Returns boolean flags only (`position_observed`, `open_order_observed`) —
+  no fill price, quantity, account balance, account ID, order ID, or raw
+  broker response in any output field
+- Has no `submit_order`, `cancel_order`, or `replace_order` methods
+- Writes output artifact always (PASS or BLOCKED); never raises
+
+The design does not decide whether to hold or sell any position — that
+remains a manual operator decision.
+
+### Reference
+
+- `docs/live_position_reconciliation_readonly_design.md` — full design document
+- Suggested git tag: `live-position-reconciliation-readonly-design-complete`
+
+### Warning
+
+> **This milestone does not approve real trading.**
+> **No code is implemented.**
+> **No Alpaca endpoint was contacted.**
+> **No credentials were read.**
+> The reconciliation tool is read-only by design — it does not submit,
+> cancel, replace, or decide on positions.
+> Any future implementation requires fresh design review, mock-only tests,
+> and explicit operator action before any live broker API call.
