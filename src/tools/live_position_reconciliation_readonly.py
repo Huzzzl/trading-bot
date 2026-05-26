@@ -157,7 +157,7 @@ def _make_result(
         "checked_at_utc":              checked_at,
         "result":                      result,
         "broker_calls_made":           broker_calls_made,
-        "broker_calls_readonly":       True,
+        "broker_calls_readonly":       broker_calls_made,
         "broker_mutation_calls_made":  False,
         "credential_values_exposed":   False,
         "credentials_read":            False,
@@ -258,9 +258,7 @@ def run_reconciliation(
     if cg_err:
         violations.append(cg_err)
     elif cg_data.get("result") != "PASS":  # type: ignore[union-attr]
-        violations.append(
-            f"credential_guard result={cg_data.get('result')!r} — must be 'PASS'"  # type: ignore[union-attr]
-        )
+        violations.append("credential_guard result must be PASS")
 
     # ------------------------------------------------------------------
     # Gate 2 — operator override artifact
@@ -269,18 +267,16 @@ def run_reconciliation(
     if oo_err:
         violations.append(oo_err)
     elif oo_data.get("result") != "PASS":  # type: ignore[union-attr]
-        violations.append(
-            f"operator_override result={oo_data.get('result')!r} — must be 'PASS'"  # type: ignore[union-attr]
-        )
+        violations.append("operator_override result must be PASS")
 
     # ------------------------------------------------------------------
     # Gate 3 — symbol validation (exact match only, no folding)
+    # Raw invalid symbol is never echoed in output.
     # ------------------------------------------------------------------
-    if symbol != _REQUIRED_SYMBOL:
-        violations.append(
-            f"symbol={symbol!r} — only {_REQUIRED_SYMBOL!r} is permitted "
-            f"(exact match, no case folding)"
-        )
+    symbol_valid = symbol == _REQUIRED_SYMBOL
+    if not symbol_valid:
+        violations.append("symbol must be exactly 'SPY'")
+    safe_symbol = _REQUIRED_SYMBOL if symbol_valid else "(invalid)"
 
     # ------------------------------------------------------------------
     # Fail fast on any artifact/symbol violation before reaching broker.
@@ -290,7 +286,7 @@ def run_reconciliation(
             checked_at=checked_at,
             violations=violations,
             broker_calls_made=broker_calls_made,
-            symbol=symbol,
+            symbol=safe_symbol,
             position_observed=position_observed,
             open_order_observed=open_order_observed,
         )
@@ -304,7 +300,7 @@ def run_reconciliation(
             checked_at=checked_at,
             violations=[blocker],
             broker_calls_made=broker_calls_made,
-            symbol=symbol,
+            symbol=safe_symbol,
             position_observed=position_observed,
             open_order_observed=open_order_observed,
         )
@@ -323,7 +319,7 @@ def run_reconciliation(
             checked_at=checked_at,
             violations=violations,
             broker_calls_made=broker_calls_made,
-            symbol=symbol,
+            symbol=safe_symbol,
             position_observed=None,
             open_order_observed=None,
         )
@@ -337,7 +333,7 @@ def run_reconciliation(
             checked_at=checked_at,
             violations=violations,
             broker_calls_made=broker_calls_made,
-            symbol=symbol,
+            symbol=safe_symbol,
             position_observed=position_observed,
             open_order_observed=None,
         )

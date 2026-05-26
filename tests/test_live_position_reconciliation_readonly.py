@@ -159,7 +159,7 @@ class TestArtifactGates:
         result = _run(tmp_path, cg_data={"result": "BLOCKED"})
         assert result["result"] == "BLOCKED"
         assert result["broker_calls_made"] is False
-        assert "credential_guard" in " ".join(result["violations"])
+        assert result["blocker"] == "credential_guard result must be PASS"
 
     def test_credential_guard_missing_result_field_blocked(self, tmp_path: Path) -> None:
         result = _run(tmp_path, cg_data={"status": "ok"})
@@ -177,7 +177,7 @@ class TestArtifactGates:
         result = _run(tmp_path, oo_data={"result": "FAIL"})
         assert result["result"] == "BLOCKED"
         assert result["broker_calls_made"] is False
-        assert "operator_override" in " ".join(result["violations"])
+        assert result["blocker"] == "operator_override result must be PASS"
 
     def test_operator_override_missing_result_field_blocked(self, tmp_path: Path) -> None:
         result = _run(tmp_path, oo_data={})
@@ -201,7 +201,7 @@ class TestSymbolValidation:
         result = _run(tmp_path, symbol="AAPL")
         assert result["result"] == "BLOCKED"
         assert result["broker_calls_made"] is False
-        assert "symbol" in result["blocker"]
+        assert result["blocker"] == "symbol must be exactly 'SPY'"
 
     def test_lowercase_symbol_blocked(self, tmp_path: Path) -> None:
         result = _run(tmp_path, symbol="spy")
@@ -223,6 +223,69 @@ class TestSymbolValidation:
 # TestBrokerNone
 # ---------------------------------------------------------------------------
 
+class TestInputSecretRedaction:
+    _SECRET = "highly-sensitive-input-value-8k2p"
+
+    def test_cg_result_secret_not_in_output(self, tmp_path: Path) -> None:
+        result = _run(tmp_path, cg_data={"result": self._SECRET})
+        output_str = json.dumps(result)
+        assert self._SECRET not in output_str
+
+    def test_cg_result_secret_not_in_violations(self, tmp_path: Path) -> None:
+        result = _run(tmp_path, cg_data={"result": self._SECRET})
+        assert self._SECRET not in " ".join(result["violations"])
+        assert self._SECRET not in (result["blocker"] or "")
+
+    def test_cg_result_secret_not_in_stdout(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _run(tmp_path, cg_data={"result": self._SECRET})
+        captured = capsys.readouterr()
+        assert self._SECRET not in captured.out
+        assert self._SECRET not in captured.err
+
+    def test_oo_result_secret_not_in_output(self, tmp_path: Path) -> None:
+        result = _run(tmp_path, oo_data={"result": self._SECRET})
+        output_str = json.dumps(result)
+        assert self._SECRET not in output_str
+
+    def test_oo_result_secret_not_in_violations(self, tmp_path: Path) -> None:
+        result = _run(tmp_path, oo_data={"result": self._SECRET})
+        assert self._SECRET not in " ".join(result["violations"])
+        assert self._SECRET not in (result["blocker"] or "")
+
+    def test_oo_result_secret_not_in_stdout(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _run(tmp_path, oo_data={"result": self._SECRET})
+        captured = capsys.readouterr()
+        assert self._SECRET not in captured.out
+        assert self._SECRET not in captured.err
+
+    def test_symbol_secret_not_in_output(self, tmp_path: Path) -> None:
+        result = _run(tmp_path, symbol=self._SECRET)
+        output_str = json.dumps(result)
+        assert self._SECRET not in output_str
+        assert result["symbol"] == "(invalid)"
+
+    def test_symbol_secret_not_in_violations(self, tmp_path: Path) -> None:
+        result = _run(tmp_path, symbol=self._SECRET)
+        assert self._SECRET not in " ".join(result["violations"])
+        assert self._SECRET not in (result["blocker"] or "")
+
+    def test_symbol_secret_not_in_stdout(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _run(tmp_path, symbol=self._SECRET)
+        captured = capsys.readouterr()
+        assert self._SECRET not in captured.out
+        assert self._SECRET not in captured.err
+
+
+# ---------------------------------------------------------------------------
+# TestBrokerNone
+# ---------------------------------------------------------------------------
+
 class TestBrokerNone:
     def test_broker_none_blocked(self, tmp_path: Path) -> None:
         result = _run(tmp_path)
@@ -232,6 +295,10 @@ class TestBrokerNone:
     def test_broker_none_no_broker_calls(self, tmp_path: Path) -> None:
         result = _run(tmp_path)
         assert result["broker_calls_made"] is False
+
+    def test_broker_none_broker_calls_readonly_false(self, tmp_path: Path) -> None:
+        result = _run(tmp_path)
+        assert result["broker_calls_readonly"] is False
 
     def test_broker_none_credentials_not_read(self, tmp_path: Path) -> None:
         result = _run(tmp_path)
@@ -324,6 +391,12 @@ class TestHappyPath:
         assert result["violations"] == []
         assert result["blocker"] is None
 
+    def test_broker_calls_readonly_true_on_pass(self, tmp_path: Path) -> None:
+        broker = MockPositionBroker()
+        result = _run(tmp_path, broker=broker)
+        assert result["broker_calls_made"] is True
+        assert result["broker_calls_readonly"] is True
+
 
 # ---------------------------------------------------------------------------
 # TestBrokerException
@@ -399,7 +472,7 @@ class TestBrokerException:
 
 class TestOutputInvariants:
     def _assert_invariants(self, result: dict[str, Any]) -> None:
-        assert result["broker_calls_readonly"] is True
+        assert result["broker_calls_readonly"] == result["broker_calls_made"]
         assert result["broker_mutation_calls_made"] is False
         assert result["credential_values_exposed"] is False
         assert result["credentials_read"] is False
