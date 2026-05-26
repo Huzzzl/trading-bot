@@ -1578,3 +1578,64 @@ before, during, and after one real live SPY market buy attempt using
 > pass all safety dry checks, confirm every item in the pre-submit checklist,
 > and explicitly pass `--allow-real-live-submit-once` — none of which are
 > performed by this PR.
+
+---
+
+## Milestone: First Real Live Submit — SUBMITTED Observed
+
+**Branch:** `claude/docs-snapshot-first-real-live-submit-success`
+**Status:** Complete
+
+The first single manual real live SPY market buy attempt was executed and
+returned `result="SUBMITTED"`.
+
+### Result
+
+| Field | Observed |
+|-------|---------|
+| `result` | `"SUBMITTED"` |
+| `order_submitted` | `true` |
+| `submit_order_called` | `true` |
+| `broker_mutation_calls_made` | `true` |
+| `cancel_order_called` | `false` |
+| `replace_order_called` | `false` |
+| `credential_values_exposed` | `false` |
+| `live_ledger_written` | `true` |
+| `blocker` | empty / null |
+| `notional_cap` | `50.0` |
+| `automated_trading_enabled` | `false` |
+| `recurring_trading_enabled` | `false` |
+
+### Post-run actions completed
+
+- Credentials cleared from environment
+- Local operator config reset to safe defaults (`live_trading_enabled=false`,
+  `live_submit_dry_run=true`, `live_kill_switch_enabled=true`)
+- Output artifact and ledger not committed to repository
+- Order/fill status to be verified manually in Alpaca UI
+
+### Safety invariants confirmed
+
+- Exactly one `submit_order` call
+- No cancel/replace/retry through code
+- No automated or recurring trading
+- Credential values not exposed in any output field
+- Broker order ID redacted
+- No raw artifacts, ledger, credentials, account/order IDs, fill details, or
+  broker response details committed to this repository
+
+### Reference
+
+- `docs/first_real_live_submit_success_snapshot.md` — full snapshot document
+- Suggested git tag: `first-real-live-submit-success-observed`
+
+### Warning
+
+> **This milestone documents a single completed manual attempt only.**
+> **It does not approve future trading.**
+> **It does not approve automated or recurring trading.**
+> Any future live submit attempt requires fresh prerequisite artifacts,
+> a fresh unexpired approval, fresh preflight, explicit local operator config,
+> and `--allow-real-live-submit-once`. SUBMITTED and BLOCKED outcomes are
+> final for that attempt — do not retry without a new approval artifact.
+> Emergency cancel and replace remain manual via the Alpaca broker UI only.
