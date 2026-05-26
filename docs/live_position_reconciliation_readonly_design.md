@@ -6,7 +6,7 @@ Design document for the read-only position / open-order reconciliation tool.
 **Real Alpaca adapter implemented in PR `add-live-position-reconciliation-readonly-alpaca-adapter`.**
 **CLI requires `--allow-live-broker-api-readonly` flag; without it CLI always returns BLOCKED.**
 **Without the flag: credentials are never read, TradingClient is never constructed.**
-**105 unit tests — all mock-only, no real Alpaca calls.**
+**106 unit tests — all mock-only, no real Alpaca calls.**
 
 **No Alpaca SDK is imported at module level.**
 **No network requests are made at import time.**

@@ -1833,7 +1833,7 @@ A future PR must add:
 
 Real `AlpacaLivePositionBroker` adapter implemented and merged:
 - `src/tools/live_position_reconciliation_readonly.py` — real adapter added (exists on `main`)
-- `tests/test_live_position_reconciliation_readonly.py` — 105 tests (exists on `main`)
+- `tests/test_live_position_reconciliation_readonly.py` — 106 tests (exists on `main`)
 
 **CLI requires `--allow-live-broker-api-readonly` flag.**
 **Without the flag: CLI always returns BLOCKED ("readonly broker api flag not set").**
@@ -1879,14 +1879,14 @@ exposes exactly two read-only methods:
 
 ### Test coverage
 
-105 unit tests in `tests/test_live_position_reconciliation_readonly.py`.
+106 unit tests in `tests/test_live_position_reconciliation_readonly.py`.
 All tests use mock `_FakeTradingClient` / `_TrackingClientCls` — no real Alpaca calls in any test.
 
 New test classes added:
 - `TestRealAdapterFlagAbsent` (5) — without flag: BLOCKED, `credentials_read=false`, no TradingClient, no broker calls
 - `TestRealAdapterGatesFail` (4) — flag present but artifact/symbol gates fail: `credentials_read=false`
 - `TestRealAdapterCredentialsMissing` (4) — flag + gates pass but env vars absent: BLOCKED, `credentials_read=true`
-- `TestRealAdapterConstruction` (4) — TradingClient constructed with `paper=False`, api_key passed, `credentials_read=true`
+- `TestRealAdapterConstruction` (5) — TradingClient constructed with `paper=False`, api_key passed, `credentials_read=true`, `QueryOrderStatus.OPEN` passed to `GetOrdersRequest`
 - `TestRealAdapterHappyPath` (6) — PASS, `position_observed=true/false`, `open_order_observed=true/false`, mutation fields false
 - `TestRealAdapterNoPositionSignal` (3) — 404-style exceptions → `position_observed=false`, `result="PASS"` (not BLOCKED)
 - `TestRealAdapterExceptionRedaction` (5) — broker/construction exceptions with secret → BLOCKED, secret absent from output
