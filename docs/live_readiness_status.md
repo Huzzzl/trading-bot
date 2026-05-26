@@ -1639,3 +1639,51 @@ returned `result="SUBMITTED"`.
 > and `--allow-real-live-submit-once`. SUBMITTED and BLOCKED outcomes are
 > final for that attempt — do not retry without a new approval artifact.
 > Emergency cancel and replace remain manual via the Alpaca broker UI only.
+
+---
+
+## Milestone: Post-Submit Manual Position Handling Runbook Prepared
+
+**Branch:** `claude/docs-post-submit-manual-position-handling-runbook`
+**Status:** Complete
+
+Post-submit operator runbook created at
+`docs/post_submit_manual_position_handling_runbook.md`.
+
+**No trade was executed by this PR.**
+**No order was submitted, sold, cancelled, or replaced.**
+**No Alpaca endpoint was contacted.**
+**No credentials were read.**
+**No code changes were made.**
+
+### What was added
+
+The runbook documents what the operator should do after a real live submit
+returns `result="SUBMITTED"`, covering:
+
+1. Immediate checks — credentials cleared, config reset, artifacts not
+   committed, order status confirmed in Alpaca UI
+2. Manual position decision — hold vs. close, bot makes no automatic decision
+3. Manual sell / close process — Alpaca UI only, no code, no reuse of buy
+   approval artifact
+4. What not to do — no repeat submit, no automated sell, no
+   cancel/replace/sell implementation in this PR
+5. Future engineering options — manual sell approval flow, read-only position
+   reconciliation tool, position status snapshot (none implemented here)
+6. Warning — first buy success does not approve future trading; emergency
+   actions remain manual
+
+### Reference
+
+- `docs/post_submit_manual_position_handling_runbook.md` — full runbook
+- Suggested git tag: `post-submit-manual-position-handling-runbook-prepared`
+
+### Warning
+
+> **This milestone does not approve future trading.**
+> **No order was submitted, sold, cancelled, or replaced by this PR.**
+> The runbook is a preparation and guidance document only.
+> Automated position management is not implemented.
+> Any future buy or sell attempt requires fresh design, fresh approval,
+> fresh preflight, and explicit operator action.
+> Emergency actions remain manual via the Alpaca broker UI only.
