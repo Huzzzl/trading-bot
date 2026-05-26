@@ -1,14 +1,19 @@
 # Live Position Reconciliation Read-Only Tool — Design
 
-Design document for a future read-only tool that inspects current live
-account positions and open orders after a live buy has been submitted.
+Design document for the read-only position / open-order reconciliation tool.
 
-**This PR does NOT trade.**
-**This PR does NOT submit, sell, cancel, or replace any order.**
-**This PR does NOT contact Alpaca.**
-**This PR does NOT read credentials.**
-**This PR does NOT implement the reconciliation tool.**
-**This PR does NOT approve future trading.**
+**Mock-only core implemented in PR `add-live-position-reconciliation-readonly-mock-core`.**
+**CLI always returns BLOCKED ("real broker adapter not implemented").**
+**PASS is only reachable through an injected mock broker in unit tests.**
+**66 unit tests — all mock-only, no real Alpaca calls.**
+**Real Alpaca adapter not yet implemented — separate future PR required.**
+
+**No Alpaca SDK is imported.**
+**No network requests are made.**
+**No credentials are read on any code path.**
+**No orders are submitted, sold, cancelled, or replaced.**
+**No live ledger is written.**
+**No config_safety is mutated.**
 **Any position decision remains manual.**
 
 ---
@@ -111,7 +116,7 @@ converted to `result="BLOCKED"` with a redacted message.
 | `checked_at_utc` | string (ISO-8601) | Timestamp of the check |
 | `result` | `"PASS"` or `"BLOCKED"` | PASS = read completed without error; BLOCKED = gate or exception |
 | `broker_calls_made` | boolean | `true` if any broker API call was attempted |
-| `broker_calls_readonly` | boolean | `true` — all calls are GET-only |
+| `broker_calls_readonly` | boolean | mirrors `broker_calls_made` — `true` only after read-only broker calls; `false` when no broker call was made |
 | `broker_mutation_calls_made` | boolean | Always `false` — no mutation endpoints reachable |
 | `credential_values_exposed` | boolean | Always `false` — never written to output |
 | `credentials_read` | boolean | `true` only if env vars were read (after all gates pass) |

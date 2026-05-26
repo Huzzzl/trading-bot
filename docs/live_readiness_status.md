@@ -1734,3 +1734,79 @@ remains a manual operator decision.
 > cancel, replace, or decide on positions.
 > Any future implementation requires fresh design review, mock-only tests,
 > and explicit operator action before any live broker API call.
+
+---
+
+## Milestone: Live Position Reconciliation Read-Only — Mock-Only Core Complete
+
+**Branch:** `claude/add-live-position-reconciliation-readonly-mock-core`
+**Status:** Complete
+
+Mock-only core implemented in:
+- `src/tools/live_position_reconciliation_readonly.py`
+- `tests/test_live_position_reconciliation_readonly.py`
+
+**CLI always returns BLOCKED ("real broker adapter not implemented").**
+**PASS is only reachable through an injected mock broker in unit tests.**
+**No Alpaca SDK imported.**
+**No network requests made.**
+**No credentials read on any code path.**
+**No orders submitted, sold, cancelled, or replaced.**
+**No live ledger written.**
+
+### Test coverage
+
+66 unit tests in `tests/test_live_position_reconciliation_readonly.py`.
+Full suite: 3,897 tests passed.
+All tests mock-only — no real Alpaca calls.
+
+Test classes:
+- `TestArtifactGates` — missing/non-PASS credential guard and operator override artifacts → BLOCKED, no broker call
+- `TestSymbolValidation` — wrong symbol, lowercase, whitespace, empty → BLOCKED
+- `TestBrokerNone` — CLI broker=None → BLOCKED, no credentials read, `position_observed=null`, `open_order_observed=null`
+- `TestHappyPath` — injected mock broker, all gate combinations → PASS with `position_observed`/`open_order_observed`
+- `TestBrokerException` — broker raises with secret string → BLOCKED, secret absent from output and stdout
+- `TestOutputInvariants` — mutation/credential/submit/cancel/replace fields always false; broker_ids/account_identifiers always redacted
+- `TestOutputAlwaysWritten` — output artifact written for all BLOCKED paths via CLI
+- `TestNeverRaises` — `run_reconciliation()` never raises on any exception path
+- `TestNoRawIds` — no raw IDs or fill details in output JSON or stdout
+- `TestSourceScans` — no Alpaca/network imports, no `os.environ`, no `submit_order(`/`cancel_order(`/`replace_order(`, no POST/PATCH/DELETE, no ledger writes
+
+### Safety invariants confirmed
+
+- No Alpaca SDK imported (source-scanned)
+- No network imports (source-scanned)
+- No `os.environ` at module level (source-scanned)
+- No `submit_order(`/`cancel_order(`/`replace_order(` in source (source-scanned)
+- No POST/PATCH/DELETE mutation markers in source (source-scanned)
+- No ledger writes in source (source-scanned)
+- CLI always BLOCKED — tested via `main()` with `SystemExit(1)`
+- Broker exception text redacted — secret string absent from output and stdout
+- All output invariant fields hardcoded false/true regardless of path
+
+### What remains
+
+The real `AlpacaLivePositionBroker` adapter is NOT implemented.
+A future PR must add:
+- `AlpacaLivePositionBroker` with lazy SDK import, `get_position`, `get_open_orders` (read-only only)
+- `--allow-live-broker-api-readonly` CLI flag
+- Credential read only after all gates pass and flag present
+- Real adapter tests (mock `TradingClient`, no real Alpaca calls)
+
+### Reference
+
+- `src/tools/live_position_reconciliation_readonly.py` — mock-only core
+- `tests/test_live_position_reconciliation_readonly.py` — 66 tests
+- `docs/live_position_reconciliation_readonly_design.md` — design document
+- Suggested git tag: `live-position-reconciliation-readonly-mock-core-complete`
+
+### Warning
+
+> **This milestone does not approve real trading.**
+> **CLI always returns BLOCKED.**
+> **No Alpaca endpoint was contacted.**
+> **No credentials were read.**
+> **No orders were submitted, sold, cancelled, or replaced.**
+> The real broker adapter is not implemented — a future PR is required.
+> Any future real adapter must be mock-only in tests, require explicit
+> operator flag, and read credentials only after all gates pass.
