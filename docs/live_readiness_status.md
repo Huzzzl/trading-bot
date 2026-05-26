@@ -2096,3 +2096,75 @@ hold or sell the position remains a manual operator decision.
 > `--allow-live-broker-api-readonly` flag, both prerequisite artifacts with
 > `result="PASS"`, and valid credentials in the environment.
 
+---
+
+## Milestone: Manual Position Monitoring and Exit Framework — Design Complete
+
+**Branch:** `claude/docs-design-manual-position-monitoring-and-exit-framework`
+**Status:** Complete
+
+Design framework document created at
+`docs/manual_position_monitoring_and_exit_framework.md`.
+
+**No trade was executed.**
+**No order was submitted, sold, cancelled, replaced, or closed.**
+**No Alpaca endpoint was contacted.**
+**No credentials were read.**
+**No code was implemented.**
+**No automated monitoring was implemented.**
+**No stop-loss, take-profit, trailing stop, recurring job, or sell adapter was implemented.**
+**The current SPY position remains a manual operator decision.**
+
+### What was designed
+
+A framework document defining:
+
+1. **Current state** — `position_observed=true` (flag only), no size/price/PnL in
+   repo, emergency actions manual via Alpaca UI
+2. **Manual monitoring principles** — operator checks Alpaca UI directly; bot must
+   not decide hold/sell; any future tool must be read-only first; any future
+   sell/close workflow requires separate design, approval, flag, and mock-only tests
+3. **Manual exit options** — sell via Alpaca UI, hold, or engineer future sell
+   workflow in a separate PR; no automation implemented here
+4. **Future read-only monitoring design ideas** — position status checker, market
+   session checker, local operator checklist, non-sensitive snapshot format
+   (boolean/status fields only; no size/price/PnL/IDs committed)
+5. **Future sell/close workflow constraints** — separate design PR, separate approval
+   artifact, explicit flag, mock-only tests, exact symbol, single broker mutation,
+   no retry/cancel/replace/automation, broker exception text redacted, no IDs/PnL in output
+6. **Abort conditions** — full table: uncertainty, stale artifacts, credential
+   leakage, open order ambiguity, unexpected broker response, automation pressure,
+   unreviewed mutation paths
+7. **Warnings** — holding/selling are financial decisions by the operator; bot
+   provides status checks only; nothing in this repository is financial advice
+
+### Safety invariants confirmed
+
+- No code changes
+- No Alpaca endpoint contacted
+- No credentials read or written
+- No order submitted, sold, cancelled, or replaced
+- No live ledger written
+- No automated position decision made
+- No stop-loss, take-profit, or trailing stop implemented
+- No recurring or automated monitoring implemented
+- No sell or close adapter implemented
+
+### Reference
+
+- `docs/manual_position_monitoring_and_exit_framework.md` — full framework document
+- Suggested git tag: `manual-position-monitoring-exit-framework-designed`
+
+### Warning
+
+> **This milestone does not approve holding or selling the observed position.**
+> **This milestone does not approve future trading.**
+> **This milestone does not approve future broker calls.**
+> **No code was implemented. No Alpaca endpoint was contacted. No credentials were read.**
+> The framework document is a design and guidance document only.
+> Automated position management, stop-loss, take-profit, trailing stop,
+> recurring monitoring jobs, and sell/close adapters are not implemented.
+> Any future live action requires fresh design, fresh approval, fresh preflight,
+> explicit operator action, and an explicit CLI flag.
+> The hold/sell decision for the current SPY position remains entirely manual.
+
