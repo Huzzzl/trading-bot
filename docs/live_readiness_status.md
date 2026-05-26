@@ -1994,3 +1994,105 @@ broker API call.
 > read-only broker contact. Any position decision remains a manual operator
 > action. Emergency actions remain manual via the Alpaca broker UI only.
 
+---
+
+## Milestone: Position Reconciliation Read-Only — PASS Observed
+
+**Branch:** `claude/docs-snapshot-position-reconciliation-readonly-pass`
+**Status:** Complete
+
+Read-only reconciliation run with `--allow-live-broker-api-readonly` returned
+`result="PASS"` after PR #130 merged to `main`.
+
+**Alpaca was contacted read-only only (GET calls only).**
+**Credentials were read but never exposed, stored, or written to any output.**
+**TradingClient was constructed only after all gates passed and the flag was present.**
+**No order was submitted, sold, cancelled, replaced, or closed.**
+**No broker mutation call was made.**
+**No live ledger was written.**
+**No config was mutated.**
+**No position decision was made.**
+
+### Key observed fields
+
+| Field | Observed |
+|-------|---------|
+| `result` | `"PASS"` |
+| `broker_calls_made` | `true` |
+| `broker_calls_readonly` | `true` |
+| `broker_mutation_calls_made` | `false` |
+| `credentials_read` | `true` |
+| `credential_values_exposed` | `false` |
+| `live_submit_enabled` | `false` |
+| `submit_order_reachable` | `false` |
+| `cancel_order_reachable` | `false` |
+| `replace_order_reachable` | `false` |
+| `symbol` | `"SPY"` |
+| `position_observed` | `true` |
+| `open_order_observed` | `false` |
+| `broker_ids_redacted` | `true` |
+| `account_identifiers_redacted` | `true` |
+| `raw_broker_response_included` | `false` |
+| `violations` | `[]` |
+| `blocker` | `null` |
+
+### Read-only broker calls confirmed
+
+Two read-only GET calls were made via `AlpacaLivePositionBroker`:
+
+| Call | Method | Result |
+|------|--------|--------|
+| `get_position("SPY")` | `get_open_position` (GET) | Position exists |
+| `get_open_orders("SPY")` | `get_orders` with `QueryOrderStatus.OPEN` (GET) | No open orders |
+
+No POST, PATCH, or DELETE calls were made.
+
+### position_observed and open_order_observed are presence flags only
+
+`position_observed=true` means only that a SPY position was observed to
+exist in the live account at the time of the run. It does not record
+position size, fill price, quantity, cost basis, or any broker identifier.
+
+`open_order_observed=false` means only that no open SPY orders were
+observed at the time of the run.
+
+**Neither field constitutes a position management decision.** Whether to
+hold or sell the position remains a manual operator decision.
+
+### Safety invariants confirmed
+
+| Invariant | Confirmed |
+|-----------|----------|
+| Only GET-equivalent broker calls made | ✓ (`broker_calls_readonly=true`) |
+| No broker mutation calls | ✓ (`broker_mutation_calls_made=false`) |
+| No submit_order called | ✓ (`submit_order_reachable=false`) |
+| No cancel_order called | ✓ (`cancel_order_reachable=false`) |
+| No replace_order called | ✓ (`replace_order_reachable=false`) |
+| No credential values exposed | ✓ (`credential_values_exposed=false`) |
+| No raw broker IDs in output | ✓ (`broker_ids_redacted=true`) |
+| No account identifiers in output | ✓ (`account_identifiers_redacted=true`) |
+| No raw broker response in output | ✓ (`raw_broker_response_included=false`) |
+| No live ledger written | ✓ |
+| No config mutated | ✓ |
+| No position decision made | ✓ |
+| No automated or recurring trading | ✓ |
+
+### Reference
+
+- `docs/position_reconciliation_readonly_pass_snapshot.md` — full snapshot document
+- Suggested git tag: `position-reconciliation-readonly-pass-observed`
+
+### Warning
+
+> **This milestone does not approve holding or selling the observed position.**
+> **This milestone does not approve future trading.**
+> **This milestone does not approve future broker calls.**
+> `position_observed=true` is a boolean presence flag only — it does not
+> record size, price, or any other position detail.
+> Whether to hold or sell the position remains a manual operator decision.
+> Emergency actions (cancel, close, replace) remain manual via the Alpaca
+> broker UI only.
+> Any future read-only reconciliation run requires the
+> `--allow-live-broker-api-readonly` flag, both prerequisite artifacts with
+> `result="PASS"`, and valid credentials in the environment.
+
