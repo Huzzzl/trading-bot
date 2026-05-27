@@ -3436,3 +3436,74 @@ stores `bar_interval="60m"` when Yahoo data is requested with the 60-minute stri
 > No strategy is connected to live or paper trading.
 > The Phase A–H safety roadmap remains unchanged and required.
 > Nothing in this repository is financial advice.
+
+---
+
+## Milestone — Refactor PR 7: add-backtest-runner-integration
+
+**Date:** 2026-05-27
+**Branch:** `claude/add-backtest-runner-integration`
+**Files added:** `src/backtest/backtest_runner.py`, `tests/test_backtest_runner.py`
+**Tests:** 67 new; full suite 4 684 passed
+
+### What was implemented
+
+Offline backtest runner that wires strategy factory + `BacktestEngine` into a single
+callable entry point with typed, immutable configuration and result objects.
+
+**Added:**
+- `BacktestRunConfig` (frozen dataclass) — carries all inputs: `strategy_name`,
+  `strategy_params`, `symbols`, `start_date`, `end_date`, `bar_interval="5m"`,
+  `initial_capital=100_000.0`, `position_size_pct=0.95`, `stop_execution="bar_close"`.
+- `BacktestRunResult` (frozen dataclass) — carries all outputs: `metrics`, `trades`,
+  `equity_curve`, `order_intents`, echoed config fields, plus six read-only safety flags
+  (`broker_calls_made=False`, `credentials_read=False`, `live_submit_enabled=False`,
+  `order_action_requested=False`, `paper_trading_enabled=False`, `recommendation_only=True`).
+- `run_backtest(config, *, data_provider)` — validates config (raises
+  `ValueError("invalid backtest run config")` without echoing raw values); calls
+  `build_strategy()` → constructs `Portfolio` + `RiskManager` → wires `BacktestEngine` →
+  calls `engine.run()` → wraps into `BacktestRunResult`.
+  All six safety flags are hardcoded `False`/`True`; the function contains no path to
+  set them otherwise.
+- `_validate_config` rejects non-finite `initial_capital` (`math.isfinite()`); rejects
+  symbols that don't match `^[A-Z0-9.\-/]{1,10}$` (uppercase ticker regex); never echoes
+  raw values in any error message.
+
+**Not changed:** `BacktestEngine`, `compute_metrics`, `Portfolio`, `RiskManager`,
+`BaseDataProvider`, `build_strategy`, or any existing test.
+
+### Test classes
+
+| File | Class | Tests | What it covers |
+|------|-------|-------|----------------|
+| `test_backtest_runner.py` | `TestBacktestRunConfig` | 7 | Frozen; defaults; custom values stored |
+| | `TestBacktestRunResult` | 16 | Safety flags all False/True; frozen; echoed fields; metrics keys; types |
+| | `TestRunBacktestValidation` | 23 | Invalid interval; zero/negative/inf/nan capital; bad pct; bad stop_execution; empty symbols; lowercase/space/invalid symbol; secret symbol not echoed; dot/dash symbol valid; unknown strategy; bad params; raw values not echoed; valid aliases |
+| | `TestRunBacktestBehaviour` | 7 | Deterministic; empty data; capital matches; Sharpe uses interval; config not mutated; result copy independence; all safety flags |
+| | `TestSourceScans` | 14 | No Alpaca/network/environ/execution-actions/mutation/ledger markers |
+
+### Safety confirmations
+
+- No broker/API access — no Alpaca calls, no HTTP, no credentials, no environment variables
+- No order execution — `run_backtest` produces advisory output only; `order_intents` are
+  audit records, never sent to a broker
+- No live/paper trading — no scheduler, no live runner, no paper runner
+- Six safety flags are immutable in `BacktestRunResult`; no code path can set them to `True`
+- No `src/main.py`, `src/tools/`, `src/execution/broker*`, or live-gate file changes
+- No backtest execution behaviour changed — engine loop, trade logic unchanged
+
+### Reference
+
+- `src/backtest/backtest_runner.py` — runner module
+- `tests/test_backtest_runner.py` — 67 tests
+- `docs/trend_bot_architecture_refactor_plan.md` — PR 7 marked implemented
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> `BacktestRunResult.broker_calls_made` is always `False`. No execution layer was triggered.
+> No strategy is connected to live or paper trading.
+> The Phase A–H safety roadmap remains unchanged and required.
+> Nothing in this repository is financial advice.
