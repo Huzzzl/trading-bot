@@ -139,6 +139,16 @@ No phase may be skipped. Each phase has its own PR(s).
 **This does not trade. This does not approve automation. Risk gate, executor,**
 **scheduler, and paper/live trading are not implemented — each requires its own PR.**
 
+### Architecture alignment note
+
+Before Phase B implementation begins, the repository will undergo staged
+architecture alignment for the trend-following MVP. This is documented in
+`docs/trend_bot_architecture_refactor_plan.md` and consists of up to 10
+small PRs (strategy factory, indicators, trend analysis, TrendFollowing
+strategy, position sizer, metrics fix, backtest runner, slim main.py, tools
+isolation, README). This does not change the Phase A–H safety roadmap and
+does not approve live or paper trading.
+
 ### Phase B — Backtest and metrics
 
 **Status: design complete — `docs/backtest_and_metrics_offline_design.md`**
