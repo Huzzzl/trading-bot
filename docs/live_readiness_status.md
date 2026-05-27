@@ -2785,3 +2785,51 @@ Pure function. Same inputs always produce same output. No side effects.
 > operator action. Live automation requires completing Phases B–G, each reviewed
 > in its own PR.
 > Nothing in this repository is financial advice.
+
+---
+
+## Milestone: Phase A — Strategy Signal Engine Offline Core — Complete (Snapshot)
+
+**Branch:** `claude/docs-snapshot-strategy-signal-engine-offline-core-complete`
+**Status:** Complete
+
+Snapshot document created at
+`docs/strategy_signal_engine_offline_core_complete_snapshot.md`.
+
+**No code was changed in this PR.**
+**No Alpaca endpoint was contacted.**
+**No credentials were read.**
+**No order was submitted, sold, cancelled, replaced, or closed.**
+**No automated trading was approved.**
+**All position and trading decisions remain entirely manual.**
+
+### What this snapshot records
+
+- `src/strategy/signal_engine.py` exists and is offline-only and deterministic.
+- `tests/test_strategy_signal_engine.py` exists with 96 tests; full suite 4164.
+- `evaluate_signal()` is a pure function: same inputs always produce same output.
+- BUY/SELL/HOLD/BLOCK are recommendations only — no execution occurs.
+- All source scan invariants confirmed: no Alpaca SDK, no network libraries,
+  no environment variable access, no submit/cancel/replace/close, no ledger writes.
+- All safety fields confirmed always: `deterministic=true`, `broker_calls_made=false`,
+  `credentials_read=false`, `live_submit_enabled=false`, `order_action_requested=false`,
+  `position_decision_is_recommendation_only=true`.
+- Risk gate, executor, scheduler, paper trading, and live trading remain not implemented.
+
+### Reference
+
+- `docs/strategy_signal_engine_offline_core_complete_snapshot.md` — full snapshot document
+- Suggested git tag: `strategy-signal-engine-offline-core-complete`
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No code is implemented in this PR. No Alpaca endpoint was contacted.**
+> **No credentials were read.**
+> The risk gate, executor, and scheduler remain not implemented.
+> All automated live trading requires completing the full staged roadmap
+> (Phases A–H), with each phase reviewed and approved in its own PR.
+> Until automation is implemented, tested, and approved, all trading
+> decisions remain entirely manual operator actions.
+> Nothing in this repository is financial advice.
