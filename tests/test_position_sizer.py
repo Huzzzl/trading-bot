@@ -210,6 +210,57 @@ class TestValidationMaxNotional:
 
 
 # ---------------------------------------------------------------------------
+# TestValidationNanInf — NaN/inf rejected before math operations
+# ---------------------------------------------------------------------------
+
+
+class TestValidationNanInf:
+    def test_equity_nan_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid position sizing parameters"):
+            calculate_shares_by_risk(float("nan"), 1.0, 100.0, 98.0)
+
+    def test_equity_inf_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid position sizing parameters"):
+            calculate_shares_by_risk(float("inf"), 1.0, 100.0, 98.0)
+
+    def test_risk_pct_nan_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid position sizing parameters"):
+            calculate_shares_by_risk(10_000, float("nan"), 100.0, 98.0)
+
+    def test_risk_pct_inf_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid position sizing parameters"):
+            calculate_shares_by_risk(10_000, float("inf"), 100.0, 98.0)
+
+    def test_entry_price_nan_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid position sizing parameters"):
+            calculate_shares_by_risk(10_000, 1.0, float("nan"), 98.0)
+
+    def test_entry_price_inf_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid position sizing parameters"):
+            calculate_shares_by_risk(10_000, 1.0, float("inf"), 98.0)
+
+    def test_stop_price_nan_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid position sizing parameters"):
+            calculate_shares_by_risk(10_000, 1.0, 100.0, float("nan"))
+
+    def test_stop_price_inf_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid position sizing parameters"):
+            calculate_shares_by_risk(10_000, 1.0, 100.0, float("inf"))
+
+    def test_max_notional_nan_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid position sizing parameters"):
+            calculate_shares_by_risk(10_000, 1.0, 100.0, 98.0, max_notional=float("nan"))
+
+    def test_max_notional_inf_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid position sizing parameters"):
+            calculate_shares_by_risk(10_000, 1.0, 100.0, 98.0, max_notional=float("inf"))
+
+    def test_error_message_exact(self) -> None:
+        with pytest.raises(ValueError, match="invalid position sizing parameters"):
+            calculate_shares_by_risk(float("nan"), 1.0, 100.0, 98.0)
+
+
+# ---------------------------------------------------------------------------
 # TestDeterminism
 # ---------------------------------------------------------------------------
 
@@ -264,6 +315,43 @@ class TestCalculateNotional:
 
     def test_string_shares_raises_safely(self) -> None:
         secret = "secret_shares_value"
+        with pytest.raises(ValueError) as exc_info:
+            calculate_notional(secret, 100.0)  # type: ignore[arg-type]
+        assert secret not in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# TestCalculateNotionalEdgeCases — fractional shares and NaN/inf inputs
+# ---------------------------------------------------------------------------
+
+
+class TestCalculateNotionalEdgeCases:
+    def test_fractional_shares_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid position sizing parameters"):
+            calculate_notional(1.5, 100.0)  # type: ignore[arg-type]
+
+    def test_shares_nan_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid position sizing parameters"):
+            calculate_notional(float("nan"), 100.0)  # type: ignore[arg-type]
+
+    def test_shares_inf_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid position sizing parameters"):
+            calculate_notional(float("inf"), 100.0)  # type: ignore[arg-type]
+
+    def test_entry_price_nan_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid position sizing parameters"):
+            calculate_notional(10, float("nan"))
+
+    def test_entry_price_inf_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid position sizing parameters"):
+            calculate_notional(10, float("inf"))
+
+    def test_integer_like_float_accepted(self) -> None:
+        # shares=1.0 is integer-like; must not raise and must return same as shares=1
+        assert calculate_notional(1.0, 100.0) == pytest.approx(100.0)  # type: ignore[arg-type]
+
+    def test_fractional_shares_secret_not_echoed(self) -> None:
+        secret = "secret_fractional_value"
         with pytest.raises(ValueError) as exc_info:
             calculate_notional(secret, 100.0)  # type: ignore[arg-type]
         assert secret not in str(exc_info.value)

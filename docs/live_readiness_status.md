@@ -3268,7 +3268,7 @@ INVALID_PERIOD_ORDER → MISSING_REQUIRED_COLUMNS → INSUFFICIENT_BARS.
 **Branch:** `claude/add-risk-position-sizer`
 **Files added:** `src/risk/position_sizer.py`, `tests/test_position_sizer.py`
 **Files changed:** `src/risk/__init__.py` (circular import fix)
-**Tests:** 61 new; full suite 4 558 passed
+**Tests:** 79 new; full suite 4 576 passed
 
 ### What was implemented
 
@@ -3291,15 +3291,22 @@ Returns `max(0, shares)`. Sub-1 result returns 0 — trade not sized.
 **`calculate_notional(shares, entry_price) → float`** — dollar value of a position (`shares * entry_price`).
 
 **Validation** — all invalid inputs raise `ValueError("invalid position sizing parameters")`. Raw values are never echoed.
+All numeric inputs are checked for finiteness (NaN and ±inf rejected before any math operation).
+Fractional shares (e.g., 1.5) are rejected in `calculate_notional`; integer-like floats (e.g., 1.0) are accepted.
 
 | Parameter | Constraint |
 |-----------|------------|
-| `equity` | `> 0` (float) |
-| `risk_pct` | `> 0` (float) |
-| `entry_price` | `> 0` (float) |
-| `stop_price` | `> 0` AND `< entry_price` (float) |
-| `max_notional` | `None` OR `> 0` (float) |
-| `shares` (notional) | `>= 0` (int) |
+| `equity` | finite `> 0` (float) |
+| `risk_pct` | finite `> 0` (float) |
+| `entry_price` | finite `> 0` (float) |
+| `stop_price` | finite `> 0` AND `< entry_price` (float) |
+| `max_notional` | `None` OR finite `> 0` (float) |
+| `shares` (notional) | non-negative int or integer-like float |
+| `entry_price` (notional) | finite `> 0` (float) |
+
+**Internal helpers** (not part of public API):
+- `_to_finite_float(val)` — converts to float, rejects non-finite values.
+- `_to_non_negative_int(val)` — accepts int or integer-like float, rejects fractional/NaN/inf/negative.
 
 **`src/risk/__init__.py`** — removed eager `from .risk_manager import RiskManager` re-export that caused a circular import when `position_sizer` was imported in isolation. No consumer imported `from src.risk import RiskManager`; all callers used `from src.risk.risk_manager import RiskManager` directly.
 
@@ -3314,8 +3321,10 @@ Returns `max(0, shares)`. Sub-1 result returns 0 — trade not sized.
 | | `TestValidationEntryPrice` | 2 | Zero/negative entry price |
 | | `TestValidationStopPrice` | 5 | Zero/negative/equal/above entry; string stop; secret not echoed |
 | | `TestValidationMaxNotional` | 2 | Zero/negative max_notional |
+| | `TestValidationNanInf` | 11 | NaN/inf rejected for all five numeric params; error message exact |
 | | `TestDeterminism` | 3 | Same input → same output; different inputs → different outputs; no state between calls |
 | | `TestCalculateNotional` | 8 | Standard; zero/one share; float return; negative shares; zero/negative price; string shares safe |
+| | `TestCalculateNotionalEdgeCases` | 7 | Fractional shares raises; NaN/inf shares raises; NaN/inf entry_price raises; 1.0 accepted; secret not echoed |
 | | `TestSourceScans` | 17 | No Alpaca/network/environ/execution/mutation markers; no ledger/config |
 
 ### Safety confirmations
@@ -3326,12 +3335,14 @@ Returns `max(0, shares)`. Sub-1 result returns 0 — trade not sized.
 - No position submission/cancellation/replacement/close
 - No `src/main.py` or `src/tools/` modification
 - No look-ahead — functions are stateless and deterministic
+- NaN/inf values are rejected before any math operation — no raw OverflowError or floor(nan) leakage
+- Fractional shares (1.5) are rejected; integer-like floats (1.0) are accepted
 - `src/risk/risk_manager.py` behavior unchanged — no logic was touched
 
 ### Reference
 
 - `src/risk/position_sizer.py` — position sizing helpers
-- `tests/test_position_sizer.py` — 61 tests
+- `tests/test_position_sizer.py` — 79 tests
 - `docs/trend_bot_architecture_refactor_plan.md` — PR 5 marked implemented
 
 ### Warning

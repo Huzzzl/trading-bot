@@ -25,6 +25,33 @@ from __future__ import annotations
 import math
 
 
+def _to_finite_float(val: object) -> float:
+    try:
+        v = float(val)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        raise ValueError("invalid position sizing parameters")
+    if not math.isfinite(v):
+        raise ValueError("invalid position sizing parameters")
+    return v
+
+
+def _to_non_negative_int(val: object) -> int:
+    if isinstance(val, float):
+        if not math.isfinite(val) or val != math.floor(val):
+            raise ValueError("invalid position sizing parameters")
+        v = int(val)
+    elif isinstance(val, int):
+        v = val
+    else:
+        try:
+            v = int(val)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            raise ValueError("invalid position sizing parameters")
+    if v < 0:
+        raise ValueError("invalid position sizing parameters")
+    return v
+
+
 def calculate_shares_by_risk(
     equity: float,
     risk_pct: float,
@@ -74,15 +101,12 @@ def calculate_shares_by_risk(
         ``"invalid position sizing parameters"`` when any input is out of
         range.  Raw values are never echoed in the message.
     """
-    try:
-        equity = float(equity)
-        risk_pct = float(risk_pct)
-        entry_price = float(entry_price)
-        stop_price = float(stop_price)
-        if max_notional is not None:
-            max_notional = float(max_notional)
-    except (TypeError, ValueError):
-        raise ValueError("invalid position sizing parameters")
+    equity = _to_finite_float(equity)
+    risk_pct = _to_finite_float(risk_pct)
+    entry_price = _to_finite_float(entry_price)
+    stop_price = _to_finite_float(stop_price)
+    if max_notional is not None:
+        max_notional = _to_finite_float(max_notional)
 
     if equity <= 0:
         raise ValueError("invalid position sizing parameters")
@@ -129,14 +153,9 @@ def calculate_notional(shares: int, entry_price: float) -> float:
         ``"invalid position sizing parameters"`` when any input is invalid.
         Raw values are never echoed in the message.
     """
-    try:
-        shares = int(shares)
-        entry_price = float(entry_price)
-    except (TypeError, ValueError):
-        raise ValueError("invalid position sizing parameters")
+    shares = _to_non_negative_int(shares)
+    entry_price = _to_finite_float(entry_price)
 
-    if shares < 0:
-        raise ValueError("invalid position sizing parameters")
     if entry_price <= 0:
         raise ValueError("invalid position sizing parameters")
 

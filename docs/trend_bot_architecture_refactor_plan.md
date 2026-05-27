@@ -285,7 +285,7 @@ No PR may be skipped. Each requires its own test coverage where applicable.
 - All invalid inputs raise `ValueError("invalid position sizing parameters")`.
   Raw values are never echoed in the message.
 - Pure function; no broker calls; no network; no credentials; no environment variable access.
-- 61 unit tests in `tests/test_position_sizer.py`; full suite 4 558 passed.
+- 79 unit tests in `tests/test_position_sizer.py`; full suite 4 576 passed.
 
 ### PR 6 — Metrics annualisation fix
 
