@@ -1,0 +1,446 @@
+# Trend Bot Architecture Refactor Plan
+
+Design document for aligning the repository architecture with the final goal:
+a practical 1h-to-intraday automated trend-following trading bot.
+
+**No code is implemented in this document.**
+**No files are moved in this document.**
+**No Alpaca endpoint is contacted.**
+**No credentials are read.**
+**No order is submitted, sold, cancelled, replaced, or closed.**
+**No live ledger is written.**
+**No config is mutated.**
+**No paper trading is implemented.**
+**No live trading is implemented.**
+**No automated trading is approved.**
+**This document plans the refactor only — each PR requires its own review.**
+
+---
+
+## 1. Refactor Decision
+
+The refactor direction is accepted in principle. It will be executed as a
+series of small, independently reviewable PRs. Each PR must be reviewed and
+merged before the next begins.
+
+### Principles
+
+| Principle | Detail |
+|-----------|--------|
+| No rewrite from scratch | All changes are additive or targeted replacements |
+| Preserve working tests | No PR may reduce passing test count without justification |
+| Preserve no-look-ahead backtesting | The bar-by-bar event loop in `src/backtest/engine.py` must not be broken |
+| Preserve live safety / fail-closed | All live safety gates, redaction policies, and kill-switch behaviours are unchanged |
+| Preserve broker abstraction | `BrokerProtocol`, `FakeBroker`, `AlpacaBroker` interfaces remain stable |
+| Preserve ORB as legacy/example | `OpeningRangeBreakout` becomes a benchmark/legacy strategy, not deleted |
+| Trend-following becomes MVP strategy | New `TrendFollowing` strategy is the primary focus for the automated bot |
+
+### What this refactor is not
+
+- Not a from-scratch rewrite.
+- Not a removal of existing live-safety tooling.
+- Not a change to the Phase A–H automated execution roadmap.
+- Not an approval of live or paper trading.
+- Not a change to any broker integration.
+
+---
+
+## 2. Target Architecture
+
+### Module flow
+
+```
+data provider
+    │
+    ▼
+indicators (SMA, EMA, ATR, rolling breakout high/low)
+    │
+    ▼
+analysis / trend (TrendState: bullish / bearish / neutral)
+    │
+    ▼
+strategy (evaluate_signal → BUY / SELL / HOLD / BLOCK)
+    │
+    ▼
+risk manager (position sizing, hard rules)
+    │
+    ▼
+portfolio (simulated position state)
+    │
+    ▼
+backtest engine (bar-by-bar event loop; no look-ahead)
+    │
+    ▼
+broker adapter (FakeBroker / AlpacaBroker; injected)
+    │
+    ▼
+paper / live runner (explicit opt-in; fail-closed by default)
+```
+
+Each layer communicates only downward. Strategy cannot reach into the broker
+adapter. Broker adapter cannot reach into strategy. Risk manager sits between
+strategy output and execution.
+
+### Desired repository structure
+
+```
+src/
+  data/
+    base.py                    # existing — preserved
+    yahoo_provider.py          # existing — preserved
+    cached_provider.py         # existing — preserved
+  indicators/
+    moving_average.py          # new — SMA, EMA
+    volatility.py              # new — ATR
+    trend.py                   # new — rolling breakout high/low
+  analysis/
+    trend.py                   # new — TrendState classification
+  strategy/
+    base.py                    # existing — preserved
+    signal_engine.py           # existing Phase A — preserved
+    opening_range_breakout.py  # existing — preserved as legacy/benchmark
+    trend_following.py         # new — MVP trend strategy
+    factory.py                 # new — strategy selection by name
+  risk/
+    risk_manager.py            # existing — preserved
+    position_sizer.py          # new — calculate_shares_by_risk()
+  portfolio/
+    portfolio.py               # existing — preserved
+  backtest/
+    engine.py                  # existing — preserved (bar-by-bar loop)
+    offline_backtest_engine.py # Phase B — to be implemented
+    metrics.py                 # existing — to be extended for 1h/1d
+    trade.py                   # existing — preserved
+    backtest_runner.py         # new or refined — wires factory + engine
+  execution/
+    broker.py                  # existing — preserved
+    fake_broker.py             # existing — preserved
+    alpaca_broker.py           # existing — preserved
+    order_intent.py            # existing — preserved
+    live_ledger.py             # existing — preserved
+    live_submit_executor.py    # existing — preserved
+    [paper_*.py files]         # existing — preserved
+  reporting/
+    report_generator.py        # existing — preserved
+    reconciliation.py          # existing — preserved
+  experiments/
+    sweep_runner.py            # existing — preserved
+    walk_forward_runner.py     # existing — preserved
+  tools/                       # existing — audited in PR 9, not moved yet
+  utils/
+    logger.py                  # existing — preserved
+  main.py                      # existing — to be slimmed in PR 8
+```
+
+---
+
+## 3. What to Preserve
+
+The following files and behaviours must not be broken by any refactor PR.
+Any PR that touches these requires explicit justification.
+
+### Source files to preserve
+
+| File | Reason |
+|------|--------|
+| `src/backtest/engine.py` | Bar-by-bar event loop; no-look-ahead guarantee |
+| `src/strategy/base.py` | `BaseStrategy`, `Signal`, `SignalDirection` — all strategies depend on these |
+| `src/strategy/opening_range_breakout.py` | Legacy/benchmark strategy; existing tests must pass |
+| `src/strategy/signal_engine.py` | Phase A signal engine; used by Phase B backtest |
+| `src/data/base.py` | Data provider interface |
+| `src/data/yahoo_provider.py` | Primary offline data source |
+| `src/data/cached_provider.py` | Caching layer |
+| `src/portfolio/portfolio.py` | Position and equity tracking for MVP |
+| `src/risk/risk_manager.py` | Risk rule enforcement |
+| `src/execution/broker.py` | Broker protocol / interface |
+| `src/execution/fake_broker.py` | Test broker; must stay as the default test double |
+| `src/execution/alpaca_broker.py` | Live broker adapter |
+| `src/execution/order_intent.py` | Order intent dataclass |
+| `src/execution/live_ledger.py` | Live trade ledger |
+| `src/execution/live_submit_executor.py` | Gated live submission |
+| `src/execution/paper_*.py` | Paper trading infrastructure |
+| `src/reporting/` | Research and reporting utilities |
+| `src/experiments/` | Sweep and walk-forward runners |
+| All `src/tools/live_*.py` | Live-readiness safety tools |
+| All `src/tools/manual_*.py` | Manual status/reconciliation tools |
+
+### Behaviours to preserve
+
+| Behaviour | Notes |
+|-----------|-------|
+| No look-ahead in backtest | `engine.py` passes only bars up to current bar to strategy |
+| Fail-closed live execution | All mutation paths require explicit CLI flag + artifact gates |
+| Mock-only test pattern | No real Alpaca calls in any test |
+| Redaction policy | Exception text, IDs, prices, quantities never in output |
+| No broker mutation without gates | BLOCKED is default; PASS requires all gates to explicitly pass |
+
+---
+
+## 4. Current Structural Problems
+
+The following problems are documented here for planning purposes.
+No code is changed in this PR.
+
+| Problem | Detail |
+|---------|--------|
+| `src/main.py` too large | Mixes backtest, sweep, walk-forward, and live modes in a single file; should become a dispatcher only |
+| ORB dominates architecture | Opening Range Breakout is the only complete strategy; trend-following infrastructure is absent |
+| `src/tools/` overrepresented | Many manual live-readiness scripts in `src/tools/`; non-core scripts could move to `scripts/` later |
+| Trend-following incomplete | No `indicators/`, no `analysis/trend.py`, no `TrendFollowing` strategy |
+| Backtest metrics assume 5m bars | `bars_per_year` constant likely hard-codes 5-minute bar count; 1h/1d support needed |
+| No strategy factory | Strategy instantiation is scattered; a factory would centralise selection by name |
+| README may lag architecture | Documentation likely reflects older state of the repository |
+
+---
+
+## 5. Staged Refactor Plan
+
+Each item below is a separate PR. PRs must be merged in order where noted.
+No PR may be skipped. Each requires its own test coverage where applicable.
+
+### PR 1 — Strategy factory
+
+**File:** `src/strategy/factory.py`
+
+- Accepts a strategy name string and params dict.
+- Returns an instantiated `BaseStrategy` subclass.
+- Supports at minimum: `"opening_range_breakout"`, `"trend_following"` (stub until PR 4).
+- No behaviour changes to existing ORB backtests.
+- Unit tests: factory returns correct type; unknown name raises clearly.
+
+### PR 2 — Indicators package
+
+**Files:**
+- `src/indicators/__init__.py`
+- `src/indicators/moving_average.py` — `sma(series, window)`, `ema(series, window, ...)`
+- `src/indicators/volatility.py` — `atr(high, low, close, window)`
+- `src/indicators/trend.py` — `rolling_high(series, window)`, `rolling_low(series, window)` excluding current bar
+
+**Constraints:**
+- Pure pandas functions; no broker calls; no network; no credentials.
+- All functions must not use future data (no look-ahead).
+- Unit tests covering: correct values, insufficient data handling, no-look-ahead.
+- Source scans: no Alpaca, no network, no `os.environ`.
+
+### PR 3 — Analysis / trend layer
+
+**File:** `src/analysis/trend.py`
+
+- `TrendState` dataclass: `direction` (`"bullish"` / `"bearish"` / `"neutral"`), `strength` or similar.
+- `classify_trend(bars, short_window, long_window) → TrendState` using EMA or SMA crossover.
+- Optional volatility regime if straightforward.
+- Pure function; no broker calls; no network; no credentials.
+- Unit tests.
+
+### PR 4 — TrendFollowing strategy
+
+**File:** `src/strategy/trend_following.py`
+
+**Design:**
+- Extends `BaseStrategy`.
+- Long-only.
+- SPY initially; QQQ-capable later via config.
+- 1h / intraday bars.
+- Entry condition: EMA trend filter (short EMA above long EMA) AND rolling breakout of recent high (excluding current bar).
+- Exit condition: EMA trend reversal OR configurable stop signal.
+- ATR stop metadata included in `Signal.meta` (not executed here).
+- No broker calls.
+- No execution.
+- No look-ahead.
+- No credentials.
+- Unit tests covering all entry/exit paths, BLOCK conditions, and no-look-ahead.
+- Source scans.
+
+### PR 5 — Risk position sizing helper
+
+**File:** `src/risk/position_sizer.py`
+
+- `calculate_shares_by_risk(equity, risk_pct, entry_price, stop_price) → int`
+- Returns number of whole shares to buy given a fractional equity risk and stop distance.
+- Pure function; no broker calls.
+- Unit tests: standard case, zero stop distance, very large equity.
+- Must not break `Portfolio.open_long`.
+
+### PR 6 — Metrics annualisation fix
+
+**File:** `src/backtest/metrics.py` (update existing)
+
+- Add `bars_per_year_for_interval(interval: str) → int`.
+- Support `"1h"` (≈ 1560 bars/year for US equities) and `"1d"` (≈ 252 bars/year).
+- Preserve all existing metric tests.
+- Update Sharpe/annualisation calcs to accept interval parameter.
+- No behaviour change for existing callers unless explicitly migrated.
+
+### PR 7 — Backtest runner integration
+
+**File:** `src/backtest/backtest_runner.py` (new or refined)
+
+- Wires strategy factory → backtest engine → metrics.
+- Accepts: `bars`, `strategy_name`, `strategy_params`, `interval`, `starting_equity`.
+- Returns structured result dict.
+- Uses `strategy.generate_signal()` via `engine.py`; does not bypass the event loop.
+- Must not access private engine fields.
+- No broker calls; no network; no credentials.
+- Unit tests using `FakeBroker` or synthetic bars.
+
+### PR 8 — Slim `main.py`
+
+**File:** `src/main.py` (refactor existing)
+
+- `main.py` becomes a dispatcher only: parse mode, delegate to runner.
+- Modes: `backtest`, `paper` (gated), `live` (disabled placeholder), `sweep`, `walk-forward`.
+- Heavy logic moves into dedicated runner modules.
+- Live mode remains fail-closed: no automation without explicit gate.
+- All existing CLI behaviour preserved.
+- No test regressions.
+
+### PR 9 — Tools / scripts isolation
+
+**Files:** audit `src/tools/`; move non-core manual scripts to `scripts/` if safe.
+
+- Identify which `src/tools/` scripts are imported by tests.
+- Scripts imported by tests must not move without updating imports.
+- Only move scripts that have zero test imports and are not part of live-readiness gate.
+- No deletion without full test coverage of moved functionality.
+- All live-readiness and safety tools remain in place.
+
+### PR 10 — README update
+
+**File:** `README.md`
+
+- Document new architecture and module layout.
+- Show trend-following backtest usage example.
+- Document how to run tests.
+- State live trading is disabled by default.
+- Document paper/live opt-in requirement.
+- No code changes.
+
+---
+
+## 6. Near-Term MVP Definition
+
+| Dimension | Value |
+|-----------|-------|
+| Symbols | SPY initially; QQQ later via config |
+| Direction | Long only |
+| Timeframe | 1h bars (intraday) |
+| Strategy | Trend-following (EMA filter + rolling breakout) |
+| Execution path | Backtest first → paper trading second → live automation much later |
+| Options | Not in scope |
+| Leverage | Not in scope |
+| Short selling | Not in scope |
+| Intra-minute trading | Not in scope |
+| ML live execution | Not in scope |
+| Multi-symbol portfolio | Not in initial MVP |
+
+---
+
+## 7. Safety Rules
+
+The following rules apply to every PR in this refactor plan and to all future
+code in this repository.
+
+| Rule | Detail |
+|------|--------|
+| No live trading by default | Live mode is a disabled placeholder until Phases C–G are complete |
+| No API keys stored | Credentials are read only after all gates pass and explicit flag is set |
+| No real broker calls in tests | All tests use `FakeBroker` or injected mocks |
+| Paper/live opt-in only | Both paper and live execution require explicit CLI flags and artifact gates |
+| Fail-closed on uncertainty | BLOCKED is the default; PASS requires all gates to explicitly pass |
+| No broker mutation outside execution layer | Strategy, risk manager, indicators, and analysis layers cannot call broker |
+| Strategy cannot call broker | Strategy returns a signal only; execution is a separate layer |
+| Strategy cannot bypass risk gate | Every signal must pass through the risk gate before the executor is called |
+| Backtest result does not approve live trading | A positive backtest is evidence only; live trading requires completing Phases C–G |
+
+---
+
+## 8. No-Look-Ahead Requirements
+
+Look-ahead bias produces inflated backtest results and invalidates any
+comparison to live performance. The following requirements apply to all
+new and existing code.
+
+| Requirement | Detail |
+|-------------|--------|
+| Strategy receives only historical bars | `bars` passed to `generate_signal` or `evaluate_signal` must contain only bars up to and including the current bar index |
+| Rolling breakout excludes current bar | `rolling_high(series, window)` at index `i` must use `series[i-window:i]`, not `series[i-window:i+1]` |
+| Indicators must not use future bars | Any shift, rolling, or ewm operation must not introduce future data |
+| Tests must cover no-look-ahead | Each indicator and strategy must have at least one test asserting the current bar is not included in the look-back window |
+| Backtest engine design preserved | `src/backtest/engine.py` passes only the current-bar slice to the strategy; this must not be changed |
+
+---
+
+## 9. Relationship to Existing Phase A / Phase B
+
+| Item | Relationship |
+|------|-------------|
+| Phase A `signal_engine.py` | Remains valid as an offline signal foundation; `TrendFollowing` strategy (PR 4) can be a separate strategy, not a replacement |
+| Phase B backtest design | Remains valid; `offline_backtest_engine.py` is the Phase B deliverable; `backtest_runner.py` (PR 7) is the integration layer |
+| This refactor plan | Complements Phase B, does not replace it; Phase B implementation comes before PR 7 |
+| Safety roadmap (Phases A–H) | Unchanged; the refactor aligns architecture but does not skip any phase |
+
+### Sequencing
+
+The next code PRs should be, in order:
+
+1. PR 1 (strategy factory) — small, low-risk, immediately useful
+2. PR 2 (indicators) — required for PR 3 and PR 4
+3. Phase B implementation (`offline_backtest_engine.py`) — can proceed in parallel with PR 3
+4. PR 3 (trend analysis) — depends on PR 2
+5. PR 4 (TrendFollowing strategy) — depends on PR 2 and PR 3
+
+A giant `main.py` rewrite (PR 8) must not be the first step.
+
+---
+
+## 10. Explicit Non-Goals for This PR
+
+| Non-goal | Status |
+|----------|--------|
+| Code changes of any kind | Out of scope for this PR |
+| File moves | Out of scope for this PR |
+| `main.py` refactor | Out of scope for this PR — PR 8 |
+| Tools migration | Out of scope for this PR — PR 9 |
+| Live execution | Out of scope |
+| Paper execution | Out of scope |
+| Broker calls | Out of scope |
+| Credential reads | Out of scope |
+| Trading of any kind | Out of scope |
+| Test changes | Out of scope for this PR |
+
+---
+
+## References
+
+- `src/strategy/signal_engine.py` — Phase A signal engine
+- `src/backtest/engine.py` — existing bar-by-bar backtest engine
+- `docs/automated_strategy_execution_roadmap.md` — Phase A–H safety roadmap
+- `docs/backtest_and_metrics_offline_design.md` — Phase B design
+- `docs/strategy_signal_engine_offline_core_complete_snapshot.md` — Phase A snapshot
+
+---
+
+## Suggested Git Tag
+
+```
+trend-bot-architecture-refactor-plan-designed
+```
+
+---
+
+## Warnings
+
+> **This document does not implement any code.**
+> **This document does not approve automated live trading.**
+> **This document does not approve any individual trade.**
+> **No Alpaca endpoint is contacted.**
+> **No credentials are read.**
+> All refactor PRs must be individually reviewed before merging.
+> Each phase of the safety roadmap (A–H) remains required.
+> A positive backtest result does not approve live trading.
+> Until automation is fully implemented, tested, and approved through
+> the Phase A–H roadmap, all trading decisions remain entirely manual.
+
+> **Nothing in this repository is financial advice.**
+> All trading decisions are made by the operator and are the operator's
+> sole responsibility.

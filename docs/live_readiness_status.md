@@ -2891,3 +2891,52 @@ Offline backtest system for Phase B covering:
 > own PR. Until automation is implemented, tested, and approved, all trading
 > decisions remain entirely manual operator actions.
 > Nothing in this repository is financial advice.
+
+---
+
+## Milestone: Trend Bot Architecture Refactor Plan — Designed
+
+**Branch:** `claude/docs-design-trend-bot-architecture-refactor-plan`
+**Status:** Complete
+
+Architecture refactor plan created at
+`docs/trend_bot_architecture_refactor_plan.md`.
+
+**No code was changed.**
+**No files were moved.**
+**No Alpaca endpoint was contacted.**
+**No credentials were read.**
+**No order was submitted, sold, cancelled, replaced, or closed.**
+**No automated trading was approved.**
+**All position and trading decisions remain entirely manual.**
+
+### What was designed
+
+A 10-PR staged refactor plan to align the repository with the trend-following
+MVP goal, covering:
+
+1. **Refactor decision** — additive, no rewrite; preserve tests, no-look-ahead, safety, ORB, broker abstraction
+2. **Target architecture** — data → indicators → analysis → strategy → risk → portfolio → backtest → broker → paper/live runner
+3. **What to preserve** — all existing live-safety tools, broker abstractions, ORB strategy, data providers
+4. **Current problems** — `main.py` too large, ORB-dominant, missing indicators/trend layers, metrics assume 5m bars
+5. **Staged plan** — PR 1 (factory) → PR 2 (indicators) → PR 3 (trend analysis) → PR 4 (TrendFollowing) → PR 5 (position sizer) → PR 6 (metrics fix) → PR 7 (backtest runner) → PR 8 (slim main.py) → PR 9 (tools audit) → PR 10 (README)
+6. **MVP definition** — SPY, long-only, 1h bars, trend-following, backtest first
+7. **Safety rules** — fail-closed, no API keys stored, mock-only tests, strategy cannot call broker
+8. **No-look-ahead requirements** — rolling breakout excludes current bar; indicators no future data; engine design preserved
+9. **Relationship to Phase A/B** — complements, does not replace; Phase B implementation precedes PR 7
+10. **Non-goals** — no code changes, no file moves, no trading, no broker calls in this PR
+
+### Reference
+
+- `docs/trend_bot_architecture_refactor_plan.md` — full plan
+- `docs/automated_strategy_execution_roadmap.md` — architecture alignment note added
+- Suggested git tag: `trend-bot-architecture-refactor-plan-designed`
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No code is implemented. No Alpaca endpoint was contacted. No credentials were read.**
+> All refactor PRs must be individually reviewed before merging.
+> The Phase A–H safety roadmap remains unchanged and required.
+> Nothing in this repository is financial advice.
