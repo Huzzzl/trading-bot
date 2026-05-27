@@ -3,7 +3,18 @@ backtest/metrics.py
 -------------------
 Compute summary performance statistics from a completed backtest.
 
-All metrics are pure functions — no side effects, easy to unit-test.
+All metrics are pure, deterministic, and offline-only.
+
+**No Alpaca SDK is imported.**
+**No network library is imported.**
+**No credentials are read.**
+**No environment variable access.**
+**No broker calls.**
+**No execution layer imported.**
+**No orders are placed.**
+**No trade records are written.**
+**No portfolio state is mutated.**
+**No settings are mutated.**
 """
 
 from __future__ import annotations
@@ -16,12 +27,69 @@ import pandas as pd
 
 from src.backtest.trade import Trade
 
+# ---------------------------------------------------------------------------
+# Annualisation lookup — US equity regular-session assumptions:
+# 252 trading days/year · 6.5 trading hours/day · 390 trading minutes/day.
+# For hourly intervals, only *complete* bars within the session are counted:
+#   1h → 6 bars/day  (6.5-h session; last 30 min produces a partial bar)
+#   2h → 3 bars/day
+#   4h → 1 bar/day
+# ---------------------------------------------------------------------------
+_INTERVAL_BARS_PER_YEAR: dict[str, int] = {
+    "1m":  252 * 390,   # 98 280
+    "5m":  252 * 78,    # 19 656
+    "15m": 252 * 26,    #  6 552
+    "30m": 252 * 13,    #  3 276
+    "1h":  252 * 6,     #  1 512
+    "2h":  252 * 3,     #    756
+    "4h":  252 * 1,     #    252
+    "1d":  252,         #    252
+}
+
+
+def bars_per_year_for_interval(interval: str) -> int:
+    """Return the number of bars per year for a given bar interval.
+
+    Assumes US equity regular trading session (252 trading days per year,
+    6.5 trading hours per day, 390 trading minutes per day).
+
+    For intraday hourly intervals only complete bars within the regular
+    session are counted:
+
+    - ``"1h"`` → 6 bars per day (the last 30 min of the 6.5-h session
+      produces a partial bar and is excluded from the count).
+    - ``"2h"`` → 3 bars per day.
+    - ``"4h"`` → 1 bar per day.
+
+    Parameters
+    ----------
+    interval:
+        Bar interval string.  Supported: ``"1m"``, ``"5m"``, ``"15m"``,
+        ``"30m"``, ``"1h"``, ``"2h"``, ``"4h"``, ``"1d"``.
+
+    Returns
+    -------
+    int
+        Number of bars in a typical trading year for that interval.
+
+    Raises
+    ------
+    ValueError
+        ``"invalid interval"`` when *interval* is not a supported string.
+        The raw value is never echoed.
+    """
+    result = _INTERVAL_BARS_PER_YEAR.get(interval)
+    if result is None:
+        raise ValueError("invalid interval")
+    return result
+
 
 def compute_metrics(
     trades: list[Trade],
     equity_curve: pd.DataFrame,
     initial_capital: float,
     risk_free_rate: float = 0.05,
+    interval: str = "5m",
 ) -> dict[str, Any]:
     """Compute the full suite of backtest performance metrics.
 
@@ -36,6 +104,10 @@ def compute_metrics(
         Starting cash, used to compute returns.
     risk_free_rate:
         Annualised risk-free rate for the Sharpe ratio (default 5 %).
+    interval:
+        Bar interval for Sharpe-ratio annualisation.  Must be one of the
+        values accepted by ``bars_per_year_for_interval``.  Defaults to
+        ``"5m"`` to preserve the previous behaviour for existing callers.
 
     Returns
     -------
@@ -96,12 +168,11 @@ def compute_metrics(
 
     # ---- Sharpe ratio ------------------------------------------------
     if not equity_curve.empty and len(equity_curve) >= 2:
-        # Use bar-level returns (5-min bars → annualise with 252 × 78 bars/day)
-        eq_vals    = equity_curve["equity"].values
-        bar_rets   = np.diff(eq_vals) / eq_vals[:-1]
-        bars_per_year = 252 * 78  # 78 five-minute bars in a 6.5-hour session
-        excess     = bar_rets - (risk_free_rate / bars_per_year)
-        std        = np.std(excess, ddof=1)
+        eq_vals       = equity_curve["equity"].values
+        bar_rets      = np.diff(eq_vals) / eq_vals[:-1]
+        bars_per_year = bars_per_year_for_interval(interval)
+        excess        = bar_rets - (risk_free_rate / bars_per_year)
+        std           = np.std(excess, ddof=1)
         if std > 0:
             sharpe = float(np.mean(excess) / std * math.sqrt(bars_per_year))
         else:
