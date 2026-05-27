@@ -16,6 +16,7 @@ import pytest
 
 from src.strategy.factory import build_strategy, supported_strategy_names
 from src.strategy.opening_range_breakout import OpeningRangeBreakout
+from src.strategy.trend_following import TrendFollowing
 
 
 # ---------------------------------------------------------------------------
@@ -38,6 +39,9 @@ class TestSupportedStrategyNames:
     def test_all_strings(self) -> None:
         for name in supported_strategy_names():
             assert isinstance(name, str)
+
+    def test_includes_trend_following(self) -> None:
+        assert "trend_following" in supported_strategy_names()
 
     def test_stable_across_calls(self) -> None:
         assert supported_strategy_names() == supported_strategy_names()
@@ -302,3 +306,70 @@ class TestSourceScans:
             stripped = line.strip()
             assert "from src.execution" not in stripped, f"execution import: {line!r}"
             assert "import src.execution" not in stripped, f"execution import: {line!r}"
+
+
+# ---------------------------------------------------------------------------
+# TestBuildStrategyTrendFollowing
+# ---------------------------------------------------------------------------
+
+class TestBuildStrategyTrendFollowing:
+    _VALID_PARAMS: dict[str, Any] = {
+        "symbol": "SPY",
+        "fast_ema_period": 5,
+        "slow_ema_period": 10,
+        "atr_period": 5,
+        "volatility_lookback": 15,
+        "breakout_lookback": 5,
+        "atr_stop_mult": 2.0,
+        "risk_per_trade_pct": 1.0,
+        "long_only": True,
+    }
+
+    def test_returns_trend_following(self) -> None:
+        result = build_strategy("trend_following", self._VALID_PARAMS)
+        assert isinstance(result, TrendFollowing)
+
+    def test_params_none_works(self) -> None:
+        result = build_strategy("trend_following", None)
+        assert isinstance(result, TrendFollowing)
+
+    def test_empty_params_works(self) -> None:
+        result = build_strategy("trend_following", {})
+        assert isinstance(result, TrendFollowing)
+
+    def test_params_not_mutated(self) -> None:
+        params: dict[str, Any] = dict(self._VALID_PARAMS)
+        original = copy.deepcopy(params)
+        build_strategy("trend_following", params)
+        assert params == original
+
+    def test_explicit_symbol_passed_through(self) -> None:
+        result = build_strategy("trend_following", {"symbol": "AAPL"})
+        assert isinstance(result, TrendFollowing)
+        assert result._symbol == "AAPL"
+
+    def test_invalid_long_only_false_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid strategy parameters"):
+            build_strategy("trend_following", {"long_only": False})
+
+    def test_invalid_fast_ema_zero_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid strategy parameters"):
+            build_strategy("trend_following", {"fast_ema_period": 0})
+
+    def test_invalid_period_order_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid strategy parameters"):
+            build_strategy("trend_following", {"fast_ema_period": 50, "slow_ema_period": 20})
+
+    def test_invalid_params_error_message_safe(self) -> None:
+        secret = "super_secret_bad_value"
+        with pytest.raises(ValueError) as exc_info:
+            build_strategy("trend_following", {"symbol": secret})
+        assert secret not in str(exc_info.value)
+
+    def test_orb_still_works_after_trend_following_added(self) -> None:
+        result = build_strategy("opening_range_breakout", {})
+        assert isinstance(result, OpeningRangeBreakout)
+
+    def test_orb_alias_still_works(self) -> None:
+        result = build_strategy("orb", {})
+        assert isinstance(result, OpeningRangeBreakout)

@@ -21,11 +21,13 @@ from typing import Any
 
 from src.strategy.base import BaseStrategy
 from src.strategy.opening_range_breakout import OpeningRangeBreakout
+from src.strategy.trend_following import TrendFollowing
 
 # Canonical name → canonical name; aliases map to the same canonical key.
 _NAME_MAP: dict[str, str] = {
     "opening_range_breakout": "opening_range_breakout",
     "orb": "opening_range_breakout",
+    "trend_following": "trend_following",
 }
 
 _SUPPORTED: tuple[str, ...] = tuple(sorted(_NAME_MAP.keys()))
@@ -75,6 +77,12 @@ def build_strategy(
     if canonical == "opening_range_breakout":
         try:
             return OpeningRangeBreakout(params=safe_params)
+        except (ValueError, TypeError):
+            raise ValueError("invalid strategy parameters")
+
+    if canonical == "trend_following":
+        try:
+            return TrendFollowing(params=safe_params)
         except (ValueError, TypeError):
             raise ValueError("invalid strategy parameters")
 
