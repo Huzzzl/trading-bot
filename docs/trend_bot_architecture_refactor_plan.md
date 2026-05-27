@@ -327,15 +327,26 @@ No PR may be skipped. Each requires its own test coverage where applicable.
 
 ### PR 7 — Backtest runner integration
 
-**File:** `src/backtest/backtest_runner.py` (new or refined)
+**Status: implemented — `src/backtest/backtest_runner.py` (new)**
 
-- Wires strategy factory → backtest engine → metrics.
-- Accepts: `bars`, `strategy_name`, `strategy_params`, `interval`, `starting_equity`.
-- Returns structured result dict.
-- Uses `strategy.generate_signal()` via `engine.py`; does not bypass the event loop.
-- Must not access private engine fields.
-- No broker calls; no network; no credentials.
-- Unit tests using `FakeBroker` or synthetic bars.
+**Files:** `src/backtest/backtest_runner.py` (new), `tests/test_backtest_runner.py` (new)
+
+**Implementation:**
+- `BacktestRunConfig` — frozen dataclass: `strategy_name`, `strategy_params`, `symbols`,
+  `start_date`, `end_date`, `bar_interval="5m"`, `initial_capital=100_000.0`,
+  `position_size_pct=0.95`, `stop_execution="bar_close"`.
+- `BacktestRunResult` — frozen dataclass: `metrics`, `trades`, `equity_curve`,
+  `order_intents`, `strategy_name`, `symbols`, `bar_interval`, plus six read-only
+  safety flags: `broker_calls_made=False`, `credentials_read=False`,
+  `live_submit_enabled=False`, `order_action_requested=False`,
+  `paper_trading_enabled=False`, `recommendation_only=True`.
+- `run_backtest(config, *, data_provider)` — validates config (raises
+  `ValueError("invalid backtest run config")` without echoing raw values); calls
+  `build_strategy()`, constructs `Portfolio` + `RiskManager`, wires into
+  `BacktestEngine`, calls `engine.run()`, wraps output into `BacktestRunResult`.
+- No broker calls, no network access, no credentials, no environment variables,
+  no live/paper trading, no file writes.
+- 59 unit tests in `tests/test_backtest_runner.py`; full suite 4 676 passed.
 
 ### PR 8 — Slim `main.py`
 
