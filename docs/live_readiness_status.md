@@ -3259,3 +3259,87 @@ INVALID_PERIOD_ORDER → MISSING_REQUIRED_COLUMNS → INSUFFICIENT_BARS.
 > No strategy is connected to live or paper trading.
 > The Phase A–H safety roadmap remains unchanged and required.
 > Nothing in this repository is financial advice.
+
+---
+
+## Milestone — Refactor PR 5: add-risk-position-sizer
+
+**Date:** 2026-05-27
+**Branch:** `claude/add-risk-position-sizer`
+**Files added:** `src/risk/position_sizer.py`, `tests/test_position_sizer.py`
+**Files changed:** `src/risk/__init__.py` (circular import fix)
+**Tests:** 61 new; full suite 4 558 passed
+
+### What was implemented
+
+Pure, offline position-sizing helpers for long trades.
+
+**`calculate_shares_by_risk(equity, risk_pct, entry_price, stop_price, *, max_notional=None) → int`**
+
+Formula:
+```
+risk_amount    = equity * risk_pct / 100
+per_share_risk = entry_price - stop_price
+shares         = floor(risk_amount / per_share_risk)
+
+# with optional hard cap:
+shares = min(shares, floor(max_notional / entry_price))
+```
+
+Returns `max(0, shares)`. Sub-1 result returns 0 — trade not sized.
+
+**`calculate_notional(shares, entry_price) → float`** — dollar value of a position (`shares * entry_price`).
+
+**Validation** — all invalid inputs raise `ValueError("invalid position sizing parameters")`. Raw values are never echoed.
+
+| Parameter | Constraint |
+|-----------|------------|
+| `equity` | `> 0` (float) |
+| `risk_pct` | `> 0` (float) |
+| `entry_price` | `> 0` (float) |
+| `stop_price` | `> 0` AND `< entry_price` (float) |
+| `max_notional` | `None` OR `> 0` (float) |
+| `shares` (notional) | `>= 0` (int) |
+
+**`src/risk/__init__.py`** — removed eager `from .risk_manager import RiskManager` re-export that caused a circular import when `position_sizer` was imported in isolation. No consumer imported `from src.risk import RiskManager`; all callers used `from src.risk.risk_manager import RiskManager` directly.
+
+### Test classes
+
+| File | Class | Tests | What it covers |
+|------|-------|-------|----------------|
+| `test_position_sizer.py` | `TestCalculateSharesByRisk` | 10 | Standard case; fractional floor; zero/one share; large equity; small/high risk pct; int return; non-negative; no max_notional |
+| | `TestMaxNotional` | 6 | Caps shares; higher cap no-ops; exact match; zero shares; None ignored; fractional floor |
+| | `TestValidationEquity` | 5 | Zero/negative/None/string equity; error message safe |
+| | `TestValidationRiskPct` | 3 | Zero/negative/string risk_pct; secret not echoed |
+| | `TestValidationEntryPrice` | 2 | Zero/negative entry price |
+| | `TestValidationStopPrice` | 5 | Zero/negative/equal/above entry; string stop; secret not echoed |
+| | `TestValidationMaxNotional` | 2 | Zero/negative max_notional |
+| | `TestDeterminism` | 3 | Same input → same output; different inputs → different outputs; no state between calls |
+| | `TestCalculateNotional` | 8 | Standard; zero/one share; float return; negative shares; zero/negative price; string shares safe |
+| | `TestSourceScans` | 17 | No Alpaca/network/environ/execution/mutation markers; no ledger/config |
+
+### Safety confirmations
+
+- No broker/API access — no Alpaca calls, no HTTP, no credentials, no environment variables
+- No order execution — pure math helpers with no side effects
+- No live/paper trading — no scheduler, no live runner
+- No position submission/cancellation/replacement/close
+- No `src/main.py` or `src/tools/` modification
+- No look-ahead — functions are stateless and deterministic
+- `src/risk/risk_manager.py` behavior unchanged — no logic was touched
+
+### Reference
+
+- `src/risk/position_sizer.py` — position sizing helpers
+- `tests/test_position_sizer.py` — 61 tests
+- `docs/trend_bot_architecture_refactor_plan.md` — PR 5 marked implemented
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> Position sizing functions are pure math helpers — no execution layer was touched.
+> No strategy is connected to live or paper trading.
+> The Phase A–H safety roadmap remains unchanged and required.
+> Nothing in this repository is financial advice.

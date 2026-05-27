@@ -269,13 +269,23 @@ No PR may be skipped. Each requires its own test coverage where applicable.
 
 ### PR 5 — Risk position sizing helper
 
-**File:** `src/risk/position_sizer.py`
+**Status: implemented — `src/risk/position_sizer.py`**
 
-- `calculate_shares_by_risk(equity, risk_pct, entry_price, stop_price) → int`
-- Returns number of whole shares to buy given a fractional equity risk and stop distance.
-- Pure function; no broker calls.
-- Unit tests: standard case, zero stop distance, very large equity.
-- Must not break `Portfolio.open_long`.
+**Files:** `src/risk/position_sizer.py` (new), `tests/test_position_sizer.py` (new),
+`src/risk/__init__.py` (circular import fix — eager `RiskManager` export removed; no consumer used it)
+
+**Implementation:**
+- `calculate_shares_by_risk(equity, risk_pct, entry_price, stop_price, *, max_notional=None) → int`
+  — returns whole shares from fractional equity risk and stop distance.
+  — formula: `risk_amount = equity * risk_pct / 100`, `per_share_risk = entry_price - stop_price`,
+    `shares = floor(risk_amount / per_share_risk)`.
+  — optional `max_notional` hard cap: `shares = min(shares, floor(max_notional / entry_price))`.
+  — always returns `>= 0`; sub-1 result returns 0 (trade not sized).
+- `calculate_notional(shares, entry_price) → float` — dollar value of a position.
+- All invalid inputs raise `ValueError("invalid position sizing parameters")`.
+  Raw values are never echoed in the message.
+- Pure function; no broker calls; no network; no credentials; no environment variable access.
+- 61 unit tests in `tests/test_position_sizer.py`; full suite 4 558 passed.
 
 ### PR 6 — Metrics annualisation fix
 
