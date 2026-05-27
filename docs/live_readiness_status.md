@@ -2484,3 +2484,78 @@ Source scan tests updated:
 > are absent from the adapter source.
 > Emergency actions remain manual via the Alpaca broker UI only.
 
+---
+
+## Milestone: Manual Position Status Checker Without Flag — BLOCKED Observed
+
+**Branch:** `claude/docs-snapshot-manual-position-status-checker-without-flag-blocked`
+**Status:** Complete
+
+Dry-run snapshot taken after PR #137 merged to `main`, confirming the flag
+gate fires correctly when `--allow-live-broker-api-readonly` is absent.
+
+**No Alpaca endpoint was contacted.**
+**No credentials were read.**
+**No TradingClient was constructed.**
+**No orders were submitted, sold, cancelled, replaced, or closed.**
+**No broker mutation call was made.**
+**No live ledger was written.**
+**No config was mutated.**
+**No position decision was made.**
+
+### What was confirmed
+
+| Run | Tool | Result |
+|-----|------|--------|
+| 1 | `manual_position_status_checker_readonly` (without `--allow-live-broker-api-readonly`) | BLOCKED |
+
+The tool returned BLOCKED at gate 4 (flag check) before reading any
+environment variable, constructing any `TradingClient`, or making any
+broker API call.
+
+### Key observed fields
+
+| Field | Observed |
+|-------|---------|
+| `result` | `"BLOCKED"` |
+| `broker_calls_made` | `false` |
+| `broker_calls_readonly` | `false` |
+| `broker_mutation_calls_made` | `false` |
+| `credentials_read` | `false` |
+| `credential_values_exposed` | `false` |
+| `position_observed` | `null` |
+| `open_order_observed` | `null` |
+| `market_session_status` | `null` |
+| `position_decision_made` | `false` |
+| `blocker` | `"readonly broker api flag not set"` |
+
+### Safety invariants confirmed
+
+| Invariant | Confirmed |
+|-----------|----------|
+| No Alpaca endpoint contacted | ✓ |
+| No credentials read | ✓ (`credentials_read=false`) |
+| No TradingClient constructed | ✓ |
+| No submit/cancel/replace called | ✓ |
+| No broker mutation calls | ✓ |
+| No live ledger written | ✓ |
+| No config mutated | ✓ |
+| No position decision made | ✓ |
+| `--allow-live-broker-api-readonly` required | ✓ — BLOCKED without it |
+
+### Reference
+
+- `docs/manual_position_status_checker_without_flag_blocked_snapshot.md` — full snapshot document
+- Suggested git tag: `manual-position-status-checker-without-flag-blocked-observed`
+
+### Warning
+
+> **This milestone does not approve real trading.**
+> **This milestone does not approve future broker calls.**
+> **No Alpaca endpoint was contacted.**
+> **No credentials were read.**
+> **No position decision was made.**
+> The `--allow-live-broker-api-readonly` flag remains required for any live
+> read-only broker contact. Any position decision remains a manual operator
+> action. Emergency actions remain manual via the Alpaca broker UI only.
+
