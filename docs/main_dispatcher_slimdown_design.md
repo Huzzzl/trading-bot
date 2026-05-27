@@ -214,14 +214,19 @@ Each sub-PR is independently reviewable and must not reduce the passing test cou
 
 ### PR 8C — Remove `build_engine()` from `main.py`
 
-**Goal:** Delete the now-unused `build_engine()` function and its direct imports of
-`BacktestEngine`, `Portfolio`, `RiskManager` from `main.py`.
+**Status: implemented — `src/main.py`, `tests/test_main_characterization.py`,
+`tests/test_backtest.py`, `tests/test_alpaca_broker_skeleton.py`, and paper-path test files**
 
-- `from src.backtest.engine import BacktestEngine` removed from `main.py` top-level.
-- `from src.portfolio.portfolio import Portfolio` removed from `main.py` top-level.
-- `from src.risk.risk_manager import RiskManager` removed from `main.py` top-level.
-- Imports move inside `backtest_runner` (already there).
-- Tests from PR 8A confirm no regression.
+- `build_engine()` deleted from `src/main.py`.
+- `from src.portfolio.portfolio import Portfolio` removed — was only needed by `build_engine`.
+- `from src.risk.risk_manager import RiskManager` removed — was only needed by `build_engine`.
+- `from src.strategy.opening_range_breakout import OpeningRangeBreakout` removed — was only needed by `build_engine`.
+- `from src.backtest.engine import BacktestEngine` retained — still used by `BacktestEngine.plot_equity_curve()` in the backtest dispatch block.
+- `tests/test_main_characterization.py`: `test_build_engine_is_callable` renamed to `test_build_engine_is_not_present`; count unchanged at 43.
+- `tests/test_backtest.py`: `TestBuildEngineWiring` class (2 tests) and its `_make_app_config` helper removed; no longer needed.
+- `tests/test_alpaca_broker_skeleton.py` and paper-path test files: all `mock.patch("src.main.build_engine", ...)` calls replaced with `mock.patch("src.backtest.backtest_runner.run_backtest", ...)`.
+- Full suite: **4 752 passed**.
+- No `src/backtest/engine.py` changes. No broker/API/credentials/live/paper trading.
 
 ### PR 8D — Paper/live fail-closed placeholders
 

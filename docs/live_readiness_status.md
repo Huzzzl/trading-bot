@@ -3695,3 +3695,55 @@ called for these modes.
 > No strategy is connected to live or paper trading.
 > The Phase A–H safety roadmap remains unchanged and required.
 > Nothing in this repository is financial advice.
+
+---
+
+## Milestone — Refactor PR 8C: remove-main-build-engine
+
+**Date:** 2026-05-27
+**Branch:** `claude/remove-main-build-engine`
+**Files changed:** `src/main.py`, `tests/test_main_characterization.py`, `tests/test_backtest.py`, `tests/test_alpaca_broker_skeleton.py`, `tests/test_paper_trading_readiness.py`, and paper-path test files
+**Files updated (docs):** `docs/main_dispatcher_slimdown_design.md`, `docs/trend_bot_architecture_refactor_plan.md`, `docs/live_readiness_status.md`
+**Tests:** 4 752 passed (−2 from PR 8B: `TestBuildEngineWiring` removed)
+**Type:** Refactor + test update. No new features, no behavior change.
+
+### What was done
+
+Deleted `build_engine()` from `src/main.py` and removed all imports that were only used by it. Updated all tests that were patching `src.main.build_engine` to patch `src.backtest.backtest_runner.run_backtest` instead. `run_backtest` remains the sole dispatch path for backtest and candidate-b modes.
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `src/main.py` | `build_engine()` deleted; `Portfolio`, `RiskManager`, `OpeningRangeBreakout` top-level imports removed; `BacktestEngine` import retained for `plot_equity_curve` |
+| `tests/test_main_characterization.py` | `test_build_engine_is_callable` renamed to `test_build_engine_is_not_present` |
+| `tests/test_backtest.py` | `TestBuildEngineWiring` class and `_make_app_config` helper removed |
+| `tests/test_alpaca_broker_skeleton.py` | All `mock.patch("src.main.build_engine", ...)` calls replaced with `mock.patch("src.backtest.backtest_runner.run_backtest", ...)` |
+| `tests/test_paper_*.py` | Same `build_engine` → `run_backtest` patch replacement |
+| `tests/test_paper_trading_readiness.py` | Stale comment updated (`build_engine` → `run_backtest`) |
+
+### Test counts
+
+| File | Targeted tests |
+|------|---------------|
+| `tests/test_main_characterization.py` | 43 (unchanged count; test renamed) |
+| Full suite | **4 752 passed** |
+
+### Safety confirmations
+
+- No broker/API access — no Alpaca calls, no HTTP, no credentials, no env vars
+- Paper execution path not triggered — `_run_paper_close` and paper gate unchanged
+- No order submission — `BacktestRunResult.broker_calls_made` always `False`
+- `build_engine` symbol confirmed absent: `not hasattr(src.main, "build_engine")` ✓
+- `run_backtest` remains the sole dispatch path for backtest/candidate-b modes ✓
+- No `src/backtest/engine.py`, `src/backtest/backtest_runner.py`, `src/strategy/`, `src/execution/`, config, or output changes
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> No production behaviour was changed — only `build_engine` removed; `run_backtest` was already the dispatch path since PR 8B.
+> No strategy is connected to live or paper trading.
+> The Phase A–H safety roadmap remains unchanged and required.
+> Nothing in this repository is financial advice.

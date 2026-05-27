@@ -19,8 +19,7 @@ Usage
 
 TODO (Alpaca integration):
   Add a ``--mode live`` CLI flag that swaps out YahooDataProvider for an
-  AlpacaDataProvider and Portfolio for an AlpacaBrokerAdapter.  Everything
-  else (strategy, risk manager) stays identical.
+  AlpacaDataProvider.  Everything else (strategy, risk manager) stays identical.
 """
 
 from __future__ import annotations
@@ -38,10 +37,7 @@ from src.backtest.engine import BacktestEngine
 from src.config.loader import load_config, AppConfig
 from src.data.cached_provider import CachedMarketDataProvider
 from src.data.yahoo_provider import YahooDataProvider
-from src.portfolio.portfolio import Portfolio
 from src.reporting.report_generator import ReportGenerator
-from src.risk.risk_manager import RiskManager
-from src.strategy.opening_range_breakout import OpeningRangeBreakout
 from src.utils.logger import configure_logging, get_logger
 
 
@@ -99,52 +95,6 @@ def parse_args() -> argparse.Namespace:
     )
     return parser.parse_args()
 
-
-def build_engine(cfg: AppConfig) -> BacktestEngine:
-    """Wire all components together from *cfg* and return a ready engine.
-
-    This factory function is the single place where concrete implementations
-    are bound to interfaces.  Swapping providers or strategies requires only
-    changing code here.
-    """
-    strategy = OpeningRangeBreakout(params=cfg.strategy.params)
-
-    # TODO (Alpaca): replace with AlpacaDataProvider(api_key=…, secret=…)
-    raw = YahooDataProvider()
-    data_provider = (
-        CachedMarketDataProvider(raw, cache_dir=cfg.data.cache_dir)
-        if cfg.data.cache_enabled
-        else raw
-    )
-
-    portfolio = Portfolio(
-        initial_capital=cfg.backtest.initial_capital,
-        commission_per_share=cfg.backtest.commission_per_share,
-        slippage_per_share=cfg.backtest.slippage_per_share,
-    )
-
-    force_exit      = cfg.strategy.params.get("force_exit_time", "15:55")
-    stop_execution  = cfg.strategy.params.get("stop_execution", "bar_close")
-    risk_manager = RiskManager(
-        force_exit_time=force_exit,
-        max_open_positions=cfg.risk.max_open_positions,
-        stop_execution=stop_execution,
-        daily_loss_limit_pct=cfg.risk.daily_loss_limit_pct,
-        daily_loss_action=cfg.risk.daily_loss_action,
-    )
-
-    return BacktestEngine(
-        strategy=strategy,
-        data_provider=data_provider,
-        portfolio=portfolio,
-        risk_manager=risk_manager,
-        symbols=cfg.symbols,
-        start_date=cfg.backtest.start_date,
-        end_date=cfg.backtest.end_date,
-        bar_interval=cfg.data.bar_interval,
-        position_size_pct=cfg.strategy.params.get("position_size_pct", 0.95),
-        stop_execution=stop_execution,
-    )
 
 
 def _run_paper_close(cfg: AppConfig, output_dir: Path) -> None:
@@ -562,10 +512,33 @@ def main() -> None:
         )
 
         # Generate all candidate intents via the strategy/risk pipeline.
-        engine  = build_engine(cfg)
-        results = engine.run()
-        open_positions_count = len(engine._portfolio.positions)
-        candidate_intents = results.get("order_intents", [])
+        from src.backtest.backtest_runner import BacktestRunConfig, run_backtest as _run_backtest
+        _paper_run_cfg = BacktestRunConfig(
+            strategy_name=cfg.strategy.name,
+            strategy_params=dict(cfg.strategy.params),
+            symbols=list(cfg.symbols),
+            start_date=cfg.backtest.start_date,
+            end_date=cfg.backtest.end_date,
+            bar_interval=cfg.data.bar_interval,
+            initial_capital=cfg.backtest.initial_capital,
+            commission_per_share=cfg.backtest.commission_per_share,
+            slippage_per_share=cfg.backtest.slippage_per_share,
+            position_size_pct=float(cfg.strategy.params.get("position_size_pct", 0.95)),
+            stop_execution=str(cfg.strategy.params.get("stop_execution", "bar_close")),
+            force_exit_time=str(cfg.strategy.params.get("force_exit_time", "15:55")),
+            max_open_positions=cfg.risk.max_open_positions,
+            daily_loss_limit_pct=cfg.risk.daily_loss_limit_pct,
+            daily_loss_action=cfg.risk.daily_loss_action,
+        )
+        _paper_raw = YahooDataProvider()
+        _paper_provider = (
+            CachedMarketDataProvider(_paper_raw, cache_dir=cfg.data.cache_dir)
+            if cfg.data.cache_enabled
+            else _paper_raw
+        )
+        results = _run_backtest(_paper_run_cfg, data_provider=_paper_provider)
+        open_positions_count = 0
+        candidate_intents = results.order_intents
 
         # Always write paper_candidate_intents.csv before any submission decision.
         _cand_cols = [
@@ -600,9 +573,9 @@ def main() -> None:
                 len(candidate_intents), _cand_path,
             )
             reporter = ReportGenerator(
-                metrics=results["metrics"],
-                trades=results["trades"],
-                equity_curve=results["equity_curve"],
+                metrics=results.metrics,
+                trades=results.trades,
+                equity_curve=results.equity_curve,
                 config=cfg,
                 output_dir=output_dir,
                 open_positions_count=open_positions_count,
@@ -804,9 +777,9 @@ def main() -> None:
         # Reporter receives only the selected (submitted) intent so that
         # reconciliation compares exactly 1 intent vs 1 result.
         reporter = ReportGenerator(
-            metrics=results["metrics"],
-            trades=results["trades"],
-            equity_curve=results["equity_curve"],
+            metrics=results.metrics,
+            trades=results.trades,
+            equity_curve=results.equity_curve,
             config=cfg,
             output_dir=output_dir,
             open_positions_count=open_positions_count,

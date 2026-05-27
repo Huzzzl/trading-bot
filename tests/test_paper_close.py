@@ -200,23 +200,21 @@ class TestPaperClosePathNotTriggered:
             "ok": True, "account": {"status": "ACTIVE"},
             "positions": {"SPY": _spy_pos(1.0)}, "symbols": ["SPY"],
         }
-        fake_engine = mock.MagicMock()
-        fake_engine.run.return_value = {
-            "order_intents": [], "metrics": {}, "trades": [], "equity_curve": [],
-        }
-        fake_engine._portfolio.positions = {}
-
         import src.main
         with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=fake_preflight), \
-             mock.patch("src.main.build_engine", return_value=fake_engine), \
+             mock.patch("src.backtest.backtest_runner.run_backtest") as mock_run_backtest, \
              mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
                         _pass_recon_generate), \
              mock.patch("src.execution.paper_ledger.assert_client_order_id_unused"), \
              mock.patch("src.execution.paper_ledger.append_ledger_row"), \
              mock.patch("src.main.load_config", return_value=cfg2), \
              mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            mock_run_backtest.return_value.order_intents = []
+            mock_run_backtest.return_value.metrics = {}
+            mock_run_backtest.return_value.trades = []
+            mock_run_backtest.return_value.equity_curve = []
             src.main.main()
 
         assert not (tmp_path / "paper_close_candidate_intents.csv").exists()

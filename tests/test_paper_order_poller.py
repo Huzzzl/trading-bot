@@ -444,15 +444,6 @@ def _run_buy(cfg, tmp_path, poll_client=None, submit_status: str = "accepted"):
         "positions": {},
         "symbols":   ["SPY"],
     }
-    fake_engine_results = {
-        "order_intents": [mock_intent],
-        "metrics": {}, "trades": [],
-        "equity_curve": pd.DataFrame(),
-    }
-    mock_engine = mock.MagicMock()
-    mock_engine.run.return_value = fake_engine_results
-    mock_engine._portfolio.positions = {}
-
     with (
         mock.patch.object(pd.Timestamp, "now", return_value=_FIXED_TS),
         mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None),
@@ -460,7 +451,7 @@ def _run_buy(cfg, tmp_path, poll_client=None, submit_status: str = "accepted"):
         mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit),
         mock.patch.object(AlpacaBrokerAdapter, "cancel_order", mock_cancel),
         mock.patch.object(AlpacaBrokerAdapter, "_get_client", mock_get_client),
-        mock.patch("src.main.build_engine", return_value=mock_engine),
+        mock.patch("src.backtest.backtest_runner.run_backtest") as mock_run_backtest,
         mock.patch("src.reporting.report_generator.ReportGenerator.generate_all", _pass_recon_generate),
         mock.patch("src.execution.paper_ledger.assert_client_order_id_unused"),
         mock.patch("src.execution.paper_ledger.append_ledger_row") as mock_ledger,
@@ -468,6 +459,10 @@ def _run_buy(cfg, tmp_path, poll_client=None, submit_status: str = "accepted"):
         mock.patch("src.main.load_config", return_value=cfg),
         mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]),
     ):
+        mock_run_backtest.return_value.order_intents = [mock_intent]
+        mock_run_backtest.return_value.metrics = {}
+        mock_run_backtest.return_value.trades = []
+        mock_run_backtest.return_value.equity_curve = pd.DataFrame()
         src.main.main()
 
     return mock_submit, mock_cancel, mock_ledger, mock_get_client

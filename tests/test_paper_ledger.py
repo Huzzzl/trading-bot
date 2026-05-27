@@ -399,7 +399,7 @@ def _run_buy_submit(tmp_path, ledger_path=None, extra_execution_yaml=""):
     with (
         patch("src.main.load_config") as mock_load_cfg,
         patch("src.execution.alpaca_broker.AlpacaBrokerAdapter") as MockBroker,
-        patch("src.main.build_engine") as mock_build_engine,
+        patch("src.backtest.backtest_runner.run_backtest") as mock_run_backtest,
         patch("src.reporting.report_generator.ReportGenerator.generate_all", _pass_recon_generate),
         patch("pandas.Timestamp.now", return_value=_FIXED_TS),
         patch("sys.argv", ["main", "--config", str(cfg_path), "--output-dir", str(out_dir)]),
@@ -411,14 +411,10 @@ def _run_buy_submit(tmp_path, ledger_path=None, extra_execution_yaml=""):
         broker_instance.preflight_check.return_value = mock_preflight
         broker_instance.submit_order.return_value = mock_result
 
-        engine_instance = mock_build_engine.return_value
-        engine_instance._portfolio.positions = {}
-        engine_instance.run.return_value = {
-            "order_intents": [mock_intent],
-            "metrics": {"total_return": 0.0},
-            "trades": [],
-            "equity_curve": pd.DataFrame(),
-        }
+        mock_run_backtest.return_value.order_intents = [mock_intent]
+        mock_run_backtest.return_value.metrics = {"total_return": 0.0}
+        mock_run_backtest.return_value.trades = []
+        mock_run_backtest.return_value.equity_curve = pd.DataFrame()
 
         _main()
 
@@ -541,7 +537,7 @@ class TestBuySubmitLedgerIntegration:
         with (
             patch("src.main.load_config") as mock_load_cfg,
             patch("src.execution.alpaca_broker.AlpacaBrokerAdapter") as MockBroker,
-            patch("src.main.build_engine") as mock_build_engine,
+            patch("src.backtest.backtest_runner.run_backtest") as mock_run_backtest,
             patch("src.reporting.report_generator.ReportGenerator.generate_all", _pass_recon_generate),
             patch("pandas.Timestamp.now", return_value=_FIXED_TS),
             patch("sys.argv", ["main", "--config", str(cfg_path), "--output-dir", str(out_dir)]),
@@ -552,14 +548,10 @@ class TestBuySubmitLedgerIntegration:
             broker_instance = MockBroker.return_value
             broker_instance.preflight_check.return_value = mock_preflight
 
-            engine_instance = mock_build_engine.return_value
-            engine_instance._portfolio.positions = {}
-            engine_instance.run.return_value = {
-                "order_intents": [mock_intent],
-                "metrics": {"total_return": 0.0},
-                "trades": [],
-                "equity_curve": pd.DataFrame(),
-            }
+            mock_run_backtest.return_value.order_intents = [mock_intent]
+            mock_run_backtest.return_value.metrics = {"total_return": 0.0}
+            mock_run_backtest.return_value.trades = []
+            mock_run_backtest.return_value.equity_curve = pd.DataFrame()
 
             _main()
 
