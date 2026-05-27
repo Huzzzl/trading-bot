@@ -3444,7 +3444,7 @@ stores `bar_interval="60m"` when Yahoo data is requested with the 60-minute stri
 **Date:** 2026-05-27
 **Branch:** `claude/add-backtest-runner-integration`
 **Files added:** `src/backtest/backtest_runner.py`, `tests/test_backtest_runner.py`
-**Tests:** 59 new; full suite 4 676 passed
+**Tests:** 67 new; full suite 4 684 passed
 
 ### What was implemented
 
@@ -3465,6 +3465,9 @@ callable entry point with typed, immutable configuration and result objects.
   calls `engine.run()` → wraps into `BacktestRunResult`.
   All six safety flags are hardcoded `False`/`True`; the function contains no path to
   set them otherwise.
+- `_validate_config` rejects non-finite `initial_capital` (`math.isfinite()`); rejects
+  symbols that don't match `^[A-Z0-9.\-/]{1,10}$` (uppercase ticker regex); never echoes
+  raw values in any error message.
 
 **Not changed:** `BacktestEngine`, `compute_metrics`, `Portfolio`, `RiskManager`,
 `BaseDataProvider`, `build_strategy`, or any existing test.
@@ -3475,7 +3478,7 @@ callable entry point with typed, immutable configuration and result objects.
 |------|-------|-------|----------------|
 | `test_backtest_runner.py` | `TestBacktestRunConfig` | 7 | Frozen; defaults; custom values stored |
 | | `TestBacktestRunResult` | 16 | Safety flags all False/True; frozen; echoed fields; metrics keys; types |
-| | `TestRunBacktestValidation` | 15 | Invalid interval; zero/negative capital; bad pct; bad stop_execution; empty symbols; unknown strategy; bad params; raw values not echoed; valid aliases |
+| | `TestRunBacktestValidation` | 23 | Invalid interval; zero/negative/inf/nan capital; bad pct; bad stop_execution; empty symbols; lowercase/space/invalid symbol; secret symbol not echoed; dot/dash symbol valid; unknown strategy; bad params; raw values not echoed; valid aliases |
 | | `TestRunBacktestBehaviour` | 7 | Deterministic; empty data; capital matches; Sharpe uses interval; config not mutated; result copy independence; all safety flags |
 | | `TestSourceScans` | 14 | No Alpaca/network/environ/execution-actions/mutation/ledger markers |
 
@@ -3492,7 +3495,7 @@ callable entry point with typed, immutable configuration and result objects.
 ### Reference
 
 - `src/backtest/backtest_runner.py` — runner module
-- `tests/test_backtest_runner.py` — 59 tests
+- `tests/test_backtest_runner.py` — 67 tests
 - `docs/trend_bot_architecture_refactor_plan.md` — PR 7 marked implemented
 
 ### Warning

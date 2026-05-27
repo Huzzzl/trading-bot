@@ -346,7 +346,10 @@ No PR may be skipped. Each requires its own test coverage where applicable.
   `BacktestEngine`, calls `engine.run()`, wraps output into `BacktestRunResult`.
 - No broker calls, no network access, no credentials, no environment variables,
   no live/paper trading, no file writes.
-- 59 unit tests in `tests/test_backtest_runner.py`; full suite 4 676 passed.
+- `_validate_config` rejects non-finite `initial_capital` (``math.isfinite()``); rejects
+  symbols that don't match ``^[A-Z0-9.\-/]{1,10}$`` (uppercase ticker regex); never
+  echoes raw values in error messages.
+- 67 unit tests in `tests/test_backtest_runner.py`; full suite 4 684 passed.
 
 ### PR 8 — Slim `main.py`
 

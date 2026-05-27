@@ -3,7 +3,9 @@ backtest/backtest_runner.py
 ---------------------------
 Offline backtest runner: wires strategy factory + BacktestEngine.
 
-All computation is pure, deterministic, and offline-only.
+All computation is offline and deterministic.  BacktestEngine mutates a
+simulated Portfolio during the run and may produce simulated trades and
+order intents in memory.
 
 **No Alpaca SDK is imported.**
 **No network library is imported.**
@@ -12,14 +14,16 @@ All computation is pure, deterministic, and offline-only.
 **No broker calls.**
 **No execution layer imported.**
 **No orders are placed.**
-**No trade records are written.**
-**No portfolio state is mutated after the run.**
+**Simulated trades and order intents are produced in memory only.**
+**No broker order is sent.  No live record or file is written.**
 **No settings are mutated.**
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import math
+import re
+from dataclasses import dataclass
 from typing import Any
 
 import pandas as pd
@@ -34,6 +38,7 @@ from src.risk.risk_manager import RiskManager
 from src.strategy.factory import build_strategy
 
 _VALID_STOP_EXECUTION = frozenset({"bar_close", "stop_price"})
+_VALID_SYMBOL_RE = re.compile(r"^[A-Z0-9.\-/]{1,10}$")
 
 
 @dataclass(frozen=True)
@@ -135,7 +140,10 @@ def _validate_config(config: BacktestRunConfig) -> None:
             raise ValueError
         if not isinstance(config.symbols, list) or not config.symbols:
             raise ValueError
-        if not all(isinstance(s, str) and s for s in config.symbols):
+        if not all(
+            isinstance(s, str) and bool(_VALID_SYMBOL_RE.match(s))
+            for s in config.symbols
+        ):
             raise ValueError
         if not isinstance(config.start_date, str) or not config.start_date:
             raise ValueError
@@ -143,7 +151,7 @@ def _validate_config(config: BacktestRunConfig) -> None:
             raise ValueError
         bars_per_year_for_interval(config.bar_interval)
         cap = float(config.initial_capital)
-        if cap <= 0 or cap != cap:
+        if not math.isfinite(cap) or cap <= 0:
             raise ValueError
         pct = float(config.position_size_pct)
         if pct <= 0 or pct > 1 or pct != pct:

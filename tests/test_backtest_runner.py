@@ -352,6 +352,48 @@ class TestRunBacktestValidation:
         )
         assert isinstance(result, BacktestRunResult)
 
+    def test_inf_initial_capital_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid backtest run config"):
+            self._run(initial_capital=float("inf"))
+
+    def test_neg_inf_initial_capital_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid backtest run config"):
+            self._run(initial_capital=float("-inf"))
+
+    def test_nan_initial_capital_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid backtest run config"):
+            self._run(initial_capital=float("nan"))
+
+    def test_lowercase_symbol_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid backtest run config"):
+            self._run(symbols=["spy"])
+
+    def test_space_in_symbol_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid backtest run config"):
+            self._run(symbols=["BAD SYMBOL"])
+
+    def test_secret_symbol_not_echoed(self) -> None:
+        secret = "SECRET_SYMBOL_VALUE"
+        cfg = BacktestRunConfig(
+            strategy_name="trend_following",
+            strategy_params=_TREND_STRATEGY_PARAMS,
+            symbols=[secret],
+            start_date="2024-01-02",
+            end_date="2024-02-15",
+            bar_interval="1d",
+        )
+        with pytest.raises(ValueError) as exc_info:
+            run_backtest(cfg, data_provider=_FakeProvider())
+        assert secret not in str(exc_info.value)
+
+    def test_dot_symbol_valid(self) -> None:
+        result = self._run(symbols=["BRK.B"])
+        assert isinstance(result, BacktestRunResult)
+
+    def test_dash_symbol_valid(self) -> None:
+        result = self._run(symbols=["BRK-B"])
+        assert isinstance(result, BacktestRunResult)
+
 
 # ---------------------------------------------------------------------------
 # TestRunBacktestBehaviour
