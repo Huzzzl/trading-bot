@@ -141,11 +141,16 @@ No phase may be skipped. Each phase has its own PR(s).
 
 ### Phase B — Backtest and metrics
 
+**Status: design complete — `docs/backtest_and_metrics_offline_design.md`**
+
 - Historical bar data ingestion from offline source
 - Backtest runner: applies strategy to historical bars, records trades
 - Metrics: win rate, max drawdown, Sharpe ratio, trade count, hold duration
 - Backtest results must be reviewed and documented before Phase C
 - No live execution; no real broker calls
+
+**This does not trade. This does not approve automation. Implementation,**
+**paper trading, risk gate, and live trading each require their own PR.**
 
 ### Phase C — Paper trading execution
 

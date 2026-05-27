@@ -2833,3 +2833,61 @@ Snapshot document created at
 > Until automation is implemented, tested, and approved, all trading
 > decisions remain entirely manual operator actions.
 > Nothing in this repository is financial advice.
+
+---
+
+## Milestone: Phase B — Backtest and Metrics Offline — Designed
+
+**Branch:** `claude/docs-design-backtest-and-metrics-offline`
+**Status:** Complete
+
+Design document created at `docs/backtest_and_metrics_offline_design.md`.
+
+**No code was implemented.**
+**No Alpaca endpoint was contacted.**
+**No credentials were read.**
+**No order was submitted, sold, cancelled, replaced, or closed.**
+**No automated trading was approved.**
+**All position and trading decisions remain entirely manual.**
+
+### What was designed
+
+Offline backtest system for Phase B covering:
+
+1. **Data scope** — local CSV/fixture only; SPY; 1h/1d; no live data API
+2. **Backtest engine** — pure function `run_backtest(bars, config, starting_equity) → BacktestResult`; fill at next-bar open; no broker calls
+3. **Simulation rules** — long only, one position, no pyramiding, no same-day re-entry
+4. **Metrics** — total_return_pct, trade_count, win_rate, max_drawdown_pct, exposure_pct, average_hold_bars, signal_counts, blocked_reason_counts, and more
+5. **Output safety** — no credentials, account IDs, broker IDs, live balances, or raw broker responses in output
+6. **Determinism** — same bars/config → same output; no randomness; no wall-clock dependency
+7. **Proposed files** — `src/backtest/offline_backtest_engine.py`, `tests/test_offline_backtest_engine.py`
+8. **Testing requirements** — 20+ test scenarios including source scans
+9. **Non-goals** — no paper/live trading, no broker, no scheduler, no risk gate, no ML
+10. **Phase dependency** — Phase C cannot start until Phase B implementation and snapshot are reviewed
+
+### Safety invariants confirmed
+
+- No code changes
+- No Alpaca endpoint contacted
+- No credentials read or written
+- No order submitted, sold, cancelled, or replaced
+- No live ledger written
+- No automated trading approved
+
+### Reference
+
+- `docs/backtest_and_metrics_offline_design.md` — full design document
+- `docs/automated_strategy_execution_roadmap.md` — Phase B marked designed
+- Suggested git tag: `backtest-and-metrics-offline-designed`
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No code is implemented. No Alpaca endpoint was contacted. No credentials were read.**
+> A positive backtest does not approve live trading and does not guarantee
+> future performance. All automated live trading requires completing the full
+> staged roadmap (Phases A–H), with each phase reviewed and approved in its
+> own PR. Until automation is implemented, tested, and approved, all trading
+> decisions remain entirely manual operator actions.
+> Nothing in this repository is financial advice.
