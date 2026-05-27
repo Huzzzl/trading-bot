@@ -3016,3 +3016,94 @@ MVP goal, covering:
 > ORB behavior is unchanged. No live or paper execution was implemented.
 > The Phase A–H safety roadmap remains unchanged and required.
 > Nothing in this repository is financial advice.
+
+---
+
+## Milestone: Indicators Package Added — Refactor PR 2 Complete
+
+**Branch:** `claude/add-indicators-package`
+**Status:** Complete
+
+`src/indicators/` package and `tests/test_indicators.py` added.
+
+**No Alpaca endpoint was contacted.**
+**No credentials were read.**
+**No environment variables were accessed.**
+**No order was submitted, sold, cancelled, replaced, or closed.**
+**No live ledger was written.**
+**No config was mutated.**
+**No live or paper trading was implemented.**
+**No automated trading was approved.**
+**No main.py refactor was done.**
+**No tools were moved.**
+**No strategy behavior was changed.**
+
+### What was added
+
+| File | Description |
+|------|-------------|
+| `src/indicators/__init__.py` | Package exports |
+| `src/indicators/moving_average.py` | `sma()`, `ema()` |
+| `src/indicators/volatility.py` | `true_range()`, `atr()` |
+| `src/indicators/trend.py` | `rolling_high()`, `rolling_low()`, `breakout_above()`, `breakout_below()` |
+| `tests/test_indicators.py` | 83 tests |
+
+### Indicators contract
+
+| Function | Signature | Notes |
+|----------|-----------|-------|
+| `sma` | `(values, window) → Series` | Rolling mean; NaN until window filled |
+| `ema` | `(values, span) → Series` | EWM mean with `adjust=False` |
+| `true_range` | `(high, low, close) → Series` | First row = H-L; subsequent rows use prev close |
+| `atr` | `(high, low, close, window=14) → Series` | Rolling mean of true range |
+| `rolling_high` | `(values, window, *, exclude_current=True) → Series` | Shift-before-roll when `exclude_current=True` |
+| `rolling_low` | `(values, window, *, exclude_current=True) → Series` | Shift-before-roll when `exclude_current=True` |
+| `breakout_above` | `(close, high, lookback) → Series[bool]` | close > rolling_high(high, lookback, exclude_current=True) |
+| `breakout_below` | `(close, low, lookback) → Series[bool]` | close < rolling_low(low, lookback, exclude_current=True) |
+
+### No-look-ahead guarantee
+
+`rolling_high` and `rolling_low` default to `exclude_current=True`:
+the series is shifted by one bar before the rolling window is applied.
+This means a spike or crash on the current bar cannot affect the reference
+level used for breakout detection at the same bar index.
+
+### Test coverage
+
+| Metric | Value |
+|--------|-------|
+| Targeted tests | 83 passed |
+| Full suite | 4292 passed |
+| Real broker calls | None |
+| Credentials read | None |
+
+### Test classes
+
+| Class | Tests | What it covers |
+|-------|-------|----------------|
+| `TestPackageExports` | 8 | All symbols exported from `src/indicators` |
+| `TestSma` | 9 | Known values; NaN before window; index; immutability; invalid window |
+| `TestEma` | 8 | Matches pandas ewm; index; immutability; invalid span |
+| `TestTrueRange` | 7 | First row; prev close; gap-up; gap-down; index; immutability |
+| `TestAtr` | 8 | Known values; NaN until filled; default window; index; immutability; invalid window |
+| `TestRollingHigh` | 9 | Include/exclude current; no-look-ahead spike; default; index; immutability; invalid window |
+| `TestRollingLow` | 9 | Include/exclude current; no-look-ahead crash; default; index; immutability; invalid window |
+| `TestBreakoutAbove` | 4 | True/false signals; current spike not counted; returns Series |
+| `TestBreakoutBelow` | 3 | True/false signals; returns Series |
+| `TestSourceScans` | 18 | No Alpaca/network/environ/execution/mutation markers in all 4 source files |
+
+### Reference
+
+- `src/indicators/` — indicators package
+- `tests/test_indicators.py` — 83 tests
+- `docs/trend_bot_architecture_refactor_plan.md` — PR 2 marked implemented
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> All indicator functions are pure, deterministic, and offline-only.
+> No strategy behavior was changed. No live or paper execution was implemented.
+> The Phase A–H safety roadmap remains unchanged and required.
+> Nothing in this repository is financial advice.
