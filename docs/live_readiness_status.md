@@ -2630,3 +2630,158 @@ strategy execution, covering:
 > Until automation is implemented, tested, and approved, all trading
 > decisions remain entirely manual operator actions.
 > Nothing in this repository is financial advice.
+
+---
+
+## Milestone: Phase A — Strategy Signal Engine Offline Core — Implemented
+
+**Branch:** `claude/add-strategy-signal-engine-offline-core`
+**Status:** Complete
+
+Offline-only deterministic strategy signal engine implemented at
+`src/strategy/signal_engine.py`. Tests at
+`tests/test_strategy_signal_engine.py`.
+
+**No Alpaca endpoint was contacted.**
+**No credentials were read.**
+**No network library was imported.**
+**No order was submitted, sold, cancelled, replaced, or closed.**
+**No live ledger was written.**
+**No config was mutated.**
+**No scheduler was implemented.**
+**No broker executor was implemented.**
+**No live or paper trading was implemented.**
+**No automated trading was approved.**
+**All signals are recommendations only — risk gate and executor are not implemented.**
+**All position and trading decisions remain entirely manual.**
+
+### What was implemented
+
+| File | Description |
+|------|-------------|
+| `src/strategy/signal_engine.py` | Pure offline signal engine: `evaluate_signal()` |
+| `tests/test_strategy_signal_engine.py` | 96 tests covering all signal types, gates, edge cases, source scans |
+
+### Signal engine contract
+
+`evaluate_signal(bars, position_state, open_order_state, market_session, config) → SignalResult`
+
+Pure function. Same inputs always produce same output. No side effects.
+
+#### Inputs
+
+| Input | Type |
+|-------|------|
+| `bars` | `list[Bar]` — OHLCV; most recent last; not mutated |
+| `position_state` | `PositionState` — `has_position: bool`; no entry price |
+| `open_order_state` | `OpenOrderState` — `has_open_order: bool` |
+| `market_session` | `str \| None` — `"open"` / `"closed"` / `"pre_market"` / `"after_hours"` / `None` |
+| `config` | `SignalEngineConfig` — strategy params, symbol, timeframe, windows |
+
+#### Gate sequence (BLOCK on any failure)
+
+| Gate | Reason code |
+|------|-------------|
+| 1 — insufficient bars | `INSUFFICIENT_BARS` |
+| 2 — symbol != SPY | `INVALID_SYMBOL` |
+| 3 — timeframe not in {1h, 1d} | `INVALID_TIMEFRAME` |
+| 4 — market_session != "open" | `MARKET_NOT_OPEN` |
+| 5 — open order present | `OPEN_ORDER_PRESENT` |
+
+#### Signal logic (SMA crossover)
+
+| Condition | Signal | Reason code |
+|-----------|--------|-------------|
+| short SMA > long SMA, no position | BUY | `SMA_CROSSOVER_BULLISH` |
+| short SMA < long SMA, has position | SELL | `SMA_CROSSOVER_BEARISH` |
+| bullish but already in position | HOLD | `HOLD_ALREADY_IN_POSITION` |
+| bearish but flat | HOLD | `HOLD_NO_POSITION_TO_EXIT` |
+
+#### Output invariants (always)
+
+| Field | Value |
+|-------|-------|
+| `deterministic` | `true` |
+| `broker_calls_made` | `false` |
+| `credentials_read` | `false` |
+| `live_submit_enabled` | `false` |
+| `order_action_requested` | `false` |
+| `position_decision_is_recommendation_only` | `true` |
+
+### Test coverage
+
+| Metric | Value |
+|--------|-------|
+| Targeted tests | 96 passed |
+| Full suite | 4164 passed |
+| Real broker calls | None |
+| Credentials read | None |
+
+### Test classes
+
+| Class | Tests | What it covers |
+|-------|-------|----------------|
+| `TestBuySignal` | 6 | Bullish crossover, no position → BUY |
+| `TestSellSignal` | 4 | Bearish crossover, has position → SELL |
+| `TestHoldSignal` | 5 | Bullish+position and bearish+flat → HOLD |
+| `TestBlockInsufficientBars` | 5 | Zero, one, and boundary bar counts → BLOCK |
+| `TestBlockInvalidSymbol` | 5 | Non-SPY, lowercase, empty symbol → BLOCK |
+| `TestBlockInvalidTimeframe` | 6 | 5m, empty, tick timeframes → BLOCK; 1h/1d pass |
+| `TestBlockMarketSession` | 9 | closed/pre_market/after_hours/None → BLOCK; open passes |
+| `TestBlockOpenOrder` | 4 | Open order present → BLOCK |
+| `TestDeterminism` | 5 | Same input → same output; flag always true |
+| `TestInputNotMutated` | 3 | bars list not modified by engine |
+| `TestOutputFields` | 9 | All result fields present and correct types |
+| `TestSafetyFields` | 12 | All safety invariants on every signal path |
+| `TestGateOrder` | 4 | Gates checked in correct order |
+| `TestSmaLogic` | 3 | Custom windows, equal SMAs |
+| `TestSourceScans` | 16 | No Alpaca/network/os.environ/mutation markers |
+
+### Safety invariants confirmed
+
+| Invariant | Method | Result |
+|-----------|--------|--------|
+| No Alpaca SDK imported | `TestSourceScans::test_no_alpaca_import` | Confirmed absent |
+| No network library imports | `TestSourceScans` (requests/httpx/aiohttp/urllib) | Confirmed absent |
+| No environment variable access | `TestSourceScans::test_no_os_environ` | Confirmed absent |
+| No `os` import | `TestSourceScans::test_no_os_import` | Confirmed absent |
+| No submit/cancel/replace/close calls | `TestSourceScans` | Confirmed absent |
+| No POST/PATCH/DELETE markers | `TestSourceScans` | Confirmed absent |
+| No ledger writes | `TestSourceScans` (write_text/json.dump) | Confirmed absent |
+| `broker_calls_made` always false | `TestSafetyFields` | Confirmed |
+| `credentials_read` always false | `TestSafetyFields` | Confirmed |
+| `position_decision_is_recommendation_only` always true | `TestSafetyFields` | Confirmed |
+| Same input → same output | `TestDeterminism` | Confirmed |
+| Input bars not mutated | `TestInputNotMutated` | Confirmed |
+
+### What remains (not implemented, each requires its own PR)
+
+| Component | Status |
+|-----------|--------|
+| Historical data ingestion / backtest (Phase B) | Not implemented |
+| Paper trading executor (Phase C) | Not implemented |
+| Automated risk gate (Phase D) | Not implemented |
+| Mock automated buy/sell state machine (Phase E) | Not implemented |
+| Paper broker integration (Phase F) | Not implemented |
+| Live automation (Phase G) | Not implemented |
+| Scheduler | Not implemented |
+| Kill switch | Not implemented |
+| Monitoring and alerting | Not implemented |
+
+### Reference
+
+- `src/strategy/signal_engine.py` — signal engine source
+- `tests/test_strategy_signal_engine.py` — 96 tests
+- `docs/automated_strategy_execution_roadmap.md` — full roadmap (Phase A marked complete)
+- Suggested git tag: `strategy-signal-engine-offline-core-implemented`
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **BUY/SELL signals from this module do not execute anything.**
+> **The risk gate, executor, and scheduler are not implemented.**
+> All signals are recommendations only. Any position decision remains a manual
+> operator action. Live automation requires completing Phases B–G, each reviewed
+> in its own PR.
+> Nothing in this repository is financial advice.

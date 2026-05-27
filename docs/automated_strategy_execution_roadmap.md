@@ -128,11 +128,16 @@ No phase may be skipped. Each phase has its own PR(s).
 
 ### Phase A — Strategy signal module (offline only)
 
+**Status: offline core implemented — `src/strategy/signal_engine.py`**
+
 - Implement `strategy_signal_engine` as a pure function: inputs → signal
 - No broker calls, no credentials, no network access
 - Deterministic contract: same inputs always produce same output
 - Extensive unit tests covering all signal types and edge cases
 - Source scans: no Alpaca import, no os.environ, no network libraries
+
+**This does not trade. This does not approve automation. Risk gate, executor,**
+**scheduler, and paper/live trading are not implemented — each requires its own PR.**
 
 ### Phase B — Backtest and metrics
 
