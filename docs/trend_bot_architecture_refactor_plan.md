@@ -367,7 +367,7 @@ No PR may be skipped. Each requires its own test coverage where applicable.
 - Sub-PRs: 8A (CLI characterization tests ✓ implemented) → 8B (route backtest through runner ✓ implemented) →
   8C (remove `build_engine`) → 8D (paper/live placeholders) → 8E (README update).
 - 8A: 42 tests in `tests/test_main_characterization.py`; full suite 4 726 passed.
-- 8B: 43 tests in `tests/test_main_characterization.py` (+1); full suite 4 727 passed.
+- 8B: 43 tests in `tests/test_main_characterization.py` (+1); 94 tests in `tests/test_backtest_runner.py` (+27 field-validation); full suite 4 754 passed.
 
 ### PR 9 — Tools / scripts isolation
 

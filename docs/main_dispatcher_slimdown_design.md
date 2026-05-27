@@ -198,12 +198,18 @@ Each sub-PR is independently reviewable and must not reduce the passing test cou
   (always correct: engine closes all positions before returning).
 - `engine._portfolio.positions` private-field access eliminated.
 - `build_engine()` remains in `main.py` (unused by backtest dispatch; removed in PR 8C).
+- `src/backtest/backtest_runner.py`: `_validate_config()` extended to validate all 6
+  new fields (commission/slippage finite ≥ 0; force_exit_time HH:MM 00:00–23:59;
+  max_open_positions None or int ≥ 1; daily_loss_limit_pct None or finite > 0;
+  daily_loss_action in {"block_new_entries","close_all"}).  Raw values never echoed.
+- `tests/test_backtest_runner.py`: 27 new tests in `TestNewFieldValidation`; 94 total.
 - `tests/test_main_characterization.py`: `test_backtest_mode_calls_build_engine` →
   `test_backtest_mode_calls_run_backtest`; `test_candidate_b_mode_applies_overrides_before_engine` →
   `test_candidate_b_mode_applies_overrides_before_run_backtest`; new
-  `test_backtest_run_config_core_fields` added.  43 tests, full suite 4 727 passed.
+  `test_backtest_run_config_core_fields` added.  43 tests.
 - `tests/test_paper_trading_readiness.py`: startup-log helpers updated to abort at
   `run_backtest` instead of `build_engine`.  No assertion changes.
+- Full suite: **4 754 passed**.
 - No `src/backtest/engine.py` changes.  No broker/API/credentials/live/paper trading.
 
 ### PR 8C — Remove `build_engine()` from `main.py`

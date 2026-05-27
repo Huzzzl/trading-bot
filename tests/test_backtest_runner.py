@@ -396,6 +396,184 @@ class TestRunBacktestValidation:
 
 
 # ---------------------------------------------------------------------------
+# TestNewFieldValidation
+# ---------------------------------------------------------------------------
+
+
+class TestNewFieldValidation:
+    """Validation of the 6 new BacktestRunConfig fields added in PR 8B."""
+
+    def _run(self, **overrides) -> BacktestRunResult:
+        fields = {
+            "strategy_name": "trend_following",
+            "strategy_params": _TREND_STRATEGY_PARAMS,
+            "symbols": ["SPY"],
+            "start_date": "2024-01-02",
+            "end_date": "2024-02-15",
+            "bar_interval": "1d",
+            "initial_capital": 100_000.0,
+            "position_size_pct": 0.95,
+            "stop_execution": "bar_close",
+        }
+        fields.update(overrides)
+        cfg = BacktestRunConfig(**fields)
+        return run_backtest(cfg, data_provider=_FakeProvider())
+
+    # --- commission_per_share ---
+
+    def test_negative_commission_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid backtest run config"):
+            self._run(commission_per_share=-0.001)
+
+    def test_inf_commission_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid backtest run config"):
+            self._run(commission_per_share=float("inf"))
+
+    def test_nan_commission_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid backtest run config"):
+            self._run(commission_per_share=float("nan"))
+
+    def test_zero_commission_valid(self) -> None:
+        result = self._run(commission_per_share=0.0)
+        assert isinstance(result, BacktestRunResult)
+
+    # --- slippage_per_share ---
+
+    def test_negative_slippage_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid backtest run config"):
+            self._run(slippage_per_share=-0.001)
+
+    def test_inf_slippage_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid backtest run config"):
+            self._run(slippage_per_share=float("inf"))
+
+    def test_nan_slippage_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid backtest run config"):
+            self._run(slippage_per_share=float("nan"))
+
+    def test_zero_slippage_valid(self) -> None:
+        result = self._run(slippage_per_share=0.0)
+        assert isinstance(result, BacktestRunResult)
+
+    # --- force_exit_time ---
+
+    def test_empty_force_exit_time_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid backtest run config"):
+            self._run(force_exit_time="")
+
+    def test_invalid_hour_force_exit_time_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid backtest run config"):
+            self._run(force_exit_time="25:00")
+
+    def test_invalid_minute_force_exit_time_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid backtest run config"):
+            self._run(force_exit_time="12:99")
+
+    def test_secret_force_exit_time_not_echoed(self) -> None:
+        secret = "secret_force_exit_xyzzy"
+        cfg = BacktestRunConfig(
+            strategy_name="trend_following",
+            strategy_params=_TREND_STRATEGY_PARAMS,
+            symbols=["SPY"],
+            start_date="2024-01-02",
+            end_date="2024-02-15",
+            bar_interval="1d",
+            force_exit_time=secret,
+        )
+        with pytest.raises(ValueError) as exc_info:
+            run_backtest(cfg, data_provider=_FakeProvider())
+        assert secret not in str(exc_info.value)
+
+    # --- max_open_positions ---
+
+    def test_zero_max_open_positions_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid backtest run config"):
+            self._run(max_open_positions=0)
+
+    def test_negative_max_open_positions_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid backtest run config"):
+            self._run(max_open_positions=-1)
+
+    def test_float_max_open_positions_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid backtest run config"):
+            self._run(max_open_positions=1.5)
+
+    def test_string_max_open_positions_not_echoed(self) -> None:
+        secret = "secret_mop_xyzzy"
+        cfg = BacktestRunConfig(
+            strategy_name="trend_following",
+            strategy_params=_TREND_STRATEGY_PARAMS,
+            symbols=["SPY"],
+            start_date="2024-01-02",
+            end_date="2024-02-15",
+            bar_interval="1d",
+            max_open_positions=secret,
+        )
+        with pytest.raises(ValueError) as exc_info:
+            run_backtest(cfg, data_provider=_FakeProvider())
+        assert secret not in str(exc_info.value)
+
+    def test_one_max_open_positions_valid(self) -> None:
+        result = self._run(max_open_positions=1)
+        assert isinstance(result, BacktestRunResult)
+
+    def test_none_max_open_positions_valid(self) -> None:
+        result = self._run(max_open_positions=None)
+        assert isinstance(result, BacktestRunResult)
+
+    # --- daily_loss_limit_pct ---
+
+    def test_zero_daily_loss_limit_pct_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid backtest run config"):
+            self._run(daily_loss_limit_pct=0.0)
+
+    def test_negative_daily_loss_limit_pct_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid backtest run config"):
+            self._run(daily_loss_limit_pct=-0.01)
+
+    def test_inf_daily_loss_limit_pct_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid backtest run config"):
+            self._run(daily_loss_limit_pct=float("inf"))
+
+    def test_nan_daily_loss_limit_pct_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid backtest run config"):
+            self._run(daily_loss_limit_pct=float("nan"))
+
+    def test_none_daily_loss_limit_pct_valid(self) -> None:
+        result = self._run(daily_loss_limit_pct=None)
+        assert isinstance(result, BacktestRunResult)
+
+    # --- daily_loss_action ---
+
+    def test_invalid_daily_loss_action_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid backtest run config"):
+            self._run(daily_loss_action="halt_trading")
+
+    def test_secret_daily_loss_action_not_echoed(self) -> None:
+        secret = "secret_action_xyzzy"
+        cfg = BacktestRunConfig(
+            strategy_name="trend_following",
+            strategy_params=_TREND_STRATEGY_PARAMS,
+            symbols=["SPY"],
+            start_date="2024-01-02",
+            end_date="2024-02-15",
+            bar_interval="1d",
+            daily_loss_action=secret,
+        )
+        with pytest.raises(ValueError) as exc_info:
+            run_backtest(cfg, data_provider=_FakeProvider())
+        assert secret not in str(exc_info.value)
+
+    def test_close_all_daily_loss_action_valid(self) -> None:
+        result = self._run(daily_loss_action="close_all")
+        assert isinstance(result, BacktestRunResult)
+
+    def test_block_new_entries_daily_loss_action_valid(self) -> None:
+        result = self._run(daily_loss_action="block_new_entries")
+        assert isinstance(result, BacktestRunResult)
+
+
+# ---------------------------------------------------------------------------
 # TestRunBacktestBehaviour
 # ---------------------------------------------------------------------------
 

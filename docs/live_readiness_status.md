@@ -3673,9 +3673,9 @@ called for these modes.
 ### Test counts
 
 - `tests/test_main_characterization.py` — 43 tests (+1 `test_backtest_run_config_core_fields`)
-- `tests/test_backtest_runner.py` — 67 tests (unchanged)
+- `tests/test_backtest_runner.py` — 94 tests (+27 `TestNewFieldValidation`)
 - `tests/test_paper_trading_readiness.py` — 24 tests (unchanged count)
-- Full suite: **4 727 passed**
+- Full suite: **4 754 passed**
 
 ### Safety confirmations
 

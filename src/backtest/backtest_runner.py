@@ -39,6 +39,8 @@ from src.strategy.factory import build_strategy
 
 _VALID_STOP_EXECUTION = frozenset({"bar_close", "stop_price"})
 _VALID_SYMBOL_RE = re.compile(r"^[A-Z0-9.\-/]{1,10}$")
+_VALID_DAILY_LOSS_ACTION = frozenset({"block_new_entries", "close_all"})
+_VALID_FORCE_EXIT_TIME_RE = re.compile(r"^([01][0-9]|2[0-3]):[0-5][0-9]$")
 
 
 @dataclass(frozen=True)
@@ -163,6 +165,30 @@ def _validate_config(config: BacktestRunConfig) -> None:
         if pct <= 0 or pct > 1 or pct != pct:
             raise ValueError
         if config.stop_execution not in _VALID_STOP_EXECUTION:
+            raise ValueError
+        comm = float(config.commission_per_share)
+        if not math.isfinite(comm) or comm < 0:
+            raise ValueError
+        slip = float(config.slippage_per_share)
+        if not math.isfinite(slip) or slip < 0:
+            raise ValueError
+        if (
+            not isinstance(config.force_exit_time, str)
+            or not _VALID_FORCE_EXIT_TIME_RE.match(config.force_exit_time)
+        ):
+            raise ValueError
+        if config.max_open_positions is not None:
+            if (
+                not isinstance(config.max_open_positions, int)
+                or isinstance(config.max_open_positions, bool)
+                or config.max_open_positions < 1
+            ):
+                raise ValueError
+        if config.daily_loss_limit_pct is not None:
+            dlp = float(config.daily_loss_limit_pct)
+            if not math.isfinite(dlp) or dlp <= 0:
+                raise ValueError
+        if config.daily_loss_action not in _VALID_DAILY_LOSS_ACTION:
             raise ValueError
     except (ValueError, TypeError):
         raise ValueError("invalid backtest run config")
