@@ -246,22 +246,26 @@ No PR may be skipped. Each requires its own test coverage where applicable.
 
 ### PR 4 — TrendFollowing strategy
 
-**File:** `src/strategy/trend_following.py`
+**Status: implemented — `src/strategy/trend_following.py`, `src/strategy/factory.py` updated**
 
-**Design:**
-- Extends `BaseStrategy`.
-- Long-only.
-- SPY initially; QQQ-capable later via config.
-- 1h / intraday bars.
-- Entry condition: EMA trend filter (short EMA above long EMA) AND rolling breakout of recent high (excluding current bar).
-- Exit condition: EMA trend reversal OR configurable stop signal.
-- ATR stop metadata included in `Signal.meta` (not executed here).
-- No broker calls.
-- No execution.
-- No look-ahead.
-- No credentials.
-- Unit tests covering all entry/exit paths, BLOCK conditions, and no-look-ahead.
-- Source scans.
+**Files:** `src/strategy/trend_following.py` (new), `src/strategy/factory.py` (updated),
+`tests/test_trend_following_strategy.py` (new), `tests/test_strategy_factory.py` (updated)
+
+**Implementation:**
+- `TrendFollowing(BaseStrategy)` — MVP strategy module. Long-only; offline/deterministic.
+- Uses `classify_trend()` (EMA trend filter) and `rolling_high(exclude_current=True)` (prior-bar breakout).
+- Entry: trend == "bullish" AND close > prior rolling-high over `breakout_lookback` bars.
+- Exit: trend == "bearish" OR close < fast EMA.
+- ATR stop metadata in `Signal.meta` and `Signal.stop_loss`; no broker execution.
+- `signal.meta` includes: `deterministic=True`, `broker_calls_made=False`,
+  `credentials_read=False`, `order_action_requested=False`, `recommendation_only=True`.
+- Factory updated: `build_strategy("trend_following", params)` returns `TrendFollowing`.
+- ORB remains preserved as legacy/benchmark — behavior unchanged.
+- No modification to `src/main.py`, `src/tools/`, `src/execution/`, or any config.
+- No paper trading, live trading, or scheduler implemented.
+- No automated trading approved.
+- 72 unit tests (`tests/test_trend_following_strategy.py`); 57 factory tests
+  (`tests/test_strategy_factory.py`); full suite 4 482 passed.
 
 ### PR 5 — Risk position sizing helper
 

@@ -3173,3 +3173,87 @@ INVALID_PERIOD_ORDER → MISSING_REQUIRED_COLUMNS → INSUFFICIENT_BARS.
 > No strategy behavior was changed. No live or paper execution was implemented.
 > The Phase A–H safety roadmap remains unchanged and required.
 > Nothing in this repository is financial advice.
+
+---
+
+## Milestone: Refactor PR 4 — TrendFollowing Strategy
+
+**Date:** 2026-05-27
+**Branch:** `claude/add-trend-following-strategy`
+**Files added:** `src/strategy/trend_following.py`, `tests/test_trend_following_strategy.py`
+**Files updated:** `src/strategy/factory.py`, `tests/test_strategy_factory.py`
+**Tests:** 72 new (trend_following); 57 factory (12 new); full suite 4 482 passed
+
+### What was implemented
+
+`TrendFollowing(BaseStrategy)` — MVP long-only trend strategy.
+
+**Entry:** `classify_trend().trend == "bullish"` AND `close > rolling_high(prior breakout_lookback bars, exclude_current=True)`.
+
+**Exit:** `trend == "bearish"` OR `close < fast_ema`.
+
+**ATR stop:** computed as `entry_price - atr_stop_mult * atr` and included in `Signal.stop_loss` and `Signal.meta["atr_stop_price"]`. No broker call is made.
+
+**Factory:** `build_strategy("trend_following", params)` added. Existing ORB/alias routes unchanged.
+
+**Signal metadata (all signals):**
+
+| Field | Value |
+|-------|-------|
+| `strategy_name` | `"trend_following"` |
+| `deterministic` | `True` |
+| `broker_calls_made` | `False` |
+| `credentials_read` | `False` |
+| `order_action_requested` | `False` |
+| `recommendation_only` | `True` |
+
+**Reason strings (fixed, no raw values echoed):**
+
+`BUY_BULLISH_BREAKOUT` · `SELL_BEARISH_TREND` · `SELL_CLOSE_BELOW_FAST_EMA`
+
+### Test classes
+
+| File | Class | Tests | What it covers |
+|------|-------|-------|----------------|
+| `test_trend_following_strategy.py` | `TestConstructor` | 5 | Default/None/empty/explicit params; no mutation |
+| | `TestConstructorValidation` | 17 | Invalid symbol/periods/order/stop/risk/long_only; safe error messages |
+| | `TestInsufficientBars` | 4 | Zero/below/exactly/above minimum bar count |
+| | `TestBuySignal` | 12 | LONG direction; entry price; stop; all required meta fields; safety fields |
+| | `TestNoBreakout` | 3 | No breakout → no BUY; neutral/bearish → no BUY |
+| | `TestNoLookAhead` | 2 | Current-bar high spike excluded; truncated bars |
+| | `TestExitSignal` | 4 | EXIT on bearish; correct reason; safety meta; no exit on flat |
+| | `TestDeterminism` | 2 | Same input → same output; different bars → different signal |
+| | `TestInputNotMutated` | 2 | Bars not mutated; index not mutated |
+| | `TestStrategyIsBaseStrategy` | 4 | Subclass; generate_signal/reset callable; reset no-op |
+| | `TestSourceScans` | 17 | No Alpaca/network/environ/execution/mutation/ledger patterns |
+| `test_strategy_factory.py` | `TestSupportedStrategyNames` | +1 | "trend_following" in supported names |
+| | `TestBuildStrategyTrendFollowing` | 11 | Construction; None/empty params; param passthrough; invalid params; ORB preserved |
+
+### Safety confirmations
+
+- No broker/API access — no Alpaca calls, no HTTP, no credentials, no environment variables
+- No order execution — signals are recommendation-only
+- No live/paper trading — no scheduler, no live runner
+- No position submission/cancellation/replacement/close
+- No `src/main.py` or `src/tools/` modification
+- ORB behavior unchanged — all 45 prior ORB factory tests still pass
+- No look-ahead — `rolling_high(exclude_current=True)` always excludes the current bar's high from the breakout reference level
+
+### Reference
+
+- `src/strategy/trend_following.py` — TrendFollowing strategy
+- `src/strategy/factory.py` — updated factory
+- `tests/test_trend_following_strategy.py` — 72 tests
+- `tests/test_strategy_factory.py` — 57 tests (12 new)
+- `docs/trend_bot_architecture_refactor_plan.md` — PR 4 marked implemented
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> TrendFollowing signals are recommendations only — no execution layer was touched.
+> ORB strategy behavior is unchanged.
+> No strategy is connected to live or paper trading.
+> The Phase A–H safety roadmap remains unchanged and required.
+> Nothing in this repository is financial advice.
