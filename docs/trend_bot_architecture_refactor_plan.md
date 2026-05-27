@@ -188,7 +188,7 @@ No code is changed in this PR.
 | `src/tools/` overrepresented | Many manual live-readiness scripts in `src/tools/`; non-core scripts could move to `scripts/` later |
 | Trend-following incomplete | No `indicators/`, no `analysis/trend.py`, no `TrendFollowing` strategy |
 | Backtest metrics assume 5m bars | `bars_per_year` constant likely hard-codes 5-minute bar count; 1h/1d support needed |
-| No strategy factory | Strategy instantiation is scattered; a factory would centralise selection by name |
+| No strategy factory | ~~Strategy instantiation is scattered~~ — **resolved in PR 1**: `src/strategy/factory.py` added |
 | README may lag architecture | Documentation likely reflects older state of the repository |
 
 ---
@@ -200,13 +200,18 @@ No PR may be skipped. Each requires its own test coverage where applicable.
 
 ### PR 1 — Strategy factory
 
+**Status: implemented — `src/strategy/factory.py`**
+
 **File:** `src/strategy/factory.py`
 
 - Accepts a strategy name string and params dict.
 - Returns an instantiated `BaseStrategy` subclass.
-- Supports at minimum: `"opening_range_breakout"`, `"trend_following"` (stub until PR 4).
+- Supports: `"opening_range_breakout"` and `"orb"` alias.
+- `TrendFollowing` not wired yet — added in PR 4.
 - No behaviour changes to existing ORB backtests.
-- Unit tests: factory returns correct type; unknown name raises clearly.
+- Unit tests: 45 passed (full suite 4209).
+- Source scans confirm no Alpaca, network, environ, or mutation markers.
+- Additive only. ORB preserved as legacy/benchmark. No main.py refactor.
 
 ### PR 2 — Indicators package
 
