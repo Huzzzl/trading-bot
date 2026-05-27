@@ -364,9 +364,10 @@ No PR may be skipped. Each requires its own test coverage where applicable.
 - `paper` mode remains explicitly gated (unchanged gate logic).
 - `live` mode becomes an explicit `NotImplementedError` placeholder — not reachable by default.
 - All existing CLI behaviour preserved; no test regressions.
-- Sub-PRs: 8A (CLI characterization tests ✓ implemented) → 8B (route backtest through runner) →
+- Sub-PRs: 8A (CLI characterization tests ✓ implemented) → 8B (route backtest through runner ✓ implemented) →
   8C (remove `build_engine`) → 8D (paper/live placeholders) → 8E (README update).
 - 8A: 42 tests in `tests/test_main_characterization.py`; full suite 4 726 passed.
+- 8B: 43 tests in `tests/test_main_characterization.py` (+1); full suite 4 727 passed.
 
 ### PR 9 — Tools / scripts isolation
 

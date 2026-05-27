@@ -846,11 +846,34 @@ def main() -> None:
                     cfg.strategy.params["position_size_pct"])
 
     if args.mode in ("backtest", "candidate-b"):
-        engine = build_engine(cfg)
-        results = engine.run()
-        open_positions_count = len(engine._portfolio.positions)
+        from src.backtest.backtest_runner import BacktestRunConfig, run_backtest
 
-        equity_curve = results["equity_curve"]
+        run_config = BacktestRunConfig(
+            strategy_name=cfg.strategy.name,
+            strategy_params=dict(cfg.strategy.params),
+            symbols=list(cfg.symbols),
+            start_date=cfg.backtest.start_date,
+            end_date=cfg.backtest.end_date,
+            bar_interval=cfg.data.bar_interval,
+            initial_capital=cfg.backtest.initial_capital,
+            commission_per_share=cfg.backtest.commission_per_share,
+            slippage_per_share=cfg.backtest.slippage_per_share,
+            position_size_pct=float(cfg.strategy.params.get("position_size_pct", 0.95)),
+            stop_execution=str(cfg.strategy.params.get("stop_execution", "bar_close")),
+            force_exit_time=str(cfg.strategy.params.get("force_exit_time", "15:55")),
+            max_open_positions=cfg.risk.max_open_positions,
+            daily_loss_limit_pct=cfg.risk.daily_loss_limit_pct,
+            daily_loss_action=cfg.risk.daily_loss_action,
+        )
+        raw = YahooDataProvider()
+        data_provider = (
+            CachedMarketDataProvider(raw, cache_dir=cfg.data.cache_dir)
+            if cfg.data.cache_enabled
+            else raw
+        )
+        result = run_backtest(run_config, data_provider=data_provider)
+
+        equity_curve = result.equity_curve
         chart_path   = output_dir / "equity_curve.png"
         BacktestEngine.plot_equity_curve(equity_curve, output_path=chart_path)
 
@@ -858,17 +881,17 @@ def main() -> None:
         if cfg.execution.dry_run_broker:
             from src.execution.fake_broker import FakeBrokerAdapter
             broker = FakeBrokerAdapter(fill_immediately=True)
-            order_results = [broker.submit_order(oi) for oi in results.get("order_intents", [])]
+            order_results = [broker.submit_order(oi) for oi in result.order_intents]
             logger.info("Dry-run broker: submitted %d intents → %d results", len(order_results), len(order_results))
 
         reporter = ReportGenerator(
-            metrics=results["metrics"],
-            trades=results["trades"],
+            metrics=result.metrics,
+            trades=result.trades,
             equity_curve=equity_curve,
             config=cfg,
             output_dir=output_dir,
-            open_positions_count=open_positions_count,
-            order_intents=results.get("order_intents", []),
+            open_positions_count=0,
+            order_intents=result.order_intents,
             order_results=order_results,
         )
         reporter.generate_all()

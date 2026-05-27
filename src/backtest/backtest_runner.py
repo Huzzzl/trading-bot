@@ -75,8 +75,14 @@ class BacktestRunConfig:
     end_date: str
     bar_interval: str = "5m"
     initial_capital: float = 100_000.0
+    commission_per_share: float = 0.005
+    slippage_per_share: float = 0.01
     position_size_pct: float = 0.95
     stop_execution: str = "bar_close"
+    force_exit_time: str = "15:55"
+    max_open_positions: int | None = None
+    daily_loss_limit_pct: float | None = None
+    daily_loss_action: str = "block_new_entries"
 
 
 @dataclass(frozen=True)
@@ -197,10 +203,16 @@ def run_backtest(
 
     portfolio = Portfolio(
         initial_capital=config.initial_capital,
+        commission_per_share=config.commission_per_share,
+        slippage_per_share=config.slippage_per_share,
     )
 
     risk_manager = RiskManager(
+        force_exit_time=config.force_exit_time,
         stop_execution=config.stop_execution,
+        max_open_positions=config.max_open_positions,
+        daily_loss_limit_pct=config.daily_loss_limit_pct,
+        daily_loss_action=config.daily_loss_action,
     )
 
     engine = BacktestEngine(

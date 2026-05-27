@@ -52,10 +52,11 @@ def _default_cfg():
     return load_config(None)
 
 
-def _mock_engine_results() -> dict[str, Any]:
-    """Minimal engine.run() return value used by dispatch tests."""
-    return {
-        "metrics": {
+def _mock_run_backtest_result():
+    """Minimal BacktestRunResult-like object used by dispatch tests."""
+    from src.backtest.backtest_runner import BacktestRunResult
+    return BacktestRunResult(
+        metrics={
             "num_trades": 0,
             "initial_capital": 100_000.0,
             "final_equity":    100_000.0,
@@ -68,10 +69,13 @@ def _mock_engine_results() -> dict[str, Any]:
             "avg_losing_trade":       0.0,
             "total_commission":       0.0,
         },
-        "trades":        [],
-        "equity_curve":  pd.DataFrame({"equity": []}, index=pd.DatetimeIndex([])),
-        "order_intents": [],
-    }
+        trades=[],
+        equity_curve=pd.DataFrame({"equity": []}, index=pd.DatetimeIndex([])),
+        order_intents=[],
+        strategy_name="opening_range_breakout",
+        symbols=["SPY"],
+        bar_interval="5m",
+    )
 
 
 def _apply_common_patches(monkeypatch, tmp_path, mode: str):
@@ -79,15 +83,13 @@ def _apply_common_patches(monkeypatch, tmp_path, mode: str):
     Apply all side-effect patches needed to run main() in tests.
     Returns a dict of useful mock objects.
     """
+    import src.backtest.backtest_runner as _runner_mod
     from src.experiments import sweep_runner as _sweep_mod
     from src.experiments import walk_forward_runner as _wf_mod
 
     cfg = _default_cfg()
 
-    mock_engine = MagicMock()
-    mock_engine.run.return_value = _mock_engine_results()
-    mock_engine._portfolio.positions = {}
-
+    mock_result  = _mock_run_backtest_result()
     mock_reporter   = MagicMock()
     mock_sweeper    = MagicMock()
     mock_wf_runner  = MagicMock()
@@ -95,7 +97,7 @@ def _apply_common_patches(monkeypatch, tmp_path, mode: str):
     monkeypatch.setattr(sys, "argv", ["src.main", "--mode", mode, "--output-dir", str(tmp_path)])
     monkeypatch.setattr(_main_mod, "load_config",       lambda _: cfg)
     monkeypatch.setattr(_main_mod, "configure_logging", lambda **kw: None)
-    monkeypatch.setattr(_main_mod, "build_engine",      lambda c: mock_engine)
+    monkeypatch.setattr(_runner_mod, "run_backtest",    lambda config, *, data_provider: mock_result)
     monkeypatch.setattr(_main_mod.BacktestEngine, "plot_equity_curve", lambda *a, **kw: None)
     monkeypatch.setattr(_main_mod, "ReportGenerator",   lambda **kw: mock_reporter)
     monkeypatch.setattr(_main_mod, "YahooDataProvider", lambda: MagicMock())
@@ -105,7 +107,7 @@ def _apply_common_patches(monkeypatch, tmp_path, mode: str):
 
     return {
         "cfg":        cfg,
-        "engine":     mock_engine,
+        "result":     mock_result,
         "reporter":   mock_reporter,
         "sweeper":    mock_sweeper,
         "wf_runner":  mock_wf_runner,
@@ -332,54 +334,87 @@ class TestMainPaperGate:
 class TestMainModeDispatch:
     """main() routes each --mode to the correct internal path (no network/broker)."""
 
-    def test_backtest_mode_calls_build_engine(self, monkeypatch, tmp_path) -> None:
+    def test_backtest_mode_calls_run_backtest(self, monkeypatch, tmp_path) -> None:
+        import src.backtest.backtest_runner as _runner_mod
+
         cfg = _default_cfg()
         calls: list = []
 
-        mock_engine = MagicMock()
-        mock_engine.run.return_value = _mock_engine_results()
-        mock_engine._portfolio.positions = {}
-
-        def _track(c):
-            calls.append(c)
-            return mock_engine
+        def _track(config, data_provider):
+            calls.append(config)
+            return _mock_run_backtest_result()
 
         monkeypatch.setattr(sys, "argv", ["src.main", "--mode", "backtest",
                                            "--output-dir", str(tmp_path)])
         monkeypatch.setattr(_main_mod, "load_config",       lambda _: cfg)
         monkeypatch.setattr(_main_mod, "configure_logging", lambda **kw: None)
-        monkeypatch.setattr(_main_mod, "build_engine",      _track)
+        monkeypatch.setattr(_runner_mod, "run_backtest",    _track)
         monkeypatch.setattr(_main_mod.BacktestEngine, "plot_equity_curve", lambda *a, **kw: None)
         monkeypatch.setattr(_main_mod, "ReportGenerator",   lambda **kw: MagicMock())
+        monkeypatch.setattr(_main_mod, "YahooDataProvider", lambda: MagicMock())
+        monkeypatch.setattr(_main_mod, "CachedMarketDataProvider", lambda *a, **kw: MagicMock())
 
         _main_mod.main()
         assert len(calls) == 1
 
-    def test_candidate_b_mode_applies_overrides_before_engine(
+    def test_backtest_run_config_core_fields(self, monkeypatch, tmp_path) -> None:
+        import src.backtest.backtest_runner as _runner_mod
+
+        cfg = _default_cfg()
+        captured: list = []
+
+        def _track(config, data_provider):
+            captured.append(config)
+            return _mock_run_backtest_result()
+
+        monkeypatch.setattr(sys, "argv", ["src.main", "--mode", "backtest",
+                                           "--output-dir", str(tmp_path)])
+        monkeypatch.setattr(_main_mod, "load_config",       lambda _: cfg)
+        monkeypatch.setattr(_main_mod, "configure_logging", lambda **kw: None)
+        monkeypatch.setattr(_runner_mod, "run_backtest",    _track)
+        monkeypatch.setattr(_main_mod.BacktestEngine, "plot_equity_curve", lambda *a, **kw: None)
+        monkeypatch.setattr(_main_mod, "ReportGenerator",   lambda **kw: MagicMock())
+        monkeypatch.setattr(_main_mod, "YahooDataProvider", lambda: MagicMock())
+        monkeypatch.setattr(_main_mod, "CachedMarketDataProvider", lambda *a, **kw: MagicMock())
+
+        _main_mod.main()
+        rc = captured[0]
+        assert rc.strategy_name == cfg.strategy.name
+        assert rc.symbols == list(cfg.symbols)
+        assert rc.start_date == cfg.backtest.start_date
+        assert rc.end_date == cfg.backtest.end_date
+        assert rc.bar_interval == cfg.data.bar_interval
+        assert rc.initial_capital == pytest.approx(cfg.backtest.initial_capital)
+        assert rc.position_size_pct == pytest.approx(
+            float(cfg.strategy.params.get("position_size_pct", 0.95))
+        )
+        assert rc.stop_execution == str(cfg.strategy.params.get("stop_execution", "bar_close"))
+
+    def test_candidate_b_mode_applies_overrides_before_run_backtest(
         self, monkeypatch, tmp_path
     ) -> None:
+        import src.backtest.backtest_runner as _runner_mod
+
         cfg = _default_cfg()
-        built_with: list = []
+        captured: list = []
 
-        mock_engine = MagicMock()
-        mock_engine.run.return_value = _mock_engine_results()
-        mock_engine._portfolio.positions = {}
-
-        def _track(c):
-            built_with.append(c)
-            return mock_engine
+        def _track(config, data_provider):
+            captured.append(config)
+            return _mock_run_backtest_result()
 
         monkeypatch.setattr(sys, "argv", ["src.main", "--mode", "candidate-b",
                                            "--output-dir", str(tmp_path)])
         monkeypatch.setattr(_main_mod, "load_config",       lambda _: cfg)
         monkeypatch.setattr(_main_mod, "configure_logging", lambda **kw: None)
-        monkeypatch.setattr(_main_mod, "build_engine",      _track)
+        monkeypatch.setattr(_runner_mod, "run_backtest",    _track)
         monkeypatch.setattr(_main_mod.BacktestEngine, "plot_equity_curve", lambda *a, **kw: None)
         monkeypatch.setattr(_main_mod, "ReportGenerator",   lambda **kw: MagicMock())
+        monkeypatch.setattr(_main_mod, "YahooDataProvider", lambda: MagicMock())
+        monkeypatch.setattr(_main_mod, "CachedMarketDataProvider", lambda *a, **kw: MagicMock())
 
         _main_mod.main()
-        # Candidate-B overrides must be applied before the engine is built
-        assert built_with[0].symbols == ["QQQ"]
+        # Candidate-B overrides must be applied before run_backtest is called
+        assert captured[0].symbols == ["QQQ"]
 
     def test_sweep_mode_calls_sweep_runner(self, monkeypatch, tmp_path) -> None:
         mocks = _apply_common_patches(monkeypatch, tmp_path, "sweep")
