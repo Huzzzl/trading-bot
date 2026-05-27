@@ -3182,7 +3182,7 @@ INVALID_PERIOD_ORDER → MISSING_REQUIRED_COLUMNS → INSUFFICIENT_BARS.
 **Branch:** `claude/add-trend-following-strategy`
 **Files added:** `src/strategy/trend_following.py`, `tests/test_trend_following_strategy.py`
 **Files updated:** `src/strategy/factory.py`, `tests/test_strategy_factory.py`
-**Tests:** 72 new (trend_following); 57 factory (12 new); full suite 4 482 passed
+**Tests:** 87 new (trend_following); 57 factory (12 new); full suite 4 497 passed
 
 ### What was implemented
 
@@ -3225,7 +3225,9 @@ INVALID_PERIOD_ORDER → MISSING_REQUIRED_COLUMNS → INSUFFICIENT_BARS.
 | | `TestDeterminism` | 2 | Same input → same output; different bars → different signal |
 | | `TestInputNotMutated` | 2 | Bars not mutated; index not mutated |
 | | `TestStrategyIsBaseStrategy` | 4 | Subclass; generate_signal/reset callable; reset no-op |
-| | `TestSourceScans` | 17 | No Alpaca/network/environ/execution/mutation/ledger patterns |
+| | `TestSourceScans` | 18 | No Alpaca/network/environ/execution/mutation/ledger patterns; no hardcoded timeframe |
+| | `TestTimeframeParam` | 6 | Stored correctly; default "1h"; all valid values; invalid raises; secret not echoed; used in generate_signal |
+| | `TestEntryCutoffDoesNotBlockExits` | 8 | EXIT emitted after cutoff for bearish and close_below_fast_ema; LONG blocked after cutoff; LONG allowed before cutoff; safety meta; no mutation |
 | `test_strategy_factory.py` | `TestSupportedStrategyNames` | +1 | "trend_following" in supported names |
 | | `TestBuildStrategyTrendFollowing` | 11 | Construction; None/empty params; param passthrough; invalid params; ORB preserved |
 
@@ -3243,7 +3245,7 @@ INVALID_PERIOD_ORDER → MISSING_REQUIRED_COLUMNS → INSUFFICIENT_BARS.
 
 - `src/strategy/trend_following.py` — TrendFollowing strategy
 - `src/strategy/factory.py` — updated factory
-- `tests/test_trend_following_strategy.py` — 72 tests
+- `tests/test_trend_following_strategy.py` — 87 tests
 - `tests/test_strategy_factory.py` — 57 tests (12 new)
 - `docs/trend_bot_architecture_refactor_plan.md` — PR 4 marked implemented
 

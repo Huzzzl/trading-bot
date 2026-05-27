@@ -178,22 +178,11 @@ class TrendFollowing(BaseStrategy):
         if len(bars) < min_required:
             return None
 
-        # --- Guard: entry cutoff ---------------------------------------
-        if self._entry_cutoff_time is not None:
-            try:
-                from zoneinfo import ZoneInfo
-                _eastern = ZoneInfo("America/New_York")
-                bar_hhmm = current_bar.astimezone(_eastern).strftime("%H:%M")
-                if bar_hhmm > self._entry_cutoff_time:
-                    return None
-            except Exception:
-                pass  # if tz conversion fails, do not block
-
         # --- Trend classification (read-only copy inside classify_trend) -
         trend_state = classify_trend(
             bars,
             symbol=symbol,
-            timeframe="1h",
+            timeframe=self._timeframe,
             fast_ema_period=self._fast_ema_period,
             slow_ema_period=self._slow_ema_period,
             atr_period=self._atr_period,
@@ -242,7 +231,7 @@ class TrendFollowing(BaseStrategy):
                 "recommendation_only": True,
             }
 
-        # --- Exit conditions (checked before entry each bar) -----------
+        # --- Exit conditions (always evaluated — not gated by cutoff) --
         if trend_state.trend == "bearish":
             return Signal(
                 direction=SignalDirection.EXIT,
@@ -262,6 +251,17 @@ class TrendFollowing(BaseStrategy):
                 timestamp=current_bar,
                 meta=_meta(_REASON_SELL_BELOW_FAST_EMA),
             )
+
+        # --- Entry cutoff: blocks new LONG entries only ----------------
+        if self._entry_cutoff_time is not None:
+            try:
+                from zoneinfo import ZoneInfo
+                _eastern = ZoneInfo("America/New_York")
+                bar_hhmm = current_bar.astimezone(_eastern).strftime("%H:%M")
+                if bar_hhmm > self._entry_cutoff_time:
+                    return None
+            except Exception:
+                pass  # if tz conversion fails, do not block
 
         # --- Entry condition: bullish trend + prior-bar breakout -------
         if trend_state.trend != "bullish":

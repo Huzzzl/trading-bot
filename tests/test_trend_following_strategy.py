@@ -103,6 +103,12 @@ def _slow_rise_bars(n: int = 20) -> pd.DataFrame:
     return _make_bars(closes[:n])
 
 
+def _pullback_bars(n: int = 20) -> pd.DataFrame:
+    """15 flat + 4 rising + 1 sharp drop: close < fast_ema, trend neutral (not bearish)."""
+    closes = [100.0] * 15 + [110.0, 120.0, 130.0, 140.0, 115.0]
+    return _make_bars(closes[:n])
+
+
 def _call(bars: pd.DataFrame, **kwargs: Any) -> Signal | None:
     strat = _make_strategy(**kwargs)
     ts = bars.index[-1]
@@ -579,3 +585,116 @@ class TestSourceScans:
 
     def test_no_ledger_write(self) -> None:
         assert "ledger" not in self._code()
+
+    def test_no_hardcoded_1h_timeframe(self) -> None:
+        """timeframe must come from self._timeframe, not a literal."""
+        assert 'timeframe="1h"' not in self._code()
+        assert "timeframe='1h'" not in self._code()
+
+
+# ---------------------------------------------------------------------------
+# TestTimeframeParam
+# ---------------------------------------------------------------------------
+
+
+class TestTimeframeParam:
+    def test_default_timeframe_is_1h(self) -> None:
+        assert TrendFollowing()._timeframe == "1h"
+
+    def test_explicit_timeframe_stored(self) -> None:
+        assert TrendFollowing(params={"timeframe": "1d"})._timeframe == "1d"
+
+    def test_all_valid_timeframes_accepted(self) -> None:
+        for tf in ("1m", "5m", "15m", "30m", "1h", "2h", "4h", "1d", "1w"):
+            s = TrendFollowing(params={"timeframe": tf})
+            assert s._timeframe == tf
+
+    def test_invalid_timeframe_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid strategy parameters"):
+            TrendFollowing(params={"timeframe": "bad"})
+
+    def test_invalid_timeframe_secret_not_in_message(self) -> None:
+        secret = "super_secret_timeframe_xyz"
+        with pytest.raises(ValueError, match="invalid strategy parameters") as exc_info:
+            TrendFollowing(params={"timeframe": secret})
+        assert secret not in str(exc_info.value)
+
+    def test_timeframe_used_in_generate_signal(self) -> None:
+        """Strategy with valid non-default timeframe produces a signal without error."""
+        bars = _bullish_bars(n=20)
+        strat = _make_strategy(timeframe="1d")
+        ts = bars.index[-1]
+        result = strat.generate_signal(SYM, bars, ts)
+        # Must not raise; signal type must be valid
+        assert result is None or isinstance(result, Signal)
+
+
+# ---------------------------------------------------------------------------
+# TestEntryCutoffDoesNotBlockExits
+# ---------------------------------------------------------------------------
+
+# Timestamps used for cutoff tests: all in US Eastern time.
+_TS_BEFORE_CUTOFF = pd.Timestamp("2024-01-15 09:00:00", tz="America/New_York")  # 09:00 ET
+_TS_AFTER_CUTOFF  = pd.Timestamp("2024-01-15 14:00:00", tz="America/New_York")  # 14:00 ET
+_CUTOFF = "13:00"  # 13:00 ET
+
+
+class TestEntryCutoffDoesNotBlockExits:
+    """entry_cutoff_time must gate new LONG entries only; EXIT signals must pass through."""
+
+    def _strat(self) -> TrendFollowing:
+        return _make_strategy(entry_cutoff_time=_CUTOFF)
+
+    def test_bearish_after_cutoff_returns_exit(self) -> None:
+        bars = _bearish_bars(n=20)
+        result = self._strat().generate_signal(SYM, bars, _TS_AFTER_CUTOFF)
+        assert result is not None
+        assert result.direction == SignalDirection.EXIT
+
+    def test_bearish_after_cutoff_reason_is_sell_bearish(self) -> None:
+        bars = _bearish_bars(n=20)
+        result = self._strat().generate_signal(SYM, bars, _TS_AFTER_CUTOFF)
+        assert result is not None
+        assert result.meta["reason"] == "SELL_BEARISH_TREND"
+
+    def test_close_below_fast_ema_after_cutoff_returns_exit(self) -> None:
+        """Neutral trend with close < fast EMA → EXIT even after cutoff."""
+        bars = _pullback_bars(n=20)
+        result = self._strat().generate_signal(SYM, bars, _TS_AFTER_CUTOFF)
+        assert result is not None
+        assert result.direction == SignalDirection.EXIT
+
+    def test_close_below_fast_ema_after_cutoff_reason(self) -> None:
+        bars = _pullback_bars(n=20)
+        result = self._strat().generate_signal(SYM, bars, _TS_AFTER_CUTOFF)
+        assert result is not None
+        assert result.meta["reason"] == "SELL_CLOSE_BELOW_FAST_EMA"
+
+    def test_bullish_breakout_after_cutoff_returns_none(self) -> None:
+        """Bullish breakout after entry cutoff → no new LONG."""
+        bars = _bullish_bars(n=20)
+        result = self._strat().generate_signal(SYM, bars, _TS_AFTER_CUTOFF)
+        assert result is None or result.direction != SignalDirection.LONG
+
+    def test_bullish_breakout_before_cutoff_returns_long(self) -> None:
+        """Bullish breakout before entry cutoff → LONG still works."""
+        bars = _bullish_bars(n=20)
+        result = self._strat().generate_signal(SYM, bars, _TS_BEFORE_CUTOFF)
+        assert result is not None
+        assert result.direction == SignalDirection.LONG
+
+    def test_no_cutoff_exit_has_safety_meta(self) -> None:
+        bars = _bearish_bars(n=20)
+        result = self._strat().generate_signal(SYM, bars, _TS_AFTER_CUTOFF)
+        assert result is not None
+        meta = result.meta
+        assert meta["broker_calls_made"] is False
+        assert meta["credentials_read"] is False
+        assert meta["order_action_requested"] is False
+        assert meta["recommendation_only"] is True
+
+    def test_cutoff_does_not_mutate_bars(self) -> None:
+        bars = _bearish_bars(n=20)
+        close_before = bars["close"].tolist()
+        self._strat().generate_signal(SYM, bars, _TS_AFTER_CUTOFF)
+        assert bars["close"].tolist() == close_before
