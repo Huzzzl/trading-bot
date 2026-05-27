@@ -264,7 +264,7 @@ No PR may be skipped. Each requires its own test coverage where applicable.
 - No modification to `src/main.py`, `src/tools/`, `src/execution/`, or any config.
 - No paper trading, live trading, or scheduler implemented.
 - No automated trading approved.
-- 72 unit tests (`tests/test_trend_following_strategy.py`); 57 factory tests
+- 87 unit tests (`tests/test_trend_following_strategy.py`); 57 factory tests
   (`tests/test_strategy_factory.py`); full suite 4 497 passed.
 
 ### PR 5 — Risk position sizing helper
