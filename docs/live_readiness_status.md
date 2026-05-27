@@ -2364,3 +2364,123 @@ A future PR must add:
 > it does not recommend hold or sell.
 > All position decisions remain entirely manual.
 
+---
+
+## Milestone: Manual Position Status Checker Read-Only — Real Adapter Complete
+
+**Status:** Complete
+
+Real `AlpacaManualPositionStatusBroker` adapter implemented:
+- `src/tools/manual_position_status_checker_readonly.py` — real adapter added
+- `tests/test_manual_position_status_checker_readonly.py` — 131 tests
+
+**CLI requires `--allow-live-broker-api-readonly` flag.**
+**Without the flag: CLI always returns BLOCKED ("readonly broker api flag not set").**
+**Without the flag: credentials are never read, TradingClient is never constructed.**
+**With the flag + valid artifacts + valid credentials: real Alpaca read-only calls are made.**
+**No Alpaca SDK imported at module level.**
+**Alpaca SDK import is lazy — inside `AlpacaManualPositionStatusBroker.__init__` only.**
+**No orders submitted, sold, cancelled, replaced, or closed.**
+**No `cancel_order`, `replace_order`, `close_position`, `close_all_positions` methods.**
+**No live ledger written.**
+**No config mutated.**
+**No automated position decision made.**
+**Broker exception text redacted — never in output, violations, blocker, or stdout.**
+**All tests use mock `TradingClient` — no real Alpaca calls in any test.**
+
+### `AlpacaManualPositionStatusBroker` — what it does
+
+`AlpacaManualPositionStatusBroker` wraps `alpaca-py` `TradingClient(paper=False)` and
+exposes exactly three read-only methods:
+
+- `get_position(symbol)` — calls `get_open_position`; returns `{"position_exists": True}` or `None` (404-like signals → `None`, not error)
+- `get_open_orders(symbol)` — calls `get_orders` with `status=OPEN, symbols=[symbol]`; returns `[{}]` per order (no IDs/prices)
+- `get_market_session_status()` — calls `get_clock`; returns allowlisted session string or `None`
+
+| Property | Value |
+|----------|-------|
+| `TradingClient` mode | `paper=False` — real live account |
+| SDK import | Lazy — inside `__init__` only; no module-level import |
+| `cancel_order` / `replace_order` / `close_position` / `close_all_positions` | Absent |
+| Orders endpoint (POST/PATCH/DELETE) | Not used |
+| Broker exception text | Redacted in all output — raw exception never written |
+| `position_observed` / `open_order_observed` | Boolean flags only — no IDs/prices/quantities |
+| `market_session_status` | Allowlisted: `"open"`, `"closed"`, `"pre_market"`, `"after_hours"`, or `null` |
+| Credentials read | Only after all gates pass and `--allow-live-broker-api-readonly` present |
+
+### Gate sequence (all must pass before credentials read or TradingClient constructed)
+
+| Gate | Blocker on failure |
+|------|--------------------|
+| `credential_guard` artifact present and `result="PASS"` | BLOCKED, `credentials_read=false` |
+| `operator_override` artifact present and `result="PASS"` | BLOCKED, `credentials_read=false` |
+| `symbol` exactly `"SPY"` | BLOCKED, `credentials_read=false` |
+| `--allow-live-broker-api-readonly` flag present | BLOCKED ("readonly broker api flag not set"), `credentials_read=false` |
+| `ALPACA_LIVE_API_KEY` and `ALPACA_LIVE_SECRET_KEY` non-empty in env | BLOCKED ("credentials not found in environment"), `credentials_read=true` |
+| `TradingClient` construction succeeds | BLOCKED ("live broker construction failed (details redacted)"), `credentials_read=true`, `broker_calls_made=false` |
+| Broker read-only calls succeed | BLOCKED (on exception), exception text redacted |
+
+### Market session status logic
+
+| `clock.is_open` | `hours_until_open` | Returned value |
+|-----------------|-------------------|----------------|
+| `True` | (any) | `"open"` |
+| `False` | `<= 0` | `None` |
+| `False` | `<= 5.75` | `"pre_market"` |
+| `False` | `13.25 – 18.25` | `"after_hours"` |
+| `False` | all other values | `"closed"` |
+
+Any value outside the allowlist from a broker (including injected test brokers) → BLOCKED, raw value not echoed.
+
+### Test coverage
+
+131 unit tests in `tests/test_manual_position_status_checker_readonly.py`.
+Full suite: 4068 tests passed.
+All tests use mock `_FakeTradingClient` / `_make_fixed_client` — no real Alpaca calls in any test.
+
+New test classes added:
+- `TestRealAdapterFlagAbsent` (5) — without flag: BLOCKED, `credentials_read=false`, no TradingClient, no broker calls
+- `TestRealAdapterGatesFail` (4) — flag present but artifact/symbol gates fail: `credentials_read=false`
+- `TestRealAdapterCredentialsMissing` (4) — flag + gates pass but env vars absent: BLOCKED, `credentials_read=true`
+- `TestRealAdapterConstruction` (5) — TradingClient constructed with `paper=False`, api_key passed, `credentials_read=true`, `QueryOrderStatus.OPEN` passed
+- `TestRealAdapterHappyPath` (6) — PASS, `position_observed=true/false`, `open_order_observed=true/false`, mutation fields false
+- `TestRealAdapterNoPositionSignal` (3) — 404-style exceptions → `position_observed=false`, `result="PASS"` (not BLOCKED)
+- `TestRealAdapterMarketSession` (5) — clock open/pre_market/after_hours/closed/raises → correct session or BLOCKED/redacted
+- `TestRealAdapterExceptionRedaction` (4) — position/orders/clock/construction exceptions with secret → BLOCKED, secret absent from all output
+- `TestRealAdapterBrokerConstructionFails` (4) — TradingClient raises → BLOCKED, `credentials_read=true`, `broker_calls_made=false`, never raises
+- `TestCLIRealAdapterFlag` (3) — CLI with/without flag: correct blocker messages, PASS on mocked success
+
+Source scan tests updated:
+- `test_no_alpaca_import` → `test_no_module_level_alpaca_import` (allows lazy imports inside indented bodies)
+- `test_no_os_environ` → `test_no_module_level_os_environ_get` (allows `os.environ.get()` inside indented function bodies)
+
+### Safety invariants confirmed at this milestone
+
+- CLI without `--allow-live-broker-api-readonly` is always BLOCKED — tested
+- Credentials are read only after all gates pass and the flag is present — tested
+- `TradingClient` is constructed only after all gates pass — tested with tracking class
+- `paper=False` enforced — tested
+- No real Alpaca endpoint was contacted by any test or by this PR
+- No credential values were read, stored, printed, or written to any artifact in this PR
+- `cancel_order`, `replace_order`, `close_position`, `close_all_positions` absent from source — source-scanned
+- No POST/PATCH/DELETE calls in source — source-scanned
+- Broker exception text is redacted in all output — tested with secret injection
+- `position_observed` and `open_order_observed` are boolean flags only — no IDs/prices/quantities
+- `market_session_status` is allowlisted — any other return value → BLOCKED, raw value not echoed
+- `close_position_reachable=false` and `position_decision_made=false` hardcoded always
+- No automated position decision made
+- Real run not yet performed — requires operator with live credentials and explicit flag
+
+### Warning
+
+> **This milestone does not approve real trading.**
+> **This milestone does not approve live order submission.**
+> **No real Alpaca endpoint was called in this PR (tests use mocks only).**
+> The `--allow-live-broker-api-readonly` flag is required for any live API
+> contact. A PASS from this tool is a status check only — it does not
+> decide whether to hold or sell any position (that remains manual), does
+> not remove `config_safety`, and does not authorize any order submission.
+> `cancel_order`, `replace_order`, `close_position`, and `close_all_positions`
+> are absent from the adapter source.
+> Emergency actions remain manual via the Alpaca broker UI only.
+

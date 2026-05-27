@@ -2,7 +2,7 @@
 
 Design document and implementation status for the manual read-only position
 status checker. Mock-only core implemented in PR #135.
-Real Alpaca adapter requires a future PR with `--allow-live-broker-api-readonly`.
+Real Alpaca adapter implemented — gated behind `--allow-live-broker-api-readonly`.
 
 **This document does NOT trade.**
 **This document does NOT submit, sell, cancel, replace, or close positions.**
@@ -116,10 +116,10 @@ Any implementation must preserve the existing gate order exactly:
 | `credential_guard` artifact present and `result="PASS"` | 1 | BLOCKED, `credentials_read=false` |
 | `operator_override` artifact present and `result="PASS"` | 2 | BLOCKED, `credentials_read=false` |
 | `symbol` exactly `"SPY"` | 3 | BLOCKED, `credentials_read=false` |
-| `--allow-live-broker-api-readonly` flag present | 4 | BLOCKED, `credentials_read=false` |
-| `ALPACA_LIVE_API_KEY` and `ALPACA_LIVE_SECRET_KEY` non-empty | 5 | BLOCKED, `credentials_read=true` |
-| `TradingClient` construction succeeds | 6 | BLOCKED, `broker_calls_made=false` |
-| Broker read-only calls succeed | 7 | BLOCKED (on exception), redacted |
+| `--allow-live-broker-api-readonly` flag present (gate 4) | 4 | BLOCKED (`"readonly broker api flag not set"`), `credentials_read=false` |
+| `ALPACA_LIVE_API_KEY` and `ALPACA_LIVE_SECRET_KEY` non-empty (gate 5 — credential read) | 5 | BLOCKED (`"credentials not found in environment"`), `credentials_read=true` |
+| `TradingClient` construction succeeds (gate 6) | 6 | BLOCKED (`"live broker construction failed (details redacted)"`), `credentials_read=true`, `broker_calls_made=false` |
+| Broker read-only calls succeed (gate 7) | 7 | BLOCKED (on exception), exception text redacted |
 
 Credentials must be read only after all gates 1–4 pass.
 `TradingClient` must be constructed only after credentials are confirmed non-empty.
