@@ -170,13 +170,18 @@ Each sub-PR is independently reviewable and must not reduce the passing test cou
 
 ### PR 8A — CLI parser tests for current `main.py` behaviour
 
-**Goal:** Establish a regression harness before touching any code.
+**Status: implemented — `tests/test_main_characterization.py`**
 
-- Add `tests/test_main_cli.py` covering `parse_args()` and mode routing.
-- Confirm that `--mode backtest` (default), `--mode candidate-b`, `--mode sweep`,
-  `--mode walk-forward` all reach their respective dispatch branches.
-- Confirm that an unknown mode is rejected by argparse with a non-zero exit code.
-- No `src/main.py` changes.
+- `tests/test_main_characterization.py` added: 42 characterization tests across 6 classes
+  (`TestMainImport`, `TestParseArgs`, `TestCandidateBOverrides`, `TestApplyCandidateB`,
+  `TestMainPaperGate`, `TestMainModeDispatch`, `TestSourceCharacterization`).
+- Covers: import safety; all 4 current modes accepted; `--mode live` and `--mode paper`
+  rejected; default mode/output-dir/config; `apply_candidate_b` constants and no-mutation;
+  paper gate raises `NotImplementedError` when disabled; backtest dispatch calls
+  `build_engine`; candidate-b applies overrides before engine build; sweep/walk-forward
+  route to their respective runners; Alpaca import not at module top level.
+- No `src/main.py` changes.  No broker/API/credentials/live/paper trading.
+- Full suite: 4 726 passed.
 
 ### PR 8B — Route `backtest` + `candidate-b` modes through `backtest_runner`
 

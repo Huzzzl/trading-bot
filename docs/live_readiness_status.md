@@ -3580,3 +3580,55 @@ git diff origin/main...HEAD -- src tests output config
 > No strategy is connected to live or paper trading.
 > The Phase A–H safety roadmap remains unchanged and required.
 > Nothing in this repository is financial advice.
+
+---
+
+## Milestone — Refactor PR 8A: add-main-characterization-tests
+
+**Date:** 2026-05-27
+**Branch:** `claude/add-main-characterization-tests`
+**Files added:** `tests/test_main_characterization.py`
+**Files updated:** `docs/main_dispatcher_slimdown_design.md`, `docs/trend_bot_architecture_refactor_plan.md`, `docs/live_readiness_status.md`
+**Tests:** 42 new; full suite 4 726 passed
+**Type:** Test + docs. No `src/main.py`, `src/backtest/`, `config/`, or `output/` changes.
+
+### What was implemented
+
+Characterization test suite locking current `src/main.py` behaviour before the PR 8
+refactor.  No production code was changed.
+
+### Test classes
+
+| File | Class | Tests | What it covers |
+|------|-------|-------|----------------|
+| `test_main_characterization.py` | `TestMainImport` | 6 | Module has expected callables; `AlpacaBrokerAdapter` not a module-level name |
+| | `TestParseArgs` | 13 | All 4 current modes accepted; `--mode live` and `--mode paper` rejected; defaults; custom args; `--help` exits 0 |
+| | `TestCandidateBOverrides` | 4 | Hardcoded constants: `QQQ`, `09:45`, `close`, `0.50` |
+| | `TestApplyCandidateB` | 6 | All 4 overrides applied; original config not mutated; returns different object |
+| | `TestMainPaperGate` | 3 | Default `execution.mode` is `"backtest"`; `paper_trading_enabled` is `False`; `NotImplementedError` when paper enabled=False but mode=paper |
+| | `TestMainModeDispatch` | 5 | `backtest` calls `build_engine`; `candidate-b` applies overrides first; `sweep` calls `SweepRunner`; `walk-forward` calls `WalkForwardRunner`; Alpaca not touched in backtest path |
+| | `TestSourceCharacterization` | 5 | All 4 mode strings in source; `alpaca_broker` not imported at module top level |
+
+### Safety confirmations
+
+- No broker/API access — no Alpaca calls, no HTTP, no credentials, no env vars
+- Paper execution path not triggered in any test (all tests use mocked `load_config`)
+- No order submission — all dispatch tests mock `build_engine` and `ReportGenerator`
+- No `src/main.py`, `src/backtest/`, `src/strategy/`, `src/execution/broker*`, config, or output changes
+- `test_backtest_mode_does_not_touch_alpaca` explicitly asserts Alpaca is never instantiated
+
+### Reference
+
+- `tests/test_main_characterization.py` — 42 characterization tests
+- `docs/main_dispatcher_slimdown_design.md` — PR 8A marked implemented
+- `docs/trend_bot_architecture_refactor_plan.md` — sub-PR 8A ✓
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> These are characterization tests only — no production behaviour was changed.
+> No strategy is connected to live or paper trading.
+> The Phase A–H safety roadmap remains unchanged and required.
+> Nothing in this repository is financial advice.
