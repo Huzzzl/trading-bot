@@ -163,6 +163,7 @@ class BacktestEngine:
             trades=self._portfolio.trades,
             equity_curve=equity_curve,
             initial_capital=self._portfolio.initial_capital,
+            interval=self._bar_interval,
         )
 
         logger.info("\n%s", format_metrics(metrics))

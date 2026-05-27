@@ -3354,3 +3354,85 @@ Fractional shares (e.g., 1.5) are rejected in `calculate_notional`; integer-like
 > No strategy is connected to live or paper trading.
 > The Phase A–H safety roadmap remains unchanged and required.
 > Nothing in this repository is financial advice.
+
+---
+
+## Milestone — Refactor PR 6: fix-backtest-metrics-annualization
+
+**Date:** 2026-05-27
+**Branch:** `claude/fix-backtest-metrics-annualization`
+**Files updated:** `src/backtest/metrics.py`, `src/backtest/engine.py`
+**Files added:** `tests/test_backtest_metrics.py`
+**Tests:** 41 new; full suite 4 617 passed
+
+### What was implemented
+
+Interval-aware Sharpe-ratio annualisation for backtest metrics, with Yahoo-compatible interval aliases.
+
+**Root cause:** `compute_metrics()` hardcoded `bars_per_year = 252 * 78` (5-minute bars).
+1h and 1d strategies silently used the wrong annualisation factor. Additionally, `BacktestEngine`
+stores `bar_interval="60m"` when Yahoo data is requested with the 60-minute string, but
+`bars_per_year_for_interval` did not accept `"60m"`, which would raise at metrics time.
+
+**Fix:**
+- `bars_per_year_for_interval(interval: str) → int` — new public helper. Returns the number
+  of bars per trading year for each supported interval. Uses US equity regular-session
+  assumptions: 252 trading days, 6.5 hours/day, 390 minutes/day.
+  For hourly intervals, only complete bars within the session are counted.
+  `"60m"` accepted as a Yahoo-compatible alias for `"1h"`.
+  Unknown interval raises `ValueError("invalid interval")`; raw value never echoed.
+- `compute_metrics(...)` gains `interval: str = "5m"` — default preserves all existing
+  callers. Sharpe ratio now uses `bars_per_year_for_interval(interval)`.
+- `BacktestEngine.run()` now passes `interval=self._bar_interval` to `compute_metrics()`.
+
+| Interval | Bars/year | Basis | Note |
+|----------|-----------|-------|------|
+| `"1m"` | 98 280 | 252 × 390 min/day | |
+| `"2m"` | 49 140 | 252 × 195 bars/day | Yahoo-supported |
+| `"5m"` | 19 656 | 252 × 78 bars/day | |
+| `"15m"` | 6 552 | 252 × 26 bars/day | |
+| `"30m"` | 3 276 | 252 × 13 bars/day | |
+| `"60m"` | 1 512 | 252 × 6 complete bars/day | Yahoo alias for `"1h"` |
+| `"1h"` | 1 512 | 252 × 6 complete bars/day | |
+| `"90m"` | 1 008 | 252 × 4 bars/day | Yahoo-supported; floor(390/90)=4 |
+| `"2h"` | 756 | 252 × 3 complete bars/day | |
+| `"4h"` | 252 | 252 × 1 complete bar/day | |
+| `"1d"` | 252 | 252 trading days | |
+
+**Unchanged metrics** — `total_return_pct`, `annualized_return_pct` (CAGR, calendar-based),
+`max_drawdown_pct`, `num_trades`, win-rate, avg win/loss, commission.
+
+### Test classes
+
+| File | Class | Tests | What it covers |
+|------|-------|-------|----------------|
+| `test_backtest_metrics.py` | `TestBarsPerYearForInterval` | 13 | All 11 intervals (incl. `"2m"`, `"60m"`, `"90m"`); invalid raises; secret not echoed |
+| | `TestComputeMetricsInterval` | 11 | Default=5m; Sharpe changes with interval; 1d uses 252 exactly; 1h uses 1512 exactly; 60m matches 1h Sharpe; total_return/max_dd/trade_count unchanged; deterministic; no mutation; empty curve |
+| | `TestSourceScans` | 17 | No Alpaca/network/environ/execution/mutation/ledger markers |
+
+### Safety confirmations
+
+- No broker/API access — no Alpaca calls, no HTTP, no credentials, no environment variables
+- No order execution — metrics are read-only computations on completed backtest data
+- No live/paper trading — no scheduler, no live runner
+- No `src/main.py`, `src/tools/`, `src/execution/`, `src/portfolio/`, `src/strategy/` changes
+- No backtest execution behaviour changed — engine loop, trade logic, and portfolio unchanged
+- No look-ahead — metrics compute on already-completed backtest output
+- Existing `test_backtest.py` metrics tests all still pass
+
+### Reference
+
+- `src/backtest/metrics.py` — updated metrics module
+- `src/backtest/engine.py` — passes `interval=self._bar_interval` to `compute_metrics`
+- `tests/test_backtest_metrics.py` — 41 tests
+- `docs/trend_bot_architecture_refactor_plan.md` — PR 6 marked implemented
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> Metrics functions are pure read-only computations — no execution layer was touched.
+> No strategy is connected to live or paper trading.
+> The Phase A–H safety roadmap remains unchanged and required.
+> Nothing in this repository is financial advice.

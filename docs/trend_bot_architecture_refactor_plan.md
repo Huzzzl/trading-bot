@@ -289,13 +289,41 @@ No PR may be skipped. Each requires its own test coverage where applicable.
 
 ### PR 6 — Metrics annualisation fix
 
-**File:** `src/backtest/metrics.py` (update existing)
+**Status: implemented — `src/backtest/metrics.py` updated, `src/backtest/engine.py` updated**
 
-- Add `bars_per_year_for_interval(interval: str) → int`.
-- Support `"1h"` (≈ 1560 bars/year for US equities) and `"1d"` (≈ 252 bars/year).
-- Preserve all existing metric tests.
-- Update Sharpe/annualisation calcs to accept interval parameter.
-- No behaviour change for existing callers unless explicitly migrated.
+**Files:** `src/backtest/metrics.py` (updated), `src/backtest/engine.py` (updated),
+`tests/test_backtest_metrics.py` (new)
+
+**Implementation:**
+- `bars_per_year_for_interval(interval: str) → int` — pure helper, US equity regular-session
+  assumptions (252 trading days, 6.5 h/day, 390 min/day). For hourly intervals, only complete
+  bars within the session are counted (1h → 6/day; 2h → 3/day; 4h → 1/day).
+  Unknown interval raises `ValueError("invalid interval")`; raw value never echoed.
+- `compute_metrics(...)` gains `interval: str = "5m"` parameter. Sharpe ratio now uses
+  `bars_per_year_for_interval(interval)` instead of the hardcoded `252 * 78` constant.
+  Default `"5m"` preserves all existing callers unchanged.
+- `BacktestEngine.run()` now passes `interval=self._bar_interval` to `compute_metrics`.
+  1h and 1d backtests no longer silently use the 5m annualisation factor.
+- `total_return_pct`, `max_drawdown_pct`, `annualized_return_pct` (CAGR, calendar-based),
+  and all trade statistics are unchanged — they are not bar-interval-dependent.
+- No backtest execution behaviour changed. No strategy behaviour changed.
+- No broker/API access. No live/paper trading. No environment variable access.
+
+| Interval | Bars/year | Calculation | Note |
+|----------|-----------|-------------|------|
+| `"1m"` | 98 280 | 252 × 390 | |
+| `"2m"` | 49 140 | 252 × 195 | Yahoo-supported |
+| `"5m"` | 19 656 | 252 × 78 | |
+| `"15m"` | 6 552 | 252 × 26 | |
+| `"30m"` | 3 276 | 252 × 13 | |
+| `"60m"` | 1 512 | 252 × 6 | Yahoo alias for `"1h"` |
+| `"1h"` | 1 512 | 252 × 6 (6 complete bars/day) | |
+| `"90m"` | 1 008 | 252 × 4 | Yahoo-supported; floor(390/90)=4 |
+| `"2h"` | 756 | 252 × 3 | |
+| `"4h"` | 252 | 252 × 1 | |
+| `"1d"` | 252 | 252 | |
+
+- 41 unit tests in `tests/test_backtest_metrics.py`; full suite 4 617 passed.
 
 ### PR 7 — Backtest runner integration
 
