@@ -2940,3 +2940,79 @@ MVP goal, covering:
 > All refactor PRs must be individually reviewed before merging.
 > The Phase A–H safety roadmap remains unchanged and required.
 > Nothing in this repository is financial advice.
+
+---
+
+## Milestone: Strategy Factory Added — Refactor PR 1 Complete
+
+**Branch:** `claude/add-strategy-factory`
+**Status:** Complete
+
+`src/strategy/factory.py` and `tests/test_strategy_factory.py` added.
+
+**No Alpaca endpoint was contacted.**
+**No credentials were read.**
+**No environment variables were accessed.**
+**No order was submitted, sold, cancelled, replaced, or closed.**
+**No live ledger was written.**
+**No config was mutated.**
+**No live or paper trading was implemented.**
+**No automated trading was approved.**
+**No main.py refactor was done.**
+**No tools were moved.**
+**No ORB behavior was changed.**
+
+### What was added
+
+| File | Description |
+|------|-------------|
+| `src/strategy/factory.py` | `build_strategy(name, params) → BaseStrategy`; `supported_strategy_names()` |
+| `tests/test_strategy_factory.py` | 45 tests |
+
+### Factory contract
+
+- `build_strategy("opening_range_breakout", params)` → `OpeningRangeBreakout`
+- `build_strategy("orb", params)` → `OpeningRangeBreakout` (alias)
+- `params=None` treated as empty dict
+- Caller's params dict never mutated
+- Unknown name → `ValueError("unknown strategy name")` — raw name not echoed
+- Invalid params → `ValueError("invalid strategy parameters")` — raw values not echoed
+- No Alpaca import; no network; no environ; no execution layer imports
+
+### Test coverage
+
+| Metric | Value |
+|--------|-------|
+| Targeted tests | 45 passed |
+| Full suite | 4209 passed |
+| Real broker calls | None |
+| Credentials read | None |
+
+### Safety invariants confirmed
+
+| Invariant | Confirmed |
+|-----------|----------|
+| No Alpaca SDK imported | ✓ (source scan) |
+| No network library imports | ✓ (source scan) |
+| No environment variable access | ✓ (source scan) |
+| No execution layer imports | ✓ (source scan) |
+| No submit/cancel/replace/close calls | ✓ (source scan) |
+| No POST/PATCH/DELETE markers | ✓ (source scan) |
+| Params dict not mutated | ✓ (TestParamsNotMutated) |
+| Raw values not echoed in errors | ✓ (TestUnknownStrategyName, TestInvalidParams) |
+| ORB behavior unchanged | ✓ (full suite 4209 passed) |
+
+### Reference
+
+- `src/strategy/factory.py` — factory source
+- `tests/test_strategy_factory.py` — 45 tests
+- `docs/trend_bot_architecture_refactor_plan.md` — PR 1 marked implemented
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> ORB behavior is unchanged. No live or paper execution was implemented.
+> The Phase A–H safety roadmap remains unchanged and required.
+> Nothing in this repository is financial advice.
