@@ -353,14 +353,19 @@ No PR may be skipped. Each requires its own test coverage where applicable.
 
 ### PR 8 — Slim `main.py`
 
-**File:** `src/main.py` (refactor existing)
+**Status: designed — `docs/main_dispatcher_slimdown_design.md`**
+
+**File:** `src/main.py` (refactor existing) — implementation split into sub-PRs 8A–8E
 
 - `main.py` becomes a dispatcher only: parse mode, delegate to runner.
-- Modes: `backtest`, `paper` (gated), `live` (disabled placeholder), `sweep`, `walk-forward`.
-- Heavy logic moves into dedicated runner modules.
-- Live mode remains fail-closed: no automation without explicit gate.
-- All existing CLI behaviour preserved.
-- No test regressions.
+- Backtest mode (`backtest`, `candidate-b`) routes through `run_backtest()` in
+  `src/backtest/backtest_runner.py`; `build_engine()` in `main.py` is removed.
+- `sweep` and `walk-forward` continue to delegate to `SweepRunner` / `WalkForwardRunner`.
+- `paper` mode remains explicitly gated (unchanged gate logic).
+- `live` mode becomes an explicit `NotImplementedError` placeholder — not reachable by default.
+- All existing CLI behaviour preserved; no test regressions.
+- Sub-PRs: 8A (CLI regression tests) → 8B (route backtest through runner) →
+  8C (remove `build_engine`) → 8D (paper/live placeholders) → 8E (README update).
 
 ### PR 9 — Tools / scripts isolation
 

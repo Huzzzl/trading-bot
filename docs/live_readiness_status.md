@@ -3507,3 +3507,76 @@ callable entry point with typed, immutable configuration and result objects.
 > No strategy is connected to live or paper trading.
 > The Phase A–H safety roadmap remains unchanged and required.
 > Nothing in this repository is financial advice.
+
+---
+
+## Milestone — Refactor PR 8 Design: Main Dispatcher Slimdown Designed
+
+**Date:** 2026-05-27
+**Branch:** `claude/docs-design-main-dispatcher-slimdown`
+**Files added:** `docs/main_dispatcher_slimdown_design.md`
+**Files updated:** `docs/trend_bot_architecture_refactor_plan.md`, `docs/live_readiness_status.md`
+**Type:** Docs-only. No `src/`, `tests/`, `output/`, or `config/` changes.
+
+### What was designed
+
+Design for slimming `src/main.py` (903 lines) into a thin dispatcher that delegates
+to `backtest_runner`, `SweepRunner`, `WalkForwardRunner`, and fail-closed paper/live
+gates.
+
+**Current problem:**
+- `main.py` constructs `BacktestEngine`, `Portfolio`, and `RiskManager` directly in
+  `build_engine()`, duplicating logic now handled by `backtest_runner.py`.
+- Mode dispatch is spread across 60+ lines with no single dispatch table.
+- `engine._portfolio.positions` (private field access) is used on line 851.
+- No explicit live-mode rejection — live is currently blocked only by argparse choices.
+
+**Target (after all sub-PRs):**
+- `main.py` is a dispatcher only: parse CLI, load config, call the appropriate runner.
+- Backtest modes route through `run_backtest(BacktestRunConfig(...), data_provider=...)`.
+- `build_engine()` removed from `main.py`.
+- `--mode live` becomes an explicit `NotImplementedError` (fail-closed).
+- Paper gate logic unchanged.
+
+**Sub-PR sequence:**
+
+| Sub-PR | Goal | Scope |
+|--------|------|-------|
+| 8A | CLI regression tests for current `main.py` | Add `tests/test_main_cli.py` |
+| 8B | Route backtest modes through `backtest_runner` | Modify `src/main.py` |
+| 8C | Remove `build_engine()` from `main.py` | Modify `src/main.py` |
+| 8D | Paper/live fail-closed placeholders | Modify `src/main.py` |
+| 8E | README usage update | Modify `README.md` |
+
+### Safety confirmations
+
+- No live trading designed, approved, or implemented
+- No Alpaca SDK imported in any design path
+- No credentials read
+- No order submission
+- Paper gate logic is explicitly documented as unchanged
+- `--mode live` maps to `NotImplementedError` — not to any Alpaca or execution call
+- This PR contains zero `src/`, `tests/`, `output/`, or `config/` changes
+- Full test suite unchanged; no regression possible from a docs-only PR
+
+### Validation
+
+```bash
+git diff origin/main...HEAD -- src tests output config
+# Expected: empty
+```
+
+### Reference
+
+- `docs/main_dispatcher_slimdown_design.md` — full design document
+- `docs/trend_bot_architecture_refactor_plan.md` — PR 8 marked designed (sub-PRs 8A–8E listed)
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> This is a design document only. No code was changed.
+> No strategy is connected to live or paper trading.
+> The Phase A–H safety roadmap remains unchanged and required.
+> Nothing in this repository is financial advice.
