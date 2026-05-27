@@ -2559,3 +2559,74 @@ broker API call.
 > read-only broker contact. Any position decision remains a manual operator
 > action. Emergency actions remain manual via the Alpaca broker UI only.
 
+---
+
+## Milestone: Automated Strategy Execution Roadmap — Designed
+
+**Branch:** `claude/docs-design-automated-strategy-execution-roadmap`
+**Status:** Complete
+
+Roadmap document created at
+`docs/automated_strategy_execution_roadmap.md`.
+
+**No code was implemented.**
+**No Alpaca endpoint was contacted.**
+**No credentials were read.**
+**No order was submitted, sold, cancelled, replaced, or closed.**
+**No automated live trading was approved.**
+**All position and trading decisions remain entirely manual.**
+
+### What was designed
+
+A staged roadmap from current manual infrastructure to fully automated
+strategy execution, covering:
+
+1. **Final target system** — strategy signal generator, risk gate, order
+   executor, position manager, exit manager, scheduler, audit logger,
+   kill switch, read-only monitor, paper/live separation
+2. **Strategy scope** — SPY only, long only, 1h to 1d bars, one position
+   at a time, deterministic rules only, no leverage/options/shorting
+3. **Current foundation** — summarises all completed infrastructure PRs
+   as the safety foundation for future automation
+4. **Gap to final automation** — 12 missing components, each requiring
+   its own design and implementation PR
+5. **Staged roadmap** — Phases A–H from offline signal module through
+   limited live automation; no phase may be skipped
+6. **Required state machine** — 13 states; no live automation until
+   fully designed and tested with a mock broker
+7. **Risk rules** — hard rules enforced by automated risk gate;
+   SPY only, long only, one position, notional cap, kill switch, stale
+   data, order ambiguity, position ambiguity
+8. **Strategy interface** — pure function contract; no broker calls;
+   deterministic; cannot bypass risk gate
+9. **Execution interface** — accepts approved action only; never computes
+   strategy; one mutation per run; fail-closed
+10. **Audit and safety requirements** — what to record and what to exclude
+11. **Non-goals** — multi-symbol, options, leverage, ML, HFT all out of scope
+12. **Next step** — design `strategy_signal_engine` offline-only first
+
+### Safety invariants confirmed
+
+- No code changes
+- No Alpaca endpoint contacted
+- No credentials read or written
+- No order submitted, sold, cancelled, or replaced
+- No live ledger written
+- No automated trading approved
+- No automated position decision made
+
+### Reference
+
+- `docs/automated_strategy_execution_roadmap.md` — full roadmap document
+- Suggested git tag: `automated-strategy-execution-roadmap-designed`
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No code is implemented. No Alpaca endpoint was contacted. No credentials were read.**
+> All automated live trading requires completing the full staged roadmap
+> (Phases A–H), with each phase reviewed and approved in its own PR.
+> Until automation is implemented, tested, and approved, all trading
+> decisions remain entirely manual operator actions.
+> Nothing in this repository is financial advice.
