@@ -3632,3 +3632,66 @@ refactor.  No production code was changed.
 > No strategy is connected to live or paper trading.
 > The Phase A–H safety roadmap remains unchanged and required.
 > Nothing in this repository is financial advice.
+
+---
+
+## Milestone — Refactor PR 8B: route-main-backtest-through-runner
+
+**Date:** 2026-05-27
+**PR:** route-main-backtest-through-runner
+**Branch:** claude/route-main-backtest-through-runner
+
+### What was done
+
+Routed `src/main.py` backtest and candidate-b dispatch through
+`src/backtest/backtest_runner.run_backtest()`.  `build_engine()` is no longer
+called for these modes.
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `src/backtest/backtest_runner.py` | Extended `BacktestRunConfig` with 6 new optional fields; updated `run_backtest()` to pass them to `Portfolio` and `RiskManager` |
+| `src/main.py` | Replaced `build_engine()` dispatch with `BacktestRunConfig` + `run_backtest()` |
+| `tests/test_main_characterization.py` | Updated dispatch tests to patch `run_backtest`; added `test_backtest_run_config_core_fields`; renamed two tests |
+| `tests/test_paper_trading_readiness.py` | Updated startup-log helpers to abort at `run_backtest` instead of `build_engine` |
+| `docs/main_dispatcher_slimdown_design.md` | PR 8B marked implemented |
+| `docs/live_readiness_status.md` | This milestone appended |
+| `docs/trend_bot_architecture_refactor_plan.md` | Sub-PR 8B ✓ |
+
+### New `BacktestRunConfig` fields (all optional, defaults match previous behavior)
+
+| Field | Default | Source in `AppConfig` |
+|-------|---------|-----------------------|
+| `commission_per_share` | `0.005` | `cfg.backtest.commission_per_share` |
+| `slippage_per_share` | `0.01` | `cfg.backtest.slippage_per_share` |
+| `force_exit_time` | `"15:55"` | `cfg.strategy.params.get("force_exit_time", "15:55")` |
+| `max_open_positions` | `None` | `cfg.risk.max_open_positions` |
+| `daily_loss_limit_pct` | `None` | `cfg.risk.daily_loss_limit_pct` |
+| `daily_loss_action` | `"block_new_entries"` | `cfg.risk.daily_loss_action` |
+
+### Test counts
+
+- `tests/test_main_characterization.py` — 43 tests (+1 `test_backtest_run_config_core_fields`)
+- `tests/test_backtest_runner.py` — 94 tests (+27 `TestNewFieldValidation`)
+- `tests/test_paper_trading_readiness.py` — 24 tests (unchanged count)
+- Full suite: **4 754 passed**
+
+### Safety confirmations
+
+- No broker/API access — no Alpaca calls, no HTTP, no credentials, no env vars
+- Paper execution path not triggered — `_run_paper_close` and paper gate unchanged
+- No order submission — `BacktestRunResult.broker_calls_made` always `False`
+- `engine._portfolio.positions` private-field access eliminated; replaced with `open_positions_count=0`
+- `build_engine()` remains in `main.py` (unused by dispatch; removed in PR 8C)
+- No `src/backtest/engine.py`, `src/strategy/`, `src/execution/broker*`, config, or output changes
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> No production behaviour was changed — only the internal wiring of the backtest dispatch.
+> No strategy is connected to live or paper trading.
+> The Phase A–H safety roadmap remains unchanged and required.
+> Nothing in this repository is financial advice.

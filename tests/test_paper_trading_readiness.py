@@ -130,7 +130,7 @@ class TestStartupLogs:
         try:
             with mock.patch("src.main.load_config", return_value=cfg), \
                  mock.patch("sys.argv", ["prog"]), \
-                 mock.patch("src.main.build_engine", side_effect=SystemExit(0)):
+                 mock.patch("src.backtest.backtest_runner.run_backtest", side_effect=SystemExit(0)):
                 try:
                     from src.main import main as _main
                     _main()
@@ -215,7 +215,7 @@ class TestDryRunWarning:
         try:
             with mock.patch("src.main.load_config", return_value=cfg), \
                  mock.patch("sys.argv", ["prog"]), \
-                 mock.patch("src.main.build_engine", side_effect=SystemExit(0)):
+                 mock.patch("src.backtest.backtest_runner.run_backtest", side_effect=SystemExit(0)):
                 try:
                     from src.main import main as _main
                     _main()

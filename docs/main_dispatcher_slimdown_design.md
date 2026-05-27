@@ -185,16 +185,32 @@ Each sub-PR is independently reviewable and must not reduce the passing test cou
 
 ### PR 8B — Route `backtest` + `candidate-b` modes through `backtest_runner`
 
-**Goal:** Replace `build_engine()` call with `run_backtest()`.
+**Status: implemented — `src/main.py`, `src/backtest/backtest_runner.py`,
+`tests/test_main_characterization.py`, `tests/test_paper_trading_readiness.py`**
 
-- `BacktestRunConfig` is built from `AppConfig` fields.
-- `build_engine()` in `main.py` is deprecated (kept but no longer called for
-  these modes).
-- `ReportGenerator` receives a `BacktestRunResult` instead of raw engine output.
-- `engine._portfolio.positions` access replaced with `len(result.trades)` or a
-  public field.
-- All existing CLI behaviour preserved.
-- No `src/backtest/engine.py` or `src/backtest/backtest_runner.py` changes.
+- `BacktestRunConfig` extended with 6 new optional fields (commission, slippage,
+  force_exit_time, max_open_positions, daily_loss_limit_pct, daily_loss_action)
+  to preserve full behavioral equivalence with `build_engine()`.
+- `run_backtest()` updated to pass new fields to `Portfolio` and `RiskManager`.
+- `src/main.py` backtest dispatch block replaced: `build_engine()` call removed;
+  `BacktestRunConfig` built from `AppConfig`; `run_backtest()` called instead.
+- `ReportGenerator` receives `BacktestRunResult` fields; `open_positions_count=0`
+  (always correct: engine closes all positions before returning).
+- `engine._portfolio.positions` private-field access eliminated.
+- `build_engine()` remains in `main.py` (unused by backtest dispatch; removed in PR 8C).
+- `src/backtest/backtest_runner.py`: `_validate_config()` extended to validate all 6
+  new fields (commission/slippage finite ≥ 0; force_exit_time HH:MM 00:00–23:59;
+  max_open_positions None or int ≥ 1; daily_loss_limit_pct None or finite > 0;
+  daily_loss_action in {"block_new_entries","close_all"}).  Raw values never echoed.
+- `tests/test_backtest_runner.py`: 27 new tests in `TestNewFieldValidation`; 94 total.
+- `tests/test_main_characterization.py`: `test_backtest_mode_calls_build_engine` →
+  `test_backtest_mode_calls_run_backtest`; `test_candidate_b_mode_applies_overrides_before_engine` →
+  `test_candidate_b_mode_applies_overrides_before_run_backtest`; new
+  `test_backtest_run_config_core_fields` added.  43 tests.
+- `tests/test_paper_trading_readiness.py`: startup-log helpers updated to abort at
+  `run_backtest` instead of `build_engine`.  No assertion changes.
+- Full suite: **4 754 passed**.
+- No `src/backtest/engine.py` changes.  No broker/API/credentials/live/paper trading.
 
 ### PR 8C — Remove `build_engine()` from `main.py`
 
