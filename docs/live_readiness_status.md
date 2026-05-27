@@ -3115,7 +3115,7 @@ level used for breakout detection at the same bar index.
 **Date:** 2026-05-27
 **Branch:** `claude/add-trend-analysis-layer`
 **Files added:** `src/analysis/trend.py`, `src/analysis/__init__.py`, `tests/test_trend_analysis.py`
-**Tests:** 100 new tests; full suite 4 392 passed
+**Tests:** 106 new tests; full suite 4 398 passed
 
 ### What was implemented
 
@@ -3161,7 +3161,7 @@ INVALID_PERIOD_ORDER → MISSING_REQUIRED_COLUMNS → INSUFFICIENT_BARS.
 
 - `src/analysis/trend.py` — trend classification module
 - `src/analysis/__init__.py` — package exports
-- `tests/test_trend_analysis.py` — 100 tests
+- `tests/test_trend_analysis.py` — 106 tests
 - `docs/trend_bot_architecture_refactor_plan.md` — PR 3 marked implemented
 
 ### Warning

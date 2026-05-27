@@ -45,7 +45,7 @@ class TrendState:
 
     symbol: str
     timeframe: str
-    trend: str               # "bullish" | "bearish" | "neutral"
+    trend: str               # "bullish" | "bearish" | "neutral" | "unknown"
     strength: str            # "strong" | "weak" | "unknown"
     volatility_regime: str   # "high" | "low" | "normal" | "unknown"
     fast_ema: float
