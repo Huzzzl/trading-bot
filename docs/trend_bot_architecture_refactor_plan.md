@@ -215,17 +215,22 @@ No PR may be skipped. Each requires its own test coverage where applicable.
 
 ### PR 2 — Indicators package
 
+**Status: implemented**
+
 **Files:**
 - `src/indicators/__init__.py`
-- `src/indicators/moving_average.py` — `sma(series, window)`, `ema(series, window, ...)`
-- `src/indicators/volatility.py` — `atr(high, low, close, window)`
-- `src/indicators/trend.py` — `rolling_high(series, window)`, `rolling_low(series, window)` excluding current bar
+- `src/indicators/moving_average.py` — `sma(series, window)`, `ema(series, span)`
+- `src/indicators/volatility.py` — `true_range(high, low, close)`, `atr(high, low, close, window)`
+- `src/indicators/trend.py` — `rolling_high(series, window, *, exclude_current=True)`, `rolling_low(...)`, `breakout_above(...)`, `breakout_below(...)`
 
 **Constraints:**
 - Pure pandas functions; no broker calls; no network; no credentials.
 - All functions must not use future data (no look-ahead).
-- Unit tests covering: correct values, insufficient data handling, no-look-ahead.
-- Source scans: no Alpaca, no network, no `os.environ`.
+- `rolling_high` and `rolling_low` default to `exclude_current=True` — required for breakout logic to avoid look-ahead bias.
+- Unit tests: 83 passed (full suite 4292).
+- Source scans confirm no Alpaca, network, environ, execution, or mutation markers.
+- TrendFollowing strategy not implemented yet — PR 4.
+- No main.py refactor yet — PR 8.
 
 ### PR 3 — Analysis / trend layer
 
