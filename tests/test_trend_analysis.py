@@ -151,7 +151,7 @@ class TestValidationInvalidSymbol:
 
     def test_blocked_state_on_invalid_symbol(self):
         s = _call(symbol="")
-        assert s.trend == "neutral"
+        assert s.trend == "unknown"
         assert s.strength == "unknown"
         assert s.volatility_regime == "unknown"
         assert math.isnan(s.fast_ema)
@@ -199,6 +199,10 @@ class TestValidationInvalidTimeframe:
         assert "INVALID_SYMBOL" not in s.reason_codes
         assert "INVALID_TIMEFRAME" in s.reason_codes
 
+    def test_trend_unknown_on_invalid_timeframe(self):
+        s = _call(timeframe="bad")
+        assert s.trend == "unknown"
+
 
 # ---------------------------------------------------------------------------
 # TestValidationInvalidPeriod
@@ -239,6 +243,10 @@ class TestValidationInvalidPeriod:
         )
         assert "INVALID_PERIOD" not in s.reason_codes
 
+    def test_trend_unknown_on_invalid_period(self):
+        s = _call(fast_ema_period=0)
+        assert s.trend == "unknown"
+
 
 # ---------------------------------------------------------------------------
 # TestValidationInvalidPeriodOrder
@@ -262,6 +270,10 @@ class TestValidationInvalidPeriodOrder:
         s = _call(fast_ema_period=0, slow_ema_period=0)
         assert "INVALID_PERIOD" in s.reason_codes
         assert "INVALID_PERIOD_ORDER" not in s.reason_codes
+
+    def test_trend_unknown_on_invalid_period_order(self):
+        s = _call(fast_ema_period=10, slow_ema_period=10)
+        assert s.trend == "unknown"
 
 
 # ---------------------------------------------------------------------------
@@ -294,6 +306,11 @@ class TestValidationMissingColumns:
         s = _call(bars=_flat(n=20))
         assert "MISSING_REQUIRED_COLUMNS" not in s.reason_codes
 
+    def test_trend_unknown_on_missing_columns(self):
+        bars = pd.DataFrame({"high": [101.0] * 20, "low": [99.0] * 20})
+        s = _call(bars=bars)
+        assert s.trend == "unknown"
+
 
 # ---------------------------------------------------------------------------
 # TestValidationInsufficientBars
@@ -322,6 +339,11 @@ class TestValidationInsufficientBars:
         bars = _flat(n=25)
         s = _call(bars=bars)
         assert "INSUFFICIENT_BARS" not in s.reason_codes
+
+    def test_trend_unknown_on_insufficient_bars(self):
+        bars = _flat(n=18)
+        s = _call(bars=bars)
+        assert s.trend == "unknown"
 
 
 # ---------------------------------------------------------------------------
@@ -423,6 +445,11 @@ class TestNeutralTrend:
         s = self._result()
         assert not math.isnan(s.fast_ema)
         assert not math.isnan(s.slow_ema)
+
+    def test_neutral_is_not_unknown(self):
+        # Valid flat data → computed neutral, not a blocked unknown
+        assert self._result().trend == "neutral"
+        assert self._result().trend != "unknown"
 
 
 # ---------------------------------------------------------------------------

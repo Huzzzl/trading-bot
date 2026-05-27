@@ -62,7 +62,7 @@ def _blocked_state(symbol: str, timeframe: str, reason: str) -> TrendState:
     return TrendState(
         symbol=symbol,
         timeframe=timeframe,
-        trend="neutral",
+        trend="unknown",
         strength="unknown",
         volatility_regime="unknown",
         fast_ema=float("nan"),

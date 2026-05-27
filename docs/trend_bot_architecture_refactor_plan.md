@@ -238,7 +238,7 @@ No PR may be skipped. Each requires its own test coverage where applicable.
 
 **Files:** `src/analysis/trend.py`, `src/analysis/__init__.py`
 
-- `TrendState` frozen dataclass: `trend` (`"bullish"` / `"bearish"` / `"neutral"`), `strength` (`"strong"` / `"weak"` / `"unknown"`), `volatility_regime` (`"high"` / `"low"` / `"normal"` / `"unknown"`), `fast_ema`, `slow_ema`, `atr`, `reason_codes`, safety fields.
+- `TrendState` frozen dataclass: `trend` (`"bullish"` / `"bearish"` / `"neutral"` / `"unknown"`), `strength` (`"strong"` / `"weak"` / `"unknown"`), `volatility_regime` (`"high"` / `"low"` / `"normal"` / `"unknown"`), `fast_ema`, `slow_ema`, `atr`, `reason_codes`, safety fields. `"unknown"` means validation failed or data was insufficient; `"neutral"` means indicators were successfully computed and the EMA relationship is non-directional.
 - `classify_trend(bars, *, symbol, timeframe, fast_ema_period=20, slow_ema_period=50, atr_period=14, volatility_lookback=50) → TrendState` using EMA crossover and ATR-ratio volatility regime.
 - Validation gates: INVALID_SYMBOL → INVALID_TIMEFRAME → INVALID_PERIOD → INVALID_PERIOD_ORDER → MISSING_REQUIRED_COLUMNS → INSUFFICIENT_BARS.
 - Pure function; no broker calls; no network; no credentials; no environment variable access.

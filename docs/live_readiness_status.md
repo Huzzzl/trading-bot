@@ -3123,7 +3123,7 @@ level used for breakout detection at the same bar index.
 offline, deterministic EMA-based trend classifier.
 
 `TrendState` is a frozen dataclass with:
-- `trend`: `"bullish"` / `"bearish"` / `"neutral"` (EMA triple ordering of close, fast EMA, slow EMA)
+- `trend`: `"bullish"` / `"bearish"` / `"neutral"` / `"unknown"` — `"neutral"` = valid computed EMA relationship that is non-directional; `"unknown"` = validation failure or insufficient data (no indicators computed)
 - `strength`: `"strong"` / `"weak"` / `"unknown"` (relative EMA spread vs 0.5% threshold)
 - `volatility_regime`: `"high"` / `"low"` / `"normal"` / `"unknown"` (ATR ratio vs rolling median)
 - `fast_ema`, `slow_ema`, `atr`: scalar floats
