@@ -309,18 +309,21 @@ No PR may be skipped. Each requires its own test coverage where applicable.
 - No backtest execution behaviour changed. No strategy behaviour changed.
 - No broker/API access. No live/paper trading. No environment variable access.
 
-| Interval | Bars/year | Calculation |
-|----------|-----------|-------------|
-| `"1m"` | 98 280 | 252 × 390 |
-| `"5m"` | 19 656 | 252 × 78 |
-| `"15m"` | 6 552 | 252 × 26 |
-| `"30m"` | 3 276 | 252 × 13 |
-| `"1h"` | 1 512 | 252 × 6 (6 complete bars/day) |
-| `"2h"` | 756 | 252 × 3 |
-| `"4h"` | 252 | 252 × 1 |
-| `"1d"` | 252 | 252 |
+| Interval | Bars/year | Calculation | Note |
+|----------|-----------|-------------|------|
+| `"1m"` | 98 280 | 252 × 390 | |
+| `"2m"` | 49 140 | 252 × 195 | Yahoo-supported |
+| `"5m"` | 19 656 | 252 × 78 | |
+| `"15m"` | 6 552 | 252 × 26 | |
+| `"30m"` | 3 276 | 252 × 13 | |
+| `"60m"` | 1 512 | 252 × 6 | Yahoo alias for `"1h"` |
+| `"1h"` | 1 512 | 252 × 6 (6 complete bars/day) | |
+| `"90m"` | 1 008 | 252 × 4 | Yahoo-supported; floor(390/90)=4 |
+| `"2h"` | 756 | 252 × 3 | |
+| `"4h"` | 252 | 252 × 1 | |
+| `"1d"` | 252 | 252 | |
 
-- 37 unit tests in `tests/test_backtest_metrics.py`; full suite 4 613 passed.
+- 41 unit tests in `tests/test_backtest_metrics.py`; full suite 4 617 passed.
 
 ### PR 7 — Backtest runner integration
 

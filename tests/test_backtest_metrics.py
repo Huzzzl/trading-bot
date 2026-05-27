@@ -47,6 +47,10 @@ class TestBarsPerYearForInterval:
     def test_1m(self) -> None:
         assert bars_per_year_for_interval("1m") == 252 * 390
 
+    def test_2m(self) -> None:
+        # Yahoo-supported 2-minute interval
+        assert bars_per_year_for_interval("2m") == 252 * 195
+
     def test_5m(self) -> None:
         assert bars_per_year_for_interval("5m") == 252 * 78
 
@@ -56,9 +60,17 @@ class TestBarsPerYearForInterval:
     def test_30m(self) -> None:
         assert bars_per_year_for_interval("30m") == 252 * 13
 
+    def test_60m(self) -> None:
+        # Yahoo-compatible alias for "1h"; must equal "1h"
+        assert bars_per_year_for_interval("60m") == 252 * 6
+
     def test_1h(self) -> None:
         # 6 complete 1-h bars per 6.5-h session (last 30 min is a partial bar)
         assert bars_per_year_for_interval("1h") == 252 * 6
+
+    def test_90m(self) -> None:
+        # floor(390 / 90) = 4 complete 90-min bars per day
+        assert bars_per_year_for_interval("90m") == 252 * 4
 
     def test_2h(self) -> None:
         assert bars_per_year_for_interval("2h") == 252 * 3
@@ -173,6 +185,13 @@ class TestComputeMetricsInterval:
         m_1d = compute_metrics([], pd.DataFrame(), _INITIAL_CAPITAL, interval="1d")
         assert m_5m["sharpe_ratio"] == pytest.approx(0.0)
         assert m_1d["sharpe_ratio"] == pytest.approx(0.0)
+
+    def test_60m_matches_1h_sharpe(self) -> None:
+        """interval='60m' must produce identical Sharpe to interval='1h'."""
+        curve = _make_equity_curve()
+        m_60m = compute_metrics([], curve.copy(), _INITIAL_CAPITAL, interval="60m")
+        m_1h  = compute_metrics([], curve.copy(), _INITIAL_CAPITAL, interval="1h")
+        assert m_60m["sharpe_ratio"] == pytest.approx(m_1h["sharpe_ratio"])
 
 
 # ---------------------------------------------------------------------------

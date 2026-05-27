@@ -31,16 +31,21 @@ from src.backtest.trade import Trade
 # Annualisation lookup — US equity regular-session assumptions:
 # 252 trading days/year · 6.5 trading hours/day · 390 trading minutes/day.
 # For hourly intervals, only *complete* bars within the session are counted:
-#   1h → 6 bars/day  (6.5-h session; last 30 min produces a partial bar)
-#   2h → 3 bars/day
-#   4h → 1 bar/day
+#   1h/60m → 6 bars/day  (6.5-h session; last 30 min produces a partial bar)
+#   90m     → 4 bars/day  (floor of 390/90 = 4.33)
+#   2h      → 3 bars/day
+#   4h      → 1 bar/day
+# "60m" is accepted as a Yahoo-compatible alias for "1h".
 # ---------------------------------------------------------------------------
 _INTERVAL_BARS_PER_YEAR: dict[str, int] = {
     "1m":  252 * 390,   # 98 280
+    "2m":  252 * 195,   # 49 140 — Yahoo-supported interval
     "5m":  252 * 78,    # 19 656
     "15m": 252 * 26,    #  6 552
     "30m": 252 * 13,    #  3 276
+    "60m": 252 * 6,     #  1 512 — Yahoo alias for 1h
     "1h":  252 * 6,     #  1 512
+    "90m": 252 * 4,     #  1 008 — Yahoo-supported interval (floor of 390/90)
     "2h":  252 * 3,     #    756
     "4h":  252 * 1,     #    252
     "1d":  252,         #    252
@@ -56,16 +61,19 @@ def bars_per_year_for_interval(interval: str) -> int:
     For intraday hourly intervals only complete bars within the regular
     session are counted:
 
-    - ``"1h"`` → 6 bars per day (the last 30 min of the 6.5-h session
-      produces a partial bar and is excluded from the count).
+    - ``"1h"`` / ``"60m"`` → 6 bars per day (the last 30 min of the 6.5-h
+      session produces a partial bar and is excluded from the count).
+      ``"60m"`` is accepted as a Yahoo-compatible alias for ``"1h"``.
+    - ``"90m"`` → 4 bars per day (floor of 390 / 90 = 4.33).
     - ``"2h"`` → 3 bars per day.
     - ``"4h"`` → 1 bar per day.
 
     Parameters
     ----------
     interval:
-        Bar interval string.  Supported: ``"1m"``, ``"5m"``, ``"15m"``,
-        ``"30m"``, ``"1h"``, ``"2h"``, ``"4h"``, ``"1d"``.
+        Bar interval string.  Supported: ``"1m"``, ``"2m"``, ``"5m"``,
+        ``"15m"``, ``"30m"``, ``"60m"``, ``"1h"``, ``"90m"``, ``"2h"``,
+        ``"4h"``, ``"1d"``.
 
     Returns
     -------
