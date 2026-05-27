@@ -234,13 +234,15 @@ No PR may be skipped. Each requires its own test coverage where applicable.
 
 ### PR 3 — Analysis / trend layer
 
-**File:** `src/analysis/trend.py`
+**Status: implemented — `src/analysis/trend.py`, `src/analysis/__init__.py`**
 
-- `TrendState` dataclass: `direction` (`"bullish"` / `"bearish"` / `"neutral"`), `strength` or similar.
-- `classify_trend(bars, short_window, long_window) → TrendState` using EMA or SMA crossover.
-- Optional volatility regime if straightforward.
-- Pure function; no broker calls; no network; no credentials.
-- Unit tests.
+**Files:** `src/analysis/trend.py`, `src/analysis/__init__.py`
+
+- `TrendState` frozen dataclass: `trend` (`"bullish"` / `"bearish"` / `"neutral"`), `strength` (`"strong"` / `"weak"` / `"unknown"`), `volatility_regime` (`"high"` / `"low"` / `"normal"` / `"unknown"`), `fast_ema`, `slow_ema`, `atr`, `reason_codes`, safety fields.
+- `classify_trend(bars, *, symbol, timeframe, fast_ema_period=20, slow_ema_period=50, atr_period=14, volatility_lookback=50) → TrendState` using EMA crossover and ATR-ratio volatility regime.
+- Validation gates: INVALID_SYMBOL → INVALID_TIMEFRAME → INVALID_PERIOD → INVALID_PERIOD_ORDER → MISSING_REQUIRED_COLUMNS → INSUFFICIENT_BARS.
+- Pure function; no broker calls; no network; no credentials; no environment variable access.
+- 100 unit tests in `tests/test_trend_analysis.py`.
 
 ### PR 4 — TrendFollowing strategy
 

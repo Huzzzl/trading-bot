@@ -3107,3 +3107,69 @@ level used for breakout detection at the same bar index.
 > No strategy behavior was changed. No live or paper execution was implemented.
 > The Phase A–H safety roadmap remains unchanged and required.
 > Nothing in this repository is financial advice.
+
+---
+
+## Milestone: Refactor PR 3 — Analysis / trend layer
+
+**Date:** 2026-05-27
+**Branch:** `claude/add-trend-analysis-layer`
+**Files added:** `src/analysis/trend.py`, `src/analysis/__init__.py`, `tests/test_trend_analysis.py`
+**Tests:** 100 new tests; full suite 4 392 passed
+
+### What was implemented
+
+`classify_trend(bars, *, symbol, timeframe, ...) → TrendState` — a pure,
+offline, deterministic EMA-based trend classifier.
+
+`TrendState` is a frozen dataclass with:
+- `trend`: `"bullish"` / `"bearish"` / `"neutral"` (EMA triple ordering of close, fast EMA, slow EMA)
+- `strength`: `"strong"` / `"weak"` / `"unknown"` (relative EMA spread vs 0.5% threshold)
+- `volatility_regime`: `"high"` / `"low"` / `"normal"` / `"unknown"` (ATR ratio vs rolling median)
+- `fast_ema`, `slow_ema`, `atr`: scalar floats
+- `reason_codes`: tuple of string codes
+- Safety fields: `deterministic=True`, `broker_calls_made=False`, `credentials_read=False`, `order_action_requested=False`
+
+Validation gates (in order): INVALID_SYMBOL → INVALID_TIMEFRAME → INVALID_PERIOD →
+INVALID_PERIOD_ORDER → MISSING_REQUIRED_COLUMNS → INSUFFICIENT_BARS.
+
+### Test classes
+
+| Class | Tests | What it covers |
+|-------|-------|----------------|
+| `TestTrendStateDefaults` | 9 | Frozen dataclass; safety fields; type checks |
+| `TestValidationInvalidSymbol` | 8 | Empty; lowercase; too long; spaces; None; valid dot/hyphen |
+| `TestValidationInvalidTimeframe` | 6 | Empty; unknown; uppercase; None; all valid; gate ordering |
+| `TestValidationInvalidPeriod` | 6 | Zero/negative for each param; valid minimum |
+| `TestValidationInvalidPeriodOrder` | 4 | Equal; fast > slow; valid; period checked before order |
+| `TestValidationMissingColumns` | 5 | Missing each required column; empty df; all present |
+| `TestValidationInsufficientBars` | 4 | Zero; one below min; exactly min; above min |
+| `TestBullishTrend` | 8 | Trend/code/EMA ordering/close position on rising bars |
+| `TestBearishTrend` | 6 | Trend/code/EMA ordering/close position on falling bars |
+| `TestNeutralTrend` | 5 | Flat bars → neutral; no spurious codes; EMAs populated |
+| `TestStrength` | 4 | Strong on wide spread; weak on flat; exclusivity |
+| `TestVolatilityRegime` | 5 | High/low/normal detection; single code per result; ATR positive |
+| `TestReasonCodes` | 5 | Exactly 3 codes on success; 1 on validation failure; string type |
+| `TestGateOrder` | 5 | Each gate blocks the next |
+| `TestDeterminism` | 3 | Same input → same output; different inputs → different outputs |
+| `TestInputNotMutated` | 2 | Bars DataFrame and index unchanged after call |
+| `TestSafetyFields` | 4 | All four safety fields across 5 different result states |
+| `TestSymbolAndTimeframePassthrough` | 3 | Symbol/timeframe preserved in result and blocked state |
+| `TestSourceScans` | 8 | No Alpaca/network/environ/broker-call patterns in source files |
+
+### Reference
+
+- `src/analysis/trend.py` — trend classification module
+- `src/analysis/__init__.py` — package exports
+- `tests/test_trend_analysis.py` — 100 tests
+- `docs/trend_bot_architecture_refactor_plan.md` — PR 3 marked implemented
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> All analysis functions are pure, deterministic, and offline-only.
+> No strategy behavior was changed. No live or paper execution was implemented.
+> The Phase A–H safety roadmap remains unchanged and required.
+> Nothing in this repository is financial advice.
