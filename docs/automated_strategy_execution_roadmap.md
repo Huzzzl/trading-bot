@@ -141,26 +141,29 @@ No phase may be skipped. Each phase has its own PR(s).
 
 ### Architecture alignment note
 
-Before Phase B implementation begins, the repository will undergo staged
-architecture alignment for the trend-following MVP. This is documented in
-`docs/trend_bot_architecture_refactor_plan.md` and consists of up to 10
-small PRs (strategy factory, indicators, trend analysis, TrendFollowing
-strategy, position sizer, metrics fix, backtest runner, slim main.py, tools
-isolation, README). This does not change the Phase A–H safety roadmap and
-does not approve live or paper trading.
+Before Phase B implementation begins, the repository underwent staged
+architecture alignment for the trend-following MVP (PRs 1–9). This is
+documented in `docs/trend_bot_architecture_refactor_plan.md` and
+`docs/automated_trading_architecture_readiness_snapshot.md`.
+
+**Architecture alignment is now complete (PR 9F).** The refactor covered:
+strategy factory, indicators, trend analysis, TrendFollowing strategy,
+position sizer, interval-aware metrics, backtest runner, slim main.py,
+tools/scripts isolation, and README updates.  The Phase A–H safety roadmap
+is unchanged. Live and paper trading remain not enabled.
 
 ### Phase B — Backtest and metrics
 
-**Status: design complete — `docs/backtest_and_metrics_offline_design.md`**
+**Status: implemented — `src/backtest/backtest_runner.py`, `src/backtest/metrics.py`**
 
-- Historical bar data ingestion from offline source
-- Backtest runner: applies strategy to historical bars, records trades
-- Metrics: win rate, max drawdown, Sharpe ratio, trade count, hold duration
-- Backtest results must be reviewed and documented before Phase C
-- No live execution; no real broker calls
+- Historical bar data ingestion from offline source (yfinance via `cached_provider`)
+- `BacktestRunConfig` + `run_backtest()` — sole wiring point for backtest dispatch
+- Metrics: interval-aware Sharpe, CAGR, max drawdown, win rate, trade count
+- `BacktestRunResult` passed to `ReportGenerator` (CSV + JSON artifacts)
+- No live execution; no real broker calls; `broker_calls_made` always `False`
 
-**This does not trade. This does not approve automation. Implementation,**
-**paper trading, risk gate, and live trading each require their own PR.**
+**Next step within Phase B:** Run offline backtest scenarios for TrendFollowing
+on SPY/QQQ; compare vs ORB baseline; document results before Phase C begins.
 
 ### Phase C — Paper trading execution
 

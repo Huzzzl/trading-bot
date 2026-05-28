@@ -2,7 +2,7 @@
 
 Current operational status of the live-readiness gate baseline.
 Last updated: 2026-05-28. Full pre-submit pipeline complete through PR #98.
-Refactor PR 9 complete: 9A (design), 9B (inventory tests), 9C (scripts/ README), 9D (deferred), 9E (permanent-tools confirmation), 9F (finalize docs). All 40 tools remain in src/tools/.
+Refactor PRs 1–9 complete. PR 10A architecture snapshot added. All 40 tools remain in src/tools/. Test baseline: 5 193 passed.
 
 ---
 
@@ -4124,4 +4124,69 @@ git diff origin/main...HEAD -- src tests config output
 > This is a docs-only PR. No tool source files were changed. No files were moved.
 > All live-readiness and paper guard tools remain in `src/tools/` and untouched.
 > The Phase A–H safety roadmap remains unchanged and required.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone — PR 10A: docs-architecture-readiness-snapshot
+
+**Date:** 2026-05-28
+**Branch:** `claude/docs-architecture-readiness-snapshot`
+**Files added:** `docs/automated_trading_architecture_readiness_snapshot.md`
+**Files updated:** `docs/automated_strategy_execution_roadmap.md`, `docs/trend_bot_architecture_refactor_plan.md`, `docs/live_readiness_status.md`
+**Tests:** not run (docs-only PR; no src/tests/config/output/scripts changes)
+**Type:** Docs-only. No code, test, config, output, or script changes.
+
+### What was added / updated
+
+**`docs/automated_trading_architecture_readiness_snapshot.md`** (new):
+- Project goal statement: automated rule-based trading bot for 1h–1d execution.
+- Full implementation status table (implemented vs. not yet implemented).
+- Current CLI surface and disabled-modes table.
+- Safety status table (all guarantees and how they are enforced).
+- Test baseline: 5 193 passed; all offline.
+- Next-phase priorities: offline TrendFollowing validation, ORB comparison,
+  stable baseline before sweep/walk-forward, paper/live automation gated.
+- Architecture diagram showing dispatch path and `src/tools/` layout.
+
+**`docs/automated_strategy_execution_roadmap.md`** updated:
+- Architecture alignment note: alignment complete (PRs 1–9); references snapshot.
+- Phase B status updated from "design complete" to "implemented" with accurate details.
+
+### Validation
+
+```bash
+git diff origin/main...HEAD -- src tests config output scripts
+# Expected: empty
+```
+
+### Current architecture state (summary)
+
+| Layer | Status |
+|-------|--------|
+| Indicators, trend analysis, strategy factory | Complete |
+| TrendFollowing + ORB strategies (offline) | Complete |
+| Risk / position sizing | Complete |
+| Interval-aware metrics + backtest runner | Complete |
+| `main.py` slim dispatcher | Complete |
+| Live-readiness tools (40 tools, tested) | Complete |
+| Paper + live execution adapters (gated) | Complete |
+| Offline backtest scenarios (TrendFollowing) | **Not yet run** |
+| Paper / live automation | **Not yet implemented** |
+
+### Safety confirmations
+
+- No `src/`, `tests/`, `config/`, `output/`, or `scripts/` files changed
+- No broker/API access — no Alpaca calls, no HTTP, no credentials
+- No order submission. No live or paper trading enabled or changed.
+- All 40 tools remain in `src/tools/` and fail-closed.
+- No automated trading approved.
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> This is a docs-only PR. No source files, tests, or configs were changed.
+> The Phase A–H safety roadmap remains unchanged and required before any automation.
 > Nothing in this repository is financial advice.
