@@ -369,6 +369,7 @@ No PR may be skipped. Each requires its own test coverage where applicable.
 - 8A: 42 tests in `tests/test_main_characterization.py`; full suite 4 726 passed.
 - 8B: 43 tests in `tests/test_main_characterization.py` (+1); 94 tests in `tests/test_backtest_runner.py` (+27 field-validation); full suite 4 754 passed.
 - 8C: 43 tests in `tests/test_main_characterization.py` (unchanged count; `test_build_engine_is_callable` renamed to `test_build_engine_is_not_present`); `TestBuildEngineWiring` removed from `tests/test_backtest.py` (−2); paper-path tests updated to patch `run_backtest`; full suite 4 752 passed.
+- 8D: 45 tests in `tests/test_main_characterization.py` (+2 source-scan tests); stale live-mode TODO removed from `src/main.py`; paper gate message clarified; `--mode live` remains argparse-rejected; full suite 4 754 passed.
 
 ### PR 9 — Tools / scripts isolation
 

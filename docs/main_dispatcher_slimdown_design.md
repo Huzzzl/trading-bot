@@ -230,11 +230,20 @@ Each sub-PR is independently reviewable and must not reduce the passing test cou
 
 ### PR 8D — Paper/live fail-closed placeholders
 
-**Goal:** Make the paper gate and live rejection explicit in `main.py`.
+**Status: implemented — `src/main.py`, `tests/test_main_characterization.py`**
 
-- `--mode live` added to `choices` with immediate `NotImplementedError`.
-- `_run_paper_close` gate comments clarified; no logic change.
-- No Alpaca calls, no credentials, no order submission.
+- Stale `TODO (Alpaca integration)` comment removed from module docstring; replaced with an
+  accurate note: `--mode live` and `--mode paper` are not valid CLI options; paper execution
+  is gated via config; live trading is not enabled.
+- Paper gate error message updated: removed the phrase "Paper order execution is not yet
+  wired"; now reads "Paper trading is disabled (execution.paper_trading_enabled is false).
+  Set execution.paper_trading_enabled to true in config to reach the paper execution gate."
+- `--mode live` remains argparse-rejected (not added to `choices`) — current behavior preserved.
+- Two source-scan tests added to `TestSourceCharacterization`:
+  `test_no_stale_live_mode_todo`, `test_live_not_in_cli_choices`.
+- `tests/test_main_characterization.py` — 45 tests (+2).
+- Full suite: **4 754 passed**.
+- No Alpaca calls, no credentials, no order submission. Paper gate logic unchanged.
 
 ### PR 8E — README usage update
 

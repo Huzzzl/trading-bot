@@ -474,6 +474,18 @@ class TestSourceCharacterization:
     def test_walk_forward_mode_string_present(self) -> None:
         assert '"walk-forward"' in self._src()
 
+    def test_no_stale_live_mode_todo(self) -> None:
+        # The old "TODO (Alpaca integration): Add --mode live" comment must be gone.
+        assert "TODO (Alpaca integration)" not in self._src()
+
+    def test_live_not_in_cli_choices(self) -> None:
+        # 'live' must not appear inside the choices list; argparse rejects it.
+        import re
+        src = self._src()
+        choices_match = re.search(r'choices\s*=\s*\[([^\]]+)\]', src)
+        assert choices_match is not None, "choices= not found in src/main.py"
+        assert '"live"' not in choices_match.group(1)
+
     def test_alpaca_import_is_not_at_module_top_level(self) -> None:
         # AlpacaBrokerAdapter must only be imported lazily inside functions,
         # never at the top of the file.  A top-level import would mean paper
