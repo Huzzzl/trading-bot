@@ -2,7 +2,7 @@
 
 Current operational status of the live-readiness gate baseline.
 Last updated: 2026-05-28. Full pre-submit pipeline complete through PR #98.
-Refactor PRs: 9A (design), 9B (inventory tests), 9C (scripts/ README), 9E (permanent-tools confirmation) complete.
+Refactor PR 9 complete: 9A (design), 9B (inventory tests), 9C (scripts/ README), 9D (deferred), 9E (permanent-tools confirmation), 9F (finalize docs). All 40 tools remain in src/tools/.
 
 ---
 
@@ -4067,6 +4067,61 @@ No tool was moved in this PR.
 > **This milestone does not approve any individual trade.**
 > **No Alpaca endpoint was contacted. No credentials were read.**
 > No tool source files were changed. No files were moved.
+> All live-readiness and paper guard tools remain in `src/tools/` and untouched.
+> The Phase A–H safety roadmap remains unchanged and required.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone — Refactor PR 9F: docs-finalize-tools-scripts-isolation
+
+**Date:** 2026-05-28
+**Branch:** `claude/docs-finalize-tools-scripts-isolation`
+**Files updated:** `docs/tools_scripts_isolation_design.md`, `scripts/README.md`, `docs/trend_bot_architecture_refactor_plan.md`, `docs/live_readiness_status.md`
+**Tests:** not run (docs-only PR; no src/tests/config/output changes)
+**Type:** Docs-only. No code, test, config, or output changes.
+
+### What was decided and documented
+
+PR 9 (tools/scripts isolation) is now complete. Final state:
+
+| Category | Count | Location | Decision |
+|----------|-------|----------|----------|
+| Live safety / readiness gate | 30 | `src/tools/` | Permanent — do not move |
+| Manual live/paper guard | 4 | `src/tools/` | Permanent — do not move |
+| Paper diagnostic utilities | 6 | `src/tools/` | Remain here; PR 9D deferred |
+| **Total** | **40** | `src/tools/` | All tested, stable, classified |
+
+**PR 9D deferred.** Moving the six paper diagnostic utilities required updating
+test import paths, CLI shims, and operator runbooks in a single atomic PR.
+The import/CLI risk outweighs the organisational benefit given the stable,
+5 193-test layout. A future PR may revisit this with all preconditions met.
+
+**`scripts/`** — created (PR 9C); documented for future non-core utilities;
+currently empty of `.py` files. `TestPermanentToolsLocation` (PR 9E) asserts
+no `live_*.py` or `manual_*.py` files are ever placed there without a dedicated PR.
+
+### Validation
+
+```bash
+git diff origin/main...HEAD -- src tests config output
+# Expected: empty
+```
+
+### Safety confirmations
+
+- No `src/`, `tests/`, `config/`, or `output/` files changed
+- No broker/API access — no Alpaca calls, no HTTP, no credentials
+- No order submission. No live or paper trading enabled or changed.
+- All 40 tools remain in `src/tools/` and fail-closed.
+- No automated trading approved.
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> This is a docs-only PR. No tool source files were changed. No files were moved.
 > All live-readiness and paper guard tools remain in `src/tools/` and untouched.
 > The Phase A–H safety roadmap remains unchanged and required.
 > Nothing in this repository is financial advice.

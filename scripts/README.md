@@ -4,7 +4,12 @@ This directory is reserved for **non-core, one-off, or manual utility scripts**
 that do not belong to the live-readiness safety pipeline.
 
 No files have been moved here yet.
-All 40 tool modules currently live in `src/tools/`.
+All 40 tool modules currently live in `src/tools/` (final state as of PR 9F).
+
+**PR 9D (paper diagnostic move) was deferred.**
+The six paper diagnostic utilities remain in `src/tools/` due to import/CLI
+risk and the stability of the current tested layout.
+See `docs/tools_scripts_isolation_design.md § PR 9D` for the full rationale.
 
 ---
 
@@ -84,16 +89,18 @@ in operator runbooks.
 
 ---
 
-### Conditional move candidates — `scripts/` (6 tools)
+### Paper diagnostic utilities — remain in `src/tools/` (PR 9D deferred)
 
-These support paper trading operations and diagnostics.  They **may** move here
-in PR 9D, but **only after** all preconditions are met:
+These support paper trading operations and diagnostics.  They were originally
+proposed as move candidates for `scripts/` (PR 9D), but that move has been
+**deferred indefinitely**.
 
-- PR 9B inventory tests pass (already done).
-- Source scan confirms zero `from src.tools.paper_*` cross-imports outside `tests/`.
-- Each moved tool retains its `python -m` CLI surface via a shim or the move target.
-- All test import paths updated in the same PR.
-- Full suite passes before and after the move.
+**Reason:** Moving requires updating test import paths, `python -m` CLI shims,
+and operator runbooks in a single atomic PR.  The import/CLI risk outweighs the
+organisational benefit given the current stable, fully-tested layout.
+
+If this move is revisited, all preconditions in
+`docs/tools_scripts_isolation_design.md § PR 9D` must be met before proceeding.
 
 | Tool | Purpose |
 |------|---------|

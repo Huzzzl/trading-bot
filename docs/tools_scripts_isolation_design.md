@@ -101,12 +101,12 @@ tests confirm the move is safe (import paths updated, CLI surface preserved).
 
 | Tool | Purpose | Move candidate? |
 |------|---------|----------------|
-| `paper_ledger_import.py` | Offline paper ledger backfill | Maybe (PR 9D) |
-| `paper_ledger_verify.py` | Paper ledger schema validator | Maybe (PR 9D) |
-| `paper_pre_submit_check.py` | Paper pre-submit checklist | Maybe (PR 9D) |
-| `paper_smoke_check.py` | Paper workflow smoke test | Maybe (PR 9D) |
-| `paper_status.py` | Read-only paper status / doctor | Maybe (PR 9D) |
-| `replay_order_reconciliation.py` | Offline reconciliation replay | Maybe (PR 9D) |
+| `paper_ledger_import.py` | Offline paper ledger backfill | Deferred (PR 9D not executed) |
+| `paper_ledger_verify.py` | Paper ledger schema validator | Deferred (PR 9D not executed) |
+| `paper_pre_submit_check.py` | Paper pre-submit checklist | Deferred (PR 9D not executed) |
+| `paper_smoke_check.py` | Paper workflow smoke test | Deferred (PR 9D not executed) |
+| `paper_status.py` | Read-only paper status / doctor | Deferred (PR 9D not executed) |
+| `replay_order_reconciliation.py` | Offline reconciliation replay | Deferred (PR 9D not executed) |
 
 **Important:** All six have test files and the test files import from
 `src.tools.*`. Moving any of these requires updating all import paths in
@@ -181,20 +181,29 @@ Notes that `tests/test_tools_inventory.py` (PR 9B) locks the counts.
 
 ### PR 9D — Move paper diagnostic utilities to `scripts/` (conditional)
 
-**Goal:** If PR 9B confirms all six paper diagnostic utilities have zero
-cross-imports (no other `src/` module imports them), move them to
-`scripts/` with compatibility shims in `src/tools/` that import-forward.
+**Status: deferred — not executed.**
 
-**Preconditions:**
-- PR 9B inventory tests pass.
+**Decision:** The six paper diagnostic utilities remain in `src/tools/` for now.
+
+**Rationale:**
+- All six tools have corresponding test files that import from `src.tools.*`.
+  Moving them would require updating all test import paths, `python -m` CLI
+  shims, and any operator runbook references in the same PR — a non-trivial
+  change with real import/CLI breakage risk if any step is missed.
+- The current `src/tools/` layout is tested and stable (5 193 tests passing).
+  The structural problem (mixing concerns in a flat directory) is documented
+  and classified; the operational risk of moving files now outweighs the
+  organisational benefit.
+- `tests/test_tools_inventory.py` (PR 9B) already locks the count and location
+  of all 40 tools. If a future PR moves these utilities, the inventory tests
+  will catch any inconsistency.
+
+**If this move is revisited in a future PR, required preconditions remain:**
 - Source scan confirms zero `from src.tools.paper_*` imports outside `tests/`.
 - Each moved tool retains its `python -m` CLI surface via a shim or the move target.
-- All test imports updated in the same PR.
+- All test import paths updated in the same PR.
 - Full suite passes before and after the move.
-
-**Scope:** `scripts/paper_*.py`, `scripts/replay_order_reconciliation.py`,
-updated `src/tools/` shims (or removed if tests are also updated),
-updated `tests/test_paper_*.py` imports. Conditional on preconditions.
+- `tests/test_tools_inventory.py` constants and counts updated to match.
 
 ### PR 9E — Confirm live-readiness tools stay in `src/tools/`
 
@@ -221,12 +230,29 @@ No moves. No source file changes.
 
 **Full suite after PR 9E:** 5 193 passed.
 
-### PR 9F — Update docs after actual moves
+### PR 9F — Finalize tools/scripts isolation docs
 
-**Goal:** Update `README.md`, `docs/live_readiness_status.md`, and operator
-runbooks to reflect any moves made in PRs 9C–9E.
+**Status: implemented — docs-only**
 
-**Scope:** Docs only. No code changes.
+**Goal:** Document the final state of the PR 9 isolation plan:
+PR 9D deferred; all 40 tools remain in `src/tools/`; `scripts/` reserved
+for future non-core utilities.
+
+**Final classification (as of PR 9F):**
+
+| Category | Count | Location | Decision |
+|----------|-------|----------|----------|
+| Live safety / readiness gate | 30 | `src/tools/` | **Permanent — do not move** |
+| Manual live/paper guard | 4 | `src/tools/` | **Permanent — do not move** |
+| Paper diagnostic utilities | 6 | `src/tools/` | Remain here; PR 9D deferred |
+| **Total** | **40** | `src/tools/` | All tested, stable, classified |
+
+**`scripts/`** — created (PR 9C); documented for future non-core utilities;
+currently empty of `.py` files. `tests/test_tools_inventory.py` (PR 9E)
+asserts no `live_*.py` or `manual_*.py` files move there.
+
+**Scope:** Docs-only. No `.py` files added, moved, or deleted.
+No `src/`, `tests/`, `config/`, or `output/` changes.
 
 ---
 

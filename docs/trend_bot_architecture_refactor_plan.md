@@ -384,19 +384,20 @@ No PR may be skipped. Each requires its own test coverage where applicable.
 - No deletion without full test coverage of moved functionality.
 - All live-readiness and safety tools remain in place.
 
-**Inventory summary (as of PR 9A design):**
+**Final classification (as of PR 9F):**
 - 30 live safety/readiness tools — **permanent in `src/tools/`**
 - 4 manual live/paper guard tools — **permanent in `src/tools/`**
-- 6 paper diagnostic utilities — **candidates for `scripts/` in PR 9D** (conditional on preconditions)
+- 6 paper diagnostic utilities — **remain in `src/tools/`** (PR 9D deferred; see design doc)
 - All 40 tools have test coverage; no tool has zero tests.
+- `scripts/` created (PR 9C); documented; currently empty of `.py` files.
 
 **Sub-PRs:**
 - 9A: Design (this doc) ✓ designed
 - 9B: Inventory tests for `src/tools/` ✓ implemented — `tests/test_tools_inventory.py` (363 tests)
 - 9C: `scripts/` directory + classification README ✓ implemented — `scripts/README.md`
-- 9D: Move paper diagnostic utilities (conditional on preconditions)
+- 9D: Move paper diagnostic utilities — **deferred** (import/CLI risk > benefit; layout stable)
 - 9E: Confirm live-readiness tools stay in `src/tools/` ✓ implemented — `TestPermanentToolsLocation` (76 tests)
-- 9F: Update docs after actual moves
+- 9F: Finalize isolation docs ✓ implemented — docs-only
 
 ### PR 10 — README update
 
