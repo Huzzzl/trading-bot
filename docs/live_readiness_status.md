@@ -1,7 +1,7 @@
 # Live Readiness Status
 
 Current operational status of the live-readiness gate baseline.
-Last updated: 2026-05-20. Full pre-submit pipeline complete through PR #98.
+Last updated: 2026-05-28. Full pre-submit pipeline complete through PR #98.
 
 ---
 
@@ -3906,6 +3906,58 @@ git diff origin/main...HEAD -- src tests config output scripts
 > **This milestone does not approve any individual trade.**
 > **No Alpaca endpoint was contacted. No credentials were read.**
 > This is a design document only. No code was changed.
+> All live-readiness and paper guard tools remain in `src/tools/` and untouched.
+> The Phase A–H safety roadmap remains unchanged and required.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone — Refactor PR 9B: add-tools-inventory-tests
+
+**Date:** 2026-05-28
+**Branch:** `claude/add-tools-inventory-tests`
+**Files added:** `tests/test_tools_inventory.py`
+**Files updated:** `docs/tools_scripts_isolation_design.md`, `docs/trend_bot_architecture_refactor_plan.md`, `docs/live_readiness_status.md`
+**Tests:** 363 new tests added; full suite 5 117 passed.
+**Type:** Tests + docs. No src, config, output, or scripts changes.
+
+### What was added
+
+`tests/test_tools_inventory.py` locks the PR 9A classification of all 40 tools in `src/tools/`:
+
+- **TestToolsInventory** — asserts 30/4/6/40 counts; file existence for all 40 tools;
+  mutual exclusivity of categories; no unclassified tools on disk; no phantom tools in lists.
+- **TestToolsTestCoverage** — asserts every tool has a `tests/test_{name}.py`.
+- **TestLiveToolsHaveMain** — asserts every live safety + manual-guard tool defines `main()`.
+- **TestToolsSourceScan** — AST-based checks: no module-level Alpaca imports; no module-level
+  `os.environ` reads; no module-level order-mutation calls; no hardcoded secret literals;
+  `live_submit_enablement_gate` does not set `LIVE_SUBMIT_ENABLED = True` at top level.
+- **TestToolsImportSafety** — all 40 tools importable; no module-level
+  `from src.main import build_engine`.
+
+### Validation
+
+```bash
+python -m pytest tests/test_tools_inventory.py  # 363 passed
+python -m pytest                                  # 5 117 passed
+git diff origin/main...HEAD -- src config output scripts
+# Expected: empty (no src/config/output/scripts changes)
+```
+
+### Safety confirmations
+
+- No `src/`, `config/`, `output/`, or `scripts/` files changed
+- No broker/API access — no Alpaca calls, no HTTP, no credentials
+- No order submission. No live or paper trading enabled or changed.
+- All live/paper tools remain in `src/tools/` and fail-closed.
+- No automated trading approved.
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> This is a test/docs PR only. No tool source files were changed.
 > All live-readiness and paper guard tools remain in `src/tools/` and untouched.
 > The Phase A–H safety roadmap remains unchanged and required.
 > Nothing in this repository is financial advice.

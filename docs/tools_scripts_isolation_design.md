@@ -141,15 +141,30 @@ Docs-only. No `src/`, `tests/`, `config/`, or `output/` changes.
 
 ### PR 9B — Inventory tests for `src/tools/`
 
+**Status: implemented — `tests/test_tools_inventory.py` (363 tests)**
+
 **Goal:** Add import-presence and source-scan tests for every tool in
 `src/tools/`, confirming:
 
 - Each tool module is importable from `src.tools.*`.
-- No tool imports `src.main.build_engine` (already removed).
-- Each live tool has a `main()` callable.
+- No tool imports `src.main.build_engine` at module level (already removed).
+- Each live and manual-guard tool has a `main()` callable.
 - No tool-level imports trigger Alpaca SDK loads or network access.
 
-**Scope:** Add `tests/test_tools_inventory.py`. No moves, no deletions.
+**Scope:** Added `tests/test_tools_inventory.py`. No moves, no deletions.
+
+**Test classes:**
+- `TestToolsInventory` — count assertions (30/4/6/40), file existence (parametrised),
+  mutual exclusivity of categories, no unclassified tools, no phantom tools.
+- `TestToolsTestCoverage` — every tool has a `tests/test_{name}.py`.
+- `TestLiveToolsHaveMain` — every live safety + manual-guard tool defines `main()`.
+- `TestToolsSourceScan` — no module-level Alpaca import; no module-level `os.environ`
+  reads; no module-level order-mutation calls; no hardcoded secret literals;
+  `live_submit_enablement_gate` does not set `LIVE_SUBMIT_ENABLED = True` at top level.
+- `TestToolsImportSafety` — all 40 tools importable; no module-level
+  `from src.main import build_engine`.
+
+**Full suite after PR 9B:** 5 117 passed.
 
 ### PR 9C — `scripts/` directory and classification README
 

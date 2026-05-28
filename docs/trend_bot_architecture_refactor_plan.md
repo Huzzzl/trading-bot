@@ -392,7 +392,7 @@ No PR may be skipped. Each requires its own test coverage where applicable.
 
 **Sub-PRs:**
 - 9A: Design (this doc) ✓ designed
-- 9B: Inventory tests for `src/tools/`
+- 9B: Inventory tests for `src/tools/` ✓ implemented — `tests/test_tools_inventory.py` (363 tests)
 - 9C: `scripts/` directory + classification README
 - 9D: Move paper diagnostic utilities (conditional on preconditions)
 - 9E: Confirm live-readiness tools stay in `src/tools/`
