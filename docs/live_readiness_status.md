@@ -3801,3 +3801,61 @@ phrase "not yet wired". Added two source-scan regression tests.
 > Paper/live remain fail-closed: paper requires explicit config gate; live is not enabled.
 > The Phase A–H safety roadmap remains unchanged and required.
 > Nothing in this repository is financial advice.
+
+---
+
+## Milestone — Refactor PR 8E: docs-update-readme-current-usage
+
+**Date:** 2026-05-28
+**Branch:** `claude/docs-update-readme-current-usage`
+**Files changed:** `README.md`
+**Files updated (docs):** `docs/main_dispatcher_slimdown_design.md`, `docs/trend_bot_architecture_refactor_plan.md`, `docs/live_readiness_status.md`
+**Tests:** not run (docs-only PR; no src/tests/config/output changes)
+**Type:** Docs-only. No code, test, config, or output changes.
+
+### What was done
+
+`README.md` fully rewritten to reflect the current state of the repository after PR
+8A–8D. The previous README was written before the main-dispatcher refactor and contained
+stale references to `build_engine()`, `python -m unittest discover`, and an incomplete
+project structure. Key updates:
+
+- Project structure updated to include `indicators/`, `analysis/`, `strategy/factory.py`,
+  `backtest/backtest_runner.py`, `experiments/`, `reporting/`, `execution/paper_*.py`,
+  `tools/live_*.py`, `risk/position_sizer.py`.
+- CLI modes section: `backtest`, `candidate-b`, `sweep`, `walk-forward` documented with
+  examples. `--mode live` and `--mode paper` explicitly documented as rejected.
+- Strategies section: ORB (legacy/benchmark) and TrendFollowing (MVP) both documented.
+  Strategy factory (`src/strategy/factory.py`) documented with accepted name strings.
+- Architecture section: dispatcher model described; `run_backtest()` is the sole backtest
+  dispatch path; `build_engine` noted as removed.
+- Tests section: `python -m pytest` commands replace stale `python -m unittest discover`.
+- Metrics section: Sharpe ratio annualisation noted as interval-aware (not hardcoded 252×78).
+- Safety table: no live trading, no paper trading by default, no credentials required,
+  no order submission in backtest, no look-ahead bias.
+- Stale Roadmap/TODOs referencing `build_engine()` removed.
+
+### Validation
+
+```bash
+git diff origin/main...HEAD -- src tests config output
+# Expected: empty (no src/tests/config/output changes)
+```
+
+### Safety confirmations
+
+- No `src/`, `tests/`, `config/`, or `output/` files changed
+- No broker/API access — no Alpaca calls, no HTTP, no credentials
+- No order submission
+- Paper/live remain fail-closed and unchanged
+- No automated trading approved or enabled
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> This is a docs-only PR — no production behaviour was changed.
+> Paper/live remain fail-closed: paper requires explicit config gate; live is not enabled.
+> The Phase A–H safety roadmap remains unchanged and required.
+> Nothing in this repository is financial advice.

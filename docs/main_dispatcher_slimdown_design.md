@@ -247,11 +247,23 @@ Each sub-PR is independently reviewable and must not reduce the passing test cou
 
 ### PR 8E — README usage update
 
-**Goal:** Update `README.md` to reflect the new CLI and module layout.
+**Status: implemented — `README.md`**
 
-- Add a usage section showing `--mode backtest`, `--mode sweep`, etc.
-- Explicitly document that `--mode live` is disabled and how to check readiness.
-- No code changes.
+- README fully rewritten to reflect current state after PRs 8A–8D.
+- Project structure updated (indicators, analysis, strategy/factory, backtest_runner,
+  experiments, reporting, execution/paper_*, tools/live_*).
+- CLI modes section added: `backtest`, `candidate-b`, `sweep`, `walk-forward`.
+- Disabled modes explicitly documented: `--mode live` and `--mode paper` are not valid CLI
+  options; paper is config-gated and fail-closed; live is not enabled.
+- Strategies section updated: ORB (legacy/benchmark) and TrendFollowing (MVP).
+- Strategy factory documented: accepts `"opening_range_breakout"`, `"orb"`, `"trend_following"`.
+- Architecture section: dispatcher model described; `build_engine` noted as removed;
+  `run_backtest()` is the sole backtest dispatch path.
+- Tests section updated: `python -m pytest` commands replace `python -m unittest discover`.
+- Metrics section: Sharpe ratio annualisation noted as interval-aware.
+- Roadmap/TODOs section removed (replaced by Safety and Architecture sections).
+- Stale references to `build_engine()` removed from all sections.
+- No `src/`, `tests/`, `config/`, or `output/` changes.
 
 ---
 
