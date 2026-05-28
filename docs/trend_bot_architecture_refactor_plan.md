@@ -374,6 +374,8 @@ No PR may be skipped. Each requires its own test coverage where applicable.
 
 ### PR 9 — Tools / scripts isolation
 
+**Status: designed — `docs/tools_scripts_isolation_design.md`**
+
 **Files:** audit `src/tools/`; move non-core manual scripts to `scripts/` if safe.
 
 - Identify which `src/tools/` scripts are imported by tests.
@@ -381,6 +383,20 @@ No PR may be skipped. Each requires its own test coverage where applicable.
 - Only move scripts that have zero test imports and are not part of live-readiness gate.
 - No deletion without full test coverage of moved functionality.
 - All live-readiness and safety tools remain in place.
+
+**Inventory summary (as of PR 9A design):**
+- 30 live safety/readiness tools — **permanent in `src/tools/`**
+- 4 manual live/paper guard tools — **permanent in `src/tools/`**
+- 6 paper diagnostic utilities — **candidates for `scripts/` in PR 9D** (conditional on preconditions)
+- All 40 tools have test coverage; no tool has zero tests.
+
+**Sub-PRs:**
+- 9A: Design (this doc) ✓ designed
+- 9B: Inventory tests for `src/tools/`
+- 9C: `scripts/` directory + classification README
+- 9D: Move paper diagnostic utilities (conditional on preconditions)
+- 9E: Confirm live-readiness tools stay in `src/tools/`
+- 9F: Update docs after actual moves
 
 ### PR 10 — README update
 

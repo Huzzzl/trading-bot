@@ -3859,3 +3859,53 @@ git diff origin/main...HEAD -- src tests config output
 > Paper/live remain fail-closed: paper requires explicit config gate; live is not enabled.
 > The Phase A–H safety roadmap remains unchanged and required.
 > Nothing in this repository is financial advice.
+
+---
+
+## Milestone — Refactor PR 9A: docs-design-tools-scripts-isolation
+
+**Date:** 2026-05-28
+**Branch:** `claude/docs-design-tools-scripts-isolation`
+**Files added:** `docs/tools_scripts_isolation_design.md`
+**Files updated:** `docs/trend_bot_architecture_refactor_plan.md`, `docs/live_readiness_status.md`
+**Tests:** not run (docs-only PR; no src/tests/config/output/scripts changes)
+**Type:** Docs-only. No code, test, config, output, or script changes.
+
+### What was designed
+
+Design document for PR 9 (`src/tools/` isolation), covering:
+
+- Full inventory of all 40 tools across four categories:
+  live safety/readiness (30), manual live/paper guard (4), paper diagnostics (6).
+- Classification: 34 tools are permanent in `src/tools/`; 6 paper diagnostics
+  are move candidates (conditional on preconditions).
+- All 40 tools have existing test coverage — no tool has zero tests.
+- Staged sub-PR plan: 9A design → 9B inventory tests → 9C scripts/ README →
+  9D conditional paper tool moves → 9E live-tool confirmation → 9F doc update.
+- Rules: no moves without passing tests; no deletions without coverage;
+  live/paper tools remain fail-closed; no broker/API/credentials.
+
+### Validation
+
+```bash
+git diff origin/main...HEAD -- src tests config output scripts
+# Expected: empty
+```
+
+### Safety confirmations
+
+- No `src/`, `tests/`, `config/`, `output/`, or `scripts/` files changed
+- No broker/API access — no Alpaca calls, no HTTP, no credentials
+- No order submission. No live or paper trading enabled or changed.
+- All live/paper tools remain in `src/tools/` and fail-closed.
+- No automated trading approved.
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> This is a design document only. No code was changed.
+> All live-readiness and paper guard tools remain in `src/tools/` and untouched.
+> The Phase A–H safety roadmap remains unchanged and required.
+> Nothing in this repository is financial advice.
