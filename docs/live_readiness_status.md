@@ -2,7 +2,7 @@
 
 Current operational status of the live-readiness gate baseline.
 Last updated: 2026-05-28. Full pre-submit pipeline complete through PR #98.
-Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. PR 10E cache checker (42 tests, 41 tools). PR 10F Yahoo fetch gate design. PR 10G Yahoo fetch tool (43 tests, 42 tools). PR 10H local fetch runbook. Test baseline: 5 366 passed.
+Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. PR 10E cache checker (42 tests, 41 tools). PR 10F Yahoo fetch gate design. PR 10G Yahoo fetch tool (43 tests, 42 tools). PR 10H local fetch runbook. PR 10I cached real-data backtest checker (45 tests, 43 tools). Test baseline: 5 419 passed.
 
 ---
 
@@ -4622,5 +4622,188 @@ python -m pytest  # 5 366 passed (suite unchanged)
 > **No Alpaca endpoint was contacted. No credentials were read.**
 > **PASS from the runbook means cache populated only.**
 > This is a docs-only PR. No source files, tests, or configs were changed.
+> The Phase A–H safety roadmap remains unchanged and required before any automation.
+
+---
+
+## Milestone — PR 10I: add-cached-real-data-backtest-checker
+
+**Date:** 2026-05-28
+**Branch:** `claude/add-cached-real-data-backtest-checker`
+**Files added:** `src/tools/cached_real_data_backtest_check.py`, `tests/test_cached_real_data_backtest_check.py`
+**Files updated:** `tests/test_tools_inventory.py`, `docs/real_data_backtest_gate_design.md`, `docs/yahoo_fetch_gate_design.md`, `docs/automated_strategy_execution_roadmap.md`, `docs/live_readiness_status.md`
+**Tests:** 45 new tests (9 classes). Full suite: 5 419 passed.
+**Type:** Feature. No broker/API/credentials/trading. No network in tests.
+
+### What was added
+
+`src/tools/cached_real_data_backtest_check.py` — offline TrendFollowing
+characterization tool (43rd tool in `src/tools/`).
+
+**Architecture:**
+- `_LoadedFileProvider(BaseDataProvider)` — wraps a pre-loaded DataFrame;
+  never makes any network call; all `fetch_bars` params ignored.
+- `_load_cache_file(cache_dir, file_name)` — reads parquet or CSV; restores
+  tz-aware DatetimeIndex; casts OHLCV columns to numeric.
+- `run_check(cache_dir, symbols, intervals, *, _trend_params)` — injectable
+  `_trend_params` for testing; calls `check_cache` first (fail-fast); builds
+  `file_map` from OK entries; loads each file; wraps in `_LoadedFileProvider`;
+  runs `run_backtest()` with `BacktestRunConfig`; returns metric summaries.
+
+**Default params** (`_TREND_PARAMS`):
+```python
+{"ema_fast": 10, "ema_slow": 50, "atr_period": 14,
+ "atr_stop_mult": 2.0, "volatility_lookback": 50, "breakout_lookback": 5}
+# Warm-up = max(50, 14+50-1, 5+1) = 63 bars
+```
+
+**Output keys:** `result`, `blocker`, `availability_check_result`,
+`scenarios_run`, `scenarios` (per-scenario: symbol, interval, rows, status,
+total_return_pct, annualized_return_pct, max_drawdown_pct, sharpe_ratio,
+num_trades — no raw OHLCV), `broker_calls_made=False`,
+`credentials_read=False`, `network_calls_made=False`,
+`order_action_requested=False`.
+
+**CLI:**
+```bash
+python -m src.tools.cached_real_data_backtest_check
+python -m src.tools.cached_real_data_backtest_check --cache-dir data/cache --symbols SPY QQQ --intervals 1d 60m
+python -m src.tools.cached_real_data_backtest_check --output result.json
+```
+
+Exit 0 on PASS; exit 1 on BLOCKED.
+
+**`tests/test_cached_real_data_backtest_check.py`** — 45 tests across 9 classes:
+
+| Class | Tests |
+|-------|-------|
+| `TestMissingCache` | 5 — missing dir, empty cache, no backtest called, scenarios_run=0, availability BLOCKED |
+| `TestValidCache` | 8 — PASS with all 4 scenarios, rows match, metrics valid, no raw prices |
+| `TestInvalidColumns` | 3 — BLOCKED for invalid columns, partial scenarios |
+| `TestDeterminism` | 3 — identical results on repeated calls |
+| `TestIntervalAliasing` | 3 — 60m↔1h aliasing in both directions |
+| `TestSafetyFlags` | 5 — all 4 safety flags False in PASS and BLOCKED |
+| `TestNoPricesEmitted` | 4 — no OHLCV keys, allowed set, no equity curve |
+| `TestOutputJson` | 4 — --output writes valid JSON, required keys, blocked JSON |
+| `TestSourceScan` | 10 — AST scans for yfinance, requests, httpx, aiohttp, urllib, alpaca, os.environ, submit_order, cancel_order, replace_order |
+
+Test fixture sizes: 80 bars (1d) / 150 bars (60m), seeded uptrending synthetic OHLCV — no real market data in any test.
+
+**`tests/test_tools_inventory.py`** — `DATA_TOOLS` updated from 2 to 3 entries; count 42 → 43.
+
+### Validation
+
+```bash
+git diff origin/main...HEAD -- src/main.py src/backtest src/strategy src/execution config output scripts data
+# Expected: empty
+python -m pytest tests/test_cached_real_data_backtest_check.py  # 45 passed
+python -m pytest tests/test_tools_inventory.py                  # 463 passed
+python -m pytest                                                 # 5 419 passed
+```
+
+### Safety confirmations
+
+- No broker/API access — no Alpaca calls, no HTTP, no credentials
+- No order submission. No live or paper trading enabled or changed.
+- 43 tools in `src/tools/`; all fail-closed.
+- No automated trading approved.
+- Tool source scanned by AST (both inventory tests and dedicated TestSourceScan):
+  no yfinance, requests, httpx, aiohttp, urllib, alpaca, os.environ, submit_order,
+  cancel_order, replace_order imports.
+- All tests use synthetic CSV fixtures in tmp_path — no real market data, no network.
+- `_LoadedFileProvider` never calls any network; `network_calls_made=False` always.
+- PASS means characterization ran only — not strategy approval, paper, or live.
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> **PASS means characterization metrics computed from cached data only.**
+> The Phase A–H safety roadmap remains unchanged and required before any automation.
+> Nothing in this repository is financial advice.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone — PR 10I: add-cached-real-data-backtest-checker
+
+**Commit:** `feat: add cached real-data backtest checker (PR 10I)`
+
+**Branch:** `claude/add-cached-real-data-backtest-checker`
+
+### Summary
+
+Added `src/tools/cached_real_data_backtest_check.py` — offline TrendFollowing
+characterization tool using locally cached bar data. Reads from `data/cache/`
+only. No network. No credentials. No trading.
+
+### What was added
+
+- `src/tools/cached_real_data_backtest_check.py` — 43rd tool in `src/tools/`;
+  offline characterization tool; calls `cached_data_availability_check` first
+  (fail-fast if cache missing); loads cached OHLCV files directly from disk
+  (parquet or csv); runs `run_backtest()` with `trend_following` strategy for
+  SPY/QQQ × 1d/60m; reports metric summaries per scenario (no raw OHLCV values);
+  returns PASS if all scenarios complete; BLOCKED if cache missing or load fails;
+  60m ↔ 1h aliasing supported; `--output` writes JSON report.
+- `tests/test_cached_real_data_backtest_check.py` — 45 tests across 9 test
+  classes: `TestMissingCache`, `TestValidCache`, `TestInvalidColumns`,
+  `TestDeterminism`, `TestIntervalAliasing`, `TestSafetyFlags`,
+  `TestNoPricesEmitted`, `TestOutputJson`, `TestSourceScan` (AST-based
+  forbidden-import checks). All tests use `tmp_path` + synthetic CSV fixtures;
+  no real cache files; no network in any test.
+- `tests/test_tools_inventory.py` — `DATA_TOOLS` updated with
+  `cached_real_data_backtest_check`; count updated from 42 to 43.
+
+### CLI
+
+```bash
+python -m src.tools.cached_real_data_backtest_check
+python -m src.tools.cached_real_data_backtest_check --cache-dir data/cache --symbols SPY QQQ --intervals 1d 60m
+python -m src.tools.cached_real_data_backtest_check --output result.json
+```
+
+Exit 0 on PASS; exit 1 on BLOCKED.
+
+### Key design decisions
+
+- `_LoadedFileProvider` wraps a pre-loaded DataFrame as a `BaseDataProvider`;
+  never makes any network calls; all `fetch_bars()` parameters ignored.
+- `run_check()` calls `check_cache()` first — if BLOCKED, returns immediately
+  with `scenarios_run=0` and empty `scenarios` list (fail-fast).
+- `_trend_params` is injectable for tests to override default parameters.
+- Scenario output contains only: `symbol`, `interval`, `rows`, `status`,
+  `total_return_pct`, `annualized_return_pct`, `max_drawdown_pct`,
+  `sharpe_ratio`, `num_trades`. No raw OHLCV values.
+- `scenarios_run` counts only scenarios with `status == "OK"`.
+
+### Validation
+
+```bash
+git diff origin/main...HEAD -- src/main.py src/backtest src/strategy src/execution config output scripts data
+# Expected: empty
+python -m pytest  # 5 419 passed (5 366 baseline + 45 new + 8 inventory)
+```
+
+### Safety confirmations
+
+- No broker/API access — no Alpaca calls, no HTTP, no yfinance, no credentials
+- No `os.environ` or `os.getenv` anywhere in tool source
+- No `submit_order`, `cancel_order`, `replace_order` in tool source
+- No raw OHLCV values in output dict or JSON report
+- `broker_calls_made=False`, `credentials_read=False`, `network_calls_made=False`,
+  `order_action_requested=False` in all results
+- `BacktestRunResult` safety flags confirmed (`recommendation_only=True`,
+  `broker_calls_made=False`, `live_submit_enabled=False`)
+- All 43 tools remain in `src/tools/` and fail-closed
+- No automated trading approved
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> **PASS means characterization ran only — not strategy validation, paper trading, or live trading.**
 > The Phase A–H safety roadmap remains unchanged and required before any automation.
 > Nothing in this repository is financial advice.

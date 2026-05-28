@@ -328,18 +328,21 @@ run fetch with `--allow-network`, verify with `cached_data_availability_check`,
 handle failures, inspect/clear cache, and understand what PASS means.
 No `src/`, `tests/`, `config/`, `output/`, `scripts/`, or `data/` changes.
 
-### PR 10I — Integration tests with real cached data
+### PR 10I — Cached real-data backtest checker
 
-**Goal:** Add `@pytest.mark.integration` tests that run the four backtest
-scenarios (SPY/QQQ × 1d/1h) against cached real data, skipped in CI unless
-`--run-integration` is passed.
+**Status: implemented — `src/tools/cached_real_data_backtest_check.py`**
 
-**Preconditions:**
-- Operator has run the PR 10H runbook and `data/cache/` is PASS from
-  `cached_data_availability_check`.
-- Tests skip gracefully when cache is absent (`pytest.skip("cache not populated")`).
+**What was added:**
+- `src/tools/cached_real_data_backtest_check.py` — offline characterization tool
+  (43rd tool in `src/tools/`); reads from `data/cache/` only; no network; runs
+  `run_backtest()` with `trend_following` for SPY/QQQ × 1d/60m; reports metric
+  summaries (no raw prices); BLOCKED if cache missing; PASS means characterization
+  ran only; count 42 → 43 tools.
+- `tests/test_cached_real_data_backtest_check.py` — 45 tests; all use synthetic
+  CSV fixtures; no real cache files, no network in any test.
+- `tests/test_tools_inventory.py` — count updated from 42 to 43.
 
-**Not in scope:** Live data fetch in CI, broker calls, credentials, trading.
+**Not in scope:** Live data fetch in CI, broker calls, credentials, trading, raw OHLCV values in output.
 
 ---
 

@@ -309,18 +309,32 @@ with `cached_data_availability_check`, failure remediation, cache cleanup,
 and what PASS does and does not mean.
 No `src/`, `tests/`, `config/`, `output/`, `scripts/`, or `data/` changes.
 
-### PR 10I — Integration tests with real cached data
+### PR 10I — Cached real-data backtest checker
 
-**Goal:** Add `@pytest.mark.integration` tests that run the four backtest
-scenarios (SPY/QQQ × 1d/1h) against cached real data, skipped in CI unless
-`--run-integration` is passed.
+**Status: implemented — `src/tools/cached_real_data_backtest_check.py`**
 
-**Preconditions:**
-- Operator has run the PR 10H runbook and `data/cache/` is PASS from
-  `cached_data_availability_check`.
-- Tests skip gracefully when cache is absent (`pytest.skip("cache not populated")`).
+**What was added:**
+- `src/tools/cached_real_data_backtest_check.py` — offline characterization tool
+  (43rd tool in `src/tools/`); reads from `data/cache/` only; no network; runs
+  `run_backtest()` with `trend_following` for SPY/QQQ × 1d/60m; reports metric
+  summaries (no raw prices); BLOCKED if cache missing; PASS means characterization
+  ran only; 60m ↔ 1h aliasing supported.
+- `tests/test_cached_real_data_backtest_check.py` — 45 tests across 9 test classes:
+  `TestMissingCache`, `TestValidCache`, `TestInvalidColumns`, `TestDeterminism`,
+  `TestIntervalAliasing`, `TestSafetyFlags`, `TestNoPricesEmitted`, `TestOutputJson`,
+  `TestSourceScan` (AST-based forbidden-import checks).
+- `tests/test_tools_inventory.py` — count updated from 42 to 43.
 
-**Not in scope:** Live data fetch in CI, broker calls, credentials, trading.
+**CLI:**
+```bash
+python -m src.tools.cached_real_data_backtest_check
+python -m src.tools.cached_real_data_backtest_check --cache-dir data/cache --symbols SPY QQQ --intervals 1d 60m
+python -m src.tools.cached_real_data_backtest_check --output result.json
+```
+
+Exit 0 on PASS; exit 1 on BLOCKED. Prints human-readable summary; JSON only with `--output`.
+
+**Not in scope:** Live data fetch in CI, broker calls, credentials, trading, raw OHLCV values in output.
 
 ---
 
