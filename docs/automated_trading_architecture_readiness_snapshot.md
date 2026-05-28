@@ -136,7 +136,9 @@ python -m src.tools.live_safety_status --config ...
 1. **Offline strategy validation** — run backtests with TrendFollowing on SPY
    and QQQ using `python -m src.main --mode backtest` with
    `strategy.name = trend_following` in config. Collect metrics, equity curves,
-   and trade logs.
+   and trade logs. Scenarios designed in PR 10B
+   (`docs/trendfollowing_offline_backtest_scenarios_design.md`);
+   implementation in PR 10C (fixtures + scenario tests).
 
 2. **ORB vs TrendFollowing comparison** — run both strategies over the same
    date range; compare Sharpe, drawdown, win rate, and trade frequency.
