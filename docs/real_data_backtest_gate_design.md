@@ -271,15 +271,41 @@ Exit 0 on PASS; exit 1 on BLOCKED. Prints human-readable summary; JSON only with
 
 **Not in scope:** Live data fetch, broker calls, credentials, trading.
 
-### PR 10F — Integration tests with real cached data
+### PR 10F — Yahoo fetch gate design
+
+**Status: designed — `docs/yahoo_fetch_gate_design.md`**
+
+Docs-only. Defines the explicit approval gate for fetching Yahoo/yfinance
+historical bar data into `data/cache/`. Covers: default-BLOCKED stance, the
+`--allow-network` opt-in flag, symbol/interval scope, rate-limit and retry
+policy, post-fetch validation via `cached_data_availability_check`, output
+summary policy (no raw prices), and failure policy (fail-closed, no partial
+approval). No `src/`, `tests/`, `config/`, `output/`, `scripts/`, or `data/`
+changes.
+
+### PR 10G — Yahoo fetch tool (explicit `--allow-network` gate)
+
+**Goal:** Implement `src/tools/yahoo_fetch.py` — a guarded fetch tool that
+makes network calls only when `--allow-network` is explicitly passed.
+
+**Scope:**
+- `src/tools/yahoo_fetch.py`
+- `tests/test_yahoo_fetch.py` (all tests mock the provider; no live network)
+- `tests/test_tools_inventory.py` update (count 41 → 42)
+- Update relevant design docs
+
+**Not in scope:** Broker calls, credentials, order submission, trading.
+
+### PR 10H — Integration tests with real cached data
 
 **Goal:** Add `@pytest.mark.integration` tests that run the four backtest
 scenarios (SPY/QQQ × 1d/1h) against cached real data, skipped in CI unless
 `--run-integration` is passed.
 
 **Preconditions:**
-- PR 10E cache availability checker implemented and passing.
-- Operator has run the fetch runbook (§ 5) and `data/cache/` is populated.
+- PR 10G fetch tool implemented and passing.
+- Operator has run `python -m src.tools.yahoo_fetch --allow-network` and
+  `data/cache/` is PASS from `cached_data_availability_check`.
 - Tests skip gracefully when cache is absent (`pytest.skip("cache not populated")`).
 
 **Not in scope:** Live data fetch in CI, broker calls, credentials, trading.

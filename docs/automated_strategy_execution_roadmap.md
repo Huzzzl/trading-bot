@@ -175,6 +175,11 @@ Cache availability checker: PR 10E (`src/tools/cached_data_availability_check.py
 — offline read-only tool; scans `data/cache/` for SPY/QQQ × 1d/60m files; validates
 OHLCV columns; 60m ↔ 1h aliasing; 42 tests; PASS/BLOCKED result; no network,
 no broker, no credentials; `data/cache/` added to `.gitignore`.
+Yahoo fetch gate design: PR 10F (`docs/yahoo_fetch_gate_design.md`) — defines
+explicit `--allow-network` approval gate for Yahoo/yfinance data fetch; default
+BLOCKED; scope SPY/QQQ × 1d/60m; conservative rate-limit and retry policy;
+post-fetch validation via `cached_data_availability_check`; fail-closed; no raw
+prices in output; PASS means cache populated only, not strategy/paper/live approval.
 
 ### Phase C — Paper trading execution
 
