@@ -2,6 +2,7 @@
 
 Current operational status of the live-readiness gate baseline.
 Last updated: 2026-05-28. Full pre-submit pipeline complete through PR #98.
+Refactor PRs: 9A (design), 9B (inventory tests), 9C (scripts/ README) complete.
 
 ---
 
@@ -3958,6 +3959,57 @@ git diff origin/main...HEAD -- src config output scripts
 > **This milestone does not approve any individual trade.**
 > **No Alpaca endpoint was contacted. No credentials were read.**
 > This is a test/docs PR only. No tool source files were changed.
+> All live-readiness and paper guard tools remain in `src/tools/` and untouched.
+> The Phase A–H safety roadmap remains unchanged and required.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone — Refactor PR 9C: add-scripts-readme-tools-classification
+
+**Date:** 2026-05-28
+**Branch:** `claude/add-scripts-readme-tools-classification`
+**Files added:** `scripts/README.md`
+**Files updated:** `docs/tools_scripts_isolation_design.md`, `docs/trend_bot_architecture_refactor_plan.md`, `docs/live_readiness_status.md`
+**Tests:** not run (docs-only PR; no src/tests/config/output changes)
+**Type:** Docs-only. No code, test, config, or output changes.
+
+### What was added
+
+`scripts/README.md` documents the `scripts/` directory purpose and current tool classification:
+
+- **Purpose section** — explains `scripts/` vs `src/tools/` distinction.
+- **Permanent tools (30 + 4)** — full tables of live safety/readiness and manual-guard tools
+  that must stay in `src/tools/` permanently (CLI surface, operator runbooks).
+- **Conditional move candidates (6)** — paper diagnostic utilities with explicit preconditions
+  required before any move (PR 9D, conditional).
+- **Rules** — six rules governing any future additions to `scripts/`.
+- **Safety guarantees table** — documents how each guarantee is enforced.
+
+No files were moved. No tool source files were changed.
+`tests/test_tools_inventory.py` (PR 9B) continues to enforce the 30/4/6/40 classification.
+
+### Validation
+
+```bash
+git diff origin/main...HEAD -- src tests config output
+# Expected: empty (no src/tests/config/output changes)
+```
+
+### Safety confirmations
+
+- No `src/`, `tests/`, `config/`, or `output/` files changed
+- No broker/API access — no Alpaca calls, no HTTP, no credentials
+- No order submission. No live or paper trading enabled or changed.
+- All live/paper tools remain in `src/tools/` and fail-closed.
+- No automated trading approved.
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> This is a docs-only PR. No tool source files were changed.
 > All live-readiness and paper guard tools remain in `src/tools/` and untouched.
 > The Phase A–H safety roadmap remains unchanged and required.
 > Nothing in this repository is financial advice.

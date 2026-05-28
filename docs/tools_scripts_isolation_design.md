@@ -168,10 +168,16 @@ Docs-only. No `src/`, `tests/`, `config/`, or `output/` changes.
 
 ### PR 9C — `scripts/` directory and classification README
 
+**Status: implemented — `scripts/README.md`**
+
 **Goal:** Create `scripts/` directory with a `README.md` classifying tools
 as permanent (`src/tools/`) vs. future-move candidates.
 
-**Scope:** Add `scripts/README.md`. No tool moves yet. No test changes.
+**Scope:** Added `scripts/README.md`. No tool moves. No test changes.
+
+**Contents:** Explains the purpose of `scripts/` vs `src/tools/`; full 30/4/6
+classification tables; rules for adding files; safety guarantee table.
+Notes that `tests/test_tools_inventory.py` (PR 9B) locks the counts.
 
 ### PR 9D — Move paper diagnostic utilities to `scripts/` (conditional)
 
