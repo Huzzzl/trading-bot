@@ -305,21 +305,28 @@ Docs-only. No `src/`, `tests/`, `config/`, `output/`, or `scripts/` changes.
 
 ### PR 10C — Scenario fixtures and runner
 
-**Goal:** Implement the scenario runner and data fixtures.
+**Status: implemented — `tests/test_trendfollowing_offline_scenarios.py` (72 tests)**
 
-**Scope:**
-- `tests/fixtures/spy_1d_2020_2024.csv` — SPY daily bars (pre-downloaded)
-- `tests/fixtures/qqq_1d_2020_2024.csv` — QQQ daily bars (pre-downloaded)
-- `tests/fixtures/spy_1h_recent.csv` — SPY hourly bars (40+ trading days)
-- `tests/fixtures/qqq_1h_recent.csv` — QQQ hourly bars (40+ trading days)
-- `tests/test_trendfollowing_backtest_scenarios.py` — parametrised scenario tests
-  asserting: no errors, `broker_calls_made == False`, all metric keys present,
-  deterministic repeated runs.
-- No `yfinance` live fetches in the test suite.
-- Full suite must not regress.
+**Implemented approach:** In-test synthetic deterministic fixtures (no CSV files,
+no yfinance network calls). A seeded NumPy RNG generates uptrending OHLCV bars for
+all four symbol × interval combinations.
 
-**Not in scope:** Parameter sweep, optimisation, production deployment,
-live/paper execution.
+**Test structure:**
+- `_make_1d_bars(n=80, seed=42)` — 80 business-day bars (Eastern tz), deterministic
+- `_make_1h_bars(n_days=25, seed=42)` — 25 trading days × 6 hourly bars = 150 bars
+- `_FakeProvider` — implements `BaseDataProvider`; returns synthetic bars; no network
+- Warm-up params: `ema_fast=5, ema_slow=10, atr_period=5, volatility_lookback=15, breakout_lookback=5` (19-bar warm-up)
+
+**Test classes (72 tests):**
+- `TestScenarioBaselines` — 10 tests: each scenario returns `BacktestRunResult`; symbol/strategy/interval echoed correctly
+- `TestScenarioSafetyFlags` — 24 tests: all 6 safety flags correct (×4 scenarios)
+- `TestScenarioMetrics` — 18 tests: required metric keys present, types, ranges (×4 scenarios + 2 standalone)
+- `TestDeterminism` — 8 tests: repeated runs identical metrics + trade count (×4 scenarios)
+- `TestIntervalAwareSharpe` — 5 tests: `bars_per_year` differs; Sharpe differs when non-zero
+- `TestNoSideEffects` — 3 tests: config immutable; no files written; intents are audit-only
+
+**No CSV fixture files committed; no yfinance calls; no network access.**
+**Full suite after PR 10C:** 5 265 passed.
 
 ---
 

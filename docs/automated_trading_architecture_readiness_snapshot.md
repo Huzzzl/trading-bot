@@ -138,7 +138,8 @@ python -m src.tools.live_safety_status --config ...
    `strategy.name = trend_following` in config. Collect metrics, equity curves,
    and trade logs. Scenarios designed in PR 10B
    (`docs/trendfollowing_offline_backtest_scenarios_design.md`);
-   implementation in PR 10C (fixtures + scenario tests).
+   implemented in PR 10C (`tests/test_trendfollowing_offline_scenarios.py`,
+   72 deterministic tests with synthetic in-test fixtures; no network).
 
 2. **ORB vs TrendFollowing comparison** — run both strategies over the same
    date range; compare Sharpe, drawdown, win rate, and trade frequency.
