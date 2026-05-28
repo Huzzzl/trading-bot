@@ -299,16 +299,25 @@ changes.
 
 **Not in scope:** Broker calls, credentials, order submission, trading.
 
-### PR 10H — Integration tests with real cached data
+### PR 10H — Local operator runbook (docs-only)
+
+**Status: complete — `docs/local_yahoo_cache_fetch_runbook.md`**
+
+Step-by-step operator runbook for populating `data/cache/` locally.
+Covers: confirm default BLOCKED, run fetch with `--allow-network`, verify
+with `cached_data_availability_check`, failure remediation, cache cleanup,
+and what PASS does and does not mean.
+No `src/`, `tests/`, `config/`, `output/`, `scripts/`, or `data/` changes.
+
+### PR 10I — Integration tests with real cached data
 
 **Goal:** Add `@pytest.mark.integration` tests that run the four backtest
 scenarios (SPY/QQQ × 1d/1h) against cached real data, skipped in CI unless
 `--run-integration` is passed.
 
 **Preconditions:**
-- PR 10G fetch tool implemented and passing.
-- Operator has run `python -m src.tools.yahoo_fetch --allow-network` and
-  `data/cache/` is PASS from `cached_data_availability_check`.
+- Operator has run the PR 10H runbook and `data/cache/` is PASS from
+  `cached_data_availability_check`.
 - Tests skip gracefully when cache is absent (`pytest.skip("cache not populated")`).
 
 **Not in scope:** Live data fetch in CI, broker calls, credentials, trading.
