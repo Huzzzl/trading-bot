@@ -413,3 +413,96 @@ class TestToolsImportSafety:
             f"src/tools/{name}.py has a module-level import of the removed "
             f"build_engine symbol from src.main: {scanner.findings}"
         )
+
+
+# ---------------------------------------------------------------------------
+# TestPermanentToolsLocation — PR 9E
+# Confirm 30 live safety/readiness + 4 manual-guard tools are in src/tools/
+# and none have been moved to scripts/.
+# ---------------------------------------------------------------------------
+
+_PERMANENT_TOOLS: tuple[str, ...] = LIVE_SAFETY_TOOLS + MANUAL_GUARD_TOOLS
+_SCRIPTS_DIR = _REPO_ROOT / "scripts"
+
+
+class TestPermanentToolsLocation:
+    """
+    PR 9E: assert all 34 permanent tools live in src/tools/ and are absent
+    from scripts/.  These tools must not be moved without a dedicated PR that
+    updates import paths, test paths, and operator runbooks.
+    """
+
+    def test_permanent_tools_count(self) -> None:
+        assert len(_PERMANENT_TOOLS) == 34
+
+    def test_live_safety_tools_count_unchanged(self) -> None:
+        assert len(LIVE_SAFETY_TOOLS) == 30
+
+    def test_manual_guard_tools_count_unchanged(self) -> None:
+        assert len(MANUAL_GUARD_TOOLS) == 4
+
+    @pytest.mark.parametrize("name", _PERMANENT_TOOLS)
+    def test_permanent_tool_in_src_tools(self, name: str) -> None:
+        assert _tool_path(name).is_file(), (
+            f"src/tools/{name}.py missing — "
+            f"permanent tools must stay in src/tools/ (PR 9E)"
+        )
+
+    @pytest.mark.parametrize("name", _PERMANENT_TOOLS)
+    def test_permanent_tool_not_in_scripts(self, name: str) -> None:
+        scripts_path = _SCRIPTS_DIR / f"{name}.py"
+        assert not scripts_path.exists(), (
+            f"scripts/{name}.py exists — permanent tools must NOT be moved to scripts/ "
+            f"without a dedicated PR updating imports, tests, and runbooks"
+        )
+
+    def test_no_live_tool_file_in_scripts(self) -> None:
+        if not _SCRIPTS_DIR.exists():
+            return
+        live_in_scripts = [
+            p.name
+            for p in _SCRIPTS_DIR.glob("live_*.py")
+        ]
+        assert not live_in_scripts, (
+            f"live_*.py files found in scripts/: {sorted(live_in_scripts)} — "
+            f"live safety tools must remain in src/tools/"
+        )
+
+    def test_no_manual_tool_file_in_scripts(self) -> None:
+        if not _SCRIPTS_DIR.exists():
+            return
+        manual_in_scripts = [
+            p.name
+            for p in _SCRIPTS_DIR.glob("manual_*.py")
+        ]
+        assert not manual_in_scripts, (
+            f"manual_*.py files found in scripts/: {sorted(manual_in_scripts)} — "
+            f"manual guard tools must remain in src/tools/"
+        )
+
+    def test_scripts_readme_documents_permanent_tools(self) -> None:
+        readme = _SCRIPTS_DIR / "README.md"
+        assert readme.is_file(), "scripts/README.md not found"
+        text = readme.read_text(encoding="utf-8")
+        assert "Permanent in" in text or "permanent" in text.lower(), (
+            "scripts/README.md must document that live/manual tools are permanent in src/tools/"
+        )
+        assert "src/tools/" in text, (
+            "scripts/README.md must reference src/tools/ as the permanent location"
+        )
+
+    def test_scripts_readme_lists_live_safety_count(self) -> None:
+        readme = _SCRIPTS_DIR / "README.md"
+        assert readme.is_file(), "scripts/README.md not found"
+        text = readme.read_text(encoding="utf-8")
+        assert "30" in text, (
+            "scripts/README.md must mention the count of 30 live safety tools"
+        )
+
+    def test_scripts_readme_lists_manual_guard_count(self) -> None:
+        readme = _SCRIPTS_DIR / "README.md"
+        assert readme.is_file(), "scripts/README.md not found"
+        text = readme.read_text(encoding="utf-8")
+        assert "4" in text, (
+            "scripts/README.md must mention the count of 4 manual guard tools"
+        )

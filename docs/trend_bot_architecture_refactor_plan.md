@@ -395,7 +395,7 @@ No PR may be skipped. Each requires its own test coverage where applicable.
 - 9B: Inventory tests for `src/tools/` ✓ implemented — `tests/test_tools_inventory.py` (363 tests)
 - 9C: `scripts/` directory + classification README ✓ implemented — `scripts/README.md`
 - 9D: Move paper diagnostic utilities (conditional on preconditions)
-- 9E: Confirm live-readiness tools stay in `src/tools/`
+- 9E: Confirm live-readiness tools stay in `src/tools/` ✓ implemented — `TestPermanentToolsLocation` (76 tests)
 - 9F: Update docs after actual moves
 
 ### PR 10 — README update

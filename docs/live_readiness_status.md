@@ -2,7 +2,7 @@
 
 Current operational status of the live-readiness gate baseline.
 Last updated: 2026-05-28. Full pre-submit pipeline complete through PR #98.
-Refactor PRs: 9A (design), 9B (inventory tests), 9C (scripts/ README) complete.
+Refactor PRs: 9A (design), 9B (inventory tests), 9C (scripts/ README), 9E (permanent-tools confirmation) complete.
 
 ---
 
@@ -4010,6 +4010,63 @@ git diff origin/main...HEAD -- src tests config output
 > **This milestone does not approve any individual trade.**
 > **No Alpaca endpoint was contacted. No credentials were read.**
 > This is a docs-only PR. No tool source files were changed.
+> All live-readiness and paper guard tools remain in `src/tools/` and untouched.
+> The Phase A–H safety roadmap remains unchanged and required.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone — Refactor PR 9E: confirm-live-tools-stay-in-src-tools
+
+**Date:** 2026-05-28
+**Branch:** `claude/confirm-live-tools-stay-in-src-tools`
+**Files updated:** `tests/test_tools_inventory.py`, `docs/tools_scripts_isolation_design.md`, `docs/trend_bot_architecture_refactor_plan.md`, `docs/live_readiness_status.md`
+**Tests:** 76 new tests added; targeted 439 passed; full suite 5 193 passed.
+**Type:** Tests + docs. No src/tools, config, or output changes.
+
+### What was added
+
+`TestPermanentToolsLocation` class in `tests/test_tools_inventory.py` (76 tests):
+
+- **counts** — asserts 34 permanent tools (30 live safety + 4 manual guard); constituent counts unchanged.
+- **`test_permanent_tool_in_src_tools[*]`** — parametrised over 34 tools: each file exists in `src/tools/`.
+- **`test_permanent_tool_not_in_scripts[*]`** — parametrised over 34 tools: no file exists in `scripts/`.
+- **`test_no_live_tool_file_in_scripts`** — no `live_*.py` present in `scripts/`.
+- **`test_no_manual_tool_file_in_scripts`** — no `manual_*.py` present in `scripts/`.
+- **`test_scripts_readme_documents_permanent_tools`** — `scripts/README.md` uses "permanent" and references `src/tools/`.
+- **`test_scripts_readme_lists_live_safety_count`** — `scripts/README.md` mentions count 30.
+- **`test_scripts_readme_lists_manual_guard_count`** — `scripts/README.md` mentions count 4.
+
+### Validation
+
+```bash
+python -m pytest tests/test_tools_inventory.py  # 439 passed
+python -m pytest                                  # 5 193 passed
+git diff origin/main...HEAD -- src/tools src/backtest src/config src/data src/execution src/experiments src/indicators src/portfolio src/reporting src/risk src/strategy src/utils config output
+# Expected: empty
+```
+
+### 34 permanent tools confirmed in `src/tools/`
+
+All 30 live safety/readiness gate tools and all 4 manual live/paper guard tools
+are confirmed present in `src/tools/` and absent from `scripts/`.
+No tool was moved in this PR.
+
+### Safety confirmations
+
+- No `src/tools/` or other `src/` files changed
+- No `config/` or `output/` files changed
+- No broker/API access — no Alpaca calls, no HTTP, no credentials
+- No order submission. No live or paper trading enabled or changed.
+- All live/paper tools remain in `src/tools/` and fail-closed.
+- No automated trading approved.
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> No tool source files were changed. No files were moved.
 > All live-readiness and paper guard tools remain in `src/tools/` and untouched.
 > The Phase A–H safety roadmap remains unchanged and required.
 > Nothing in this repository is financial advice.

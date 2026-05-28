@@ -198,12 +198,28 @@ updated `tests/test_paper_*.py` imports. Conditional on preconditions.
 
 ### PR 9E — Confirm live-readiness tools stay in `src/tools/`
 
-**Goal:** Explicitly document and test that all 30 live tools remain in
-`src/tools/` and their `python -m src.tools.live_*` CLI surface is
-unbroken.
+**Status: implemented — `tests/test_tools_inventory.py::TestPermanentToolsLocation` (76 tests)**
 
-**Scope:** Source-scan tests confirming live tools are in `src/tools/`.
-No moves.
+**Goal:** Explicitly document and test that all 34 permanent tools (30 live
+safety/readiness + 4 manual guard) remain in `src/tools/` and are absent
+from `scripts/`.
+
+**Scope:** Added `TestPermanentToolsLocation` class to `tests/test_tools_inventory.py`.
+No moves. No source file changes.
+
+**Tests added (76):**
+- `test_permanent_tools_count` — asserts `_PERMANENT_TOOLS` length is 34.
+- `test_live_safety_tools_count_unchanged` — asserts LIVE_SAFETY_TOOLS count is 30.
+- `test_manual_guard_tools_count_unchanged` — asserts MANUAL_GUARD_TOOLS count is 4.
+- `test_permanent_tool_in_src_tools[*]` — parametrised over 34: each tool file exists in `src/tools/`.
+- `test_permanent_tool_not_in_scripts[*]` — parametrised over 34: no tool file exists in `scripts/`.
+- `test_no_live_tool_file_in_scripts` — no `live_*.py` in `scripts/`.
+- `test_no_manual_tool_file_in_scripts` — no `manual_*.py` in `scripts/`.
+- `test_scripts_readme_documents_permanent_tools` — `scripts/README.md` uses "permanent" and references `src/tools/`.
+- `test_scripts_readme_lists_live_safety_count` — `scripts/README.md` mentions count 30.
+- `test_scripts_readme_lists_manual_guard_count` — `scripts/README.md` mentions count 4.
+
+**Full suite after PR 9E:** 5 193 passed.
 
 ### PR 9F — Update docs after actual moves
 
