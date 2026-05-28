@@ -2,7 +2,7 @@
 
 Current operational status of the live-readiness gate baseline.
 Last updated: 2026-05-28. Full pre-submit pipeline complete through PR #98.
-Refactor PRs 1–9 complete. PR 10A snapshot added. PR 10B backtest scenario design added. Test baseline: 5 193 passed.
+Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). Test baseline: 5 265 passed.
 
 ---
 
@@ -4251,4 +4251,67 @@ git diff origin/main...HEAD -- src tests config output scripts
 > **A positive backtest result does not approve live trading.**
 > This is a docs-only PR. No source files, tests, or configs were changed.
 > The Phase A–H safety roadmap remains unchanged and required before any automation.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone — PR 10C: add-trendfollowing-offline-scenario-tests
+
+**Date:** 2026-05-28
+**Branch:** `claude/add-trendfollowing-offline-scenario-tests`
+**Files added:** `tests/test_trendfollowing_offline_scenarios.py`
+**Files updated:** `docs/trendfollowing_offline_backtest_scenarios_design.md`, `docs/automated_trading_architecture_readiness_snapshot.md`, `docs/automated_strategy_execution_roadmap.md`, `docs/live_readiness_status.md`
+**Tests:** 72 new tests; targeted 72 passed; full suite 5 265 passed.
+**Type:** Tests + docs. No src, config, output, or scripts changes.
+
+### What was implemented
+
+`tests/test_trendfollowing_offline_scenarios.py` — 72 deterministic offline
+scenario tests for TrendFollowing strategy across SPY/QQQ × 1d/1h.
+
+**Approach:** In-test synthetic OHLCV fixtures (no CSV files, no yfinance, no network).
+Seeded NumPy RNG (`seed=42`) guarantees determinism. `_FakeProvider` implements
+`BaseDataProvider` and returns synthetic bars without any network calls.
+
+| Class | Tests | What it asserts |
+|-------|-------|----------------|
+| `TestScenarioBaselines` | 10 | Each scenario returns `BacktestRunResult`; echoed fields correct |
+| `TestScenarioSafetyFlags` | 24 | All 6 safety flags correct for all 4 scenarios |
+| `TestScenarioMetrics` | 18 | Required keys present, types, ranges (×4 + 2 standalone) |
+| `TestDeterminism` | 8 | Repeated runs → identical metrics and trade count (×4 scenarios) |
+| `TestIntervalAwareSharpe` | 5 | `bars_per_year` 252 vs 1512; Sharpe differs when non-zero |
+| `TestNoSideEffects` | 3 | Config immutable; no files written; intents are audit records only |
+
+### Characterisation note
+
+These scenarios are for characterisation only, not optimisation.
+**A positive backtest result does not approve live trading, paper trading,
+or any automated order execution.**
+
+### Validation
+
+```bash
+python -m pytest tests/test_trendfollowing_offline_scenarios.py  # 72 passed
+python -m pytest                                                   # 5 265 passed
+git diff origin/main...HEAD -- src/tools src/main.py src/execution src/backtest/engine.py config output scripts
+# Expected: empty (main.py, tools, execution, engine unchanged)
+```
+
+### Safety confirmations
+
+- No `src/tools/`, `src/main.py`, `src/execution/`, `config/`, `output/`, or `scripts/` files changed
+- No broker/API access — no Alpaca calls, no HTTP, no credentials, no env vars
+- No order submission. No live or paper trading enabled or changed.
+- `broker_calls_made = False` asserted in every scenario test.
+- All live/paper tools remain in `src/tools/` and fail-closed.
+- No automated trading approved.
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **A positive backtest result does not approve live trading.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> These tests characterise strategy behaviour — not certify it for deployment.
+> The Phase A–H safety roadmap remains unchanged and required.
 > Nothing in this repository is financial advice.
