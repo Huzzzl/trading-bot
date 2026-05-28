@@ -2,7 +2,7 @@
 
 Current operational status of the live-readiness gate baseline.
 Last updated: 2026-05-28. Full pre-submit pipeline complete through PR #98.
-Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). Test baseline: 5 265 passed.
+Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. Test baseline: 5 265 passed.
 
 ---
 
@@ -4314,4 +4314,61 @@ git diff origin/main...HEAD -- src/tools src/main.py src/execution src/backtest/
 > **No Alpaca endpoint was contacted. No credentials were read.**
 > These tests characterise strategy behaviour — not certify it for deployment.
 > The Phase A–H safety roadmap remains unchanged and required.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone — PR 10D: docs-design-real-data-backtest-gate
+
+**Date:** 2026-05-28
+**Branch:** `claude/docs-design-real-data-backtest-gate`
+**Files added:** `docs/real_data_backtest_gate_design.md`
+**Files updated:** `docs/trendfollowing_offline_backtest_scenarios_design.md`, `docs/automated_strategy_execution_roadmap.md`, `docs/live_readiness_status.md`
+**Tests:** No new tests (docs-only PR). Full suite: 5 265 passed.
+**Type:** Docs-only. No src, tests, config, output, or scripts changes.
+
+### What was designed
+
+`docs/real_data_backtest_gate_design.md` — safe gate for using cached Yahoo
+historical data in offline TrendFollowing backtests.
+
+**Key decisions:**
+
+| Decision | Detail |
+|----------|--------|
+| CI default | Synthetic fixtures from PR 10C (no network) |
+| Real-data runs | `@pytest.mark.integration` tests; skipped in CI unless `--run-integration` |
+| Data source | `YahooDataProvider` + `CachedMarketDataProvider` (`data/cache/`, gitignored) |
+| Yahoo 1h retention | **730 days** — corrects PR 10B claim of "~60 days" |
+| Symbols in scope | SPY and QQQ only |
+| Intervals in scope | `1d` (multi-year) and `60m` / `1h` (~730 days) |
+| Cache format | Parquet (pyarrow) or CSV fallback; deterministic after first fetch |
+| Raw bars committed | **No** — `data/cache/` is gitignored |
+| Credentials needed | **No** — `YahooDataProvider` requires no API key |
+| Next steps | PR 10E: cache availability checker; PR 10F: integration tests |
+
+### Validation
+
+```bash
+git diff origin/main...HEAD -- src tests config output scripts
+# Expected: empty
+python -m pytest  # 5 265 passed (suite unchanged)
+```
+
+### Safety confirmations
+
+- No `src/`, `tests/`, `config/`, `output/`, or `scripts/` files changed
+- No broker/API access — no Alpaca calls, no HTTP, no credentials
+- No order submission. No live or paper trading enabled or changed.
+- All 40 tools remain in `src/tools/` and fail-closed.
+- No automated trading approved.
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> **A positive backtest result does not approve live trading.**
+> This is a docs-only PR. No source files, tests, or configs were changed.
+> The Phase A–H safety roadmap remains unchanged and required before any automation.
 > Nothing in this repository is financial advice.
