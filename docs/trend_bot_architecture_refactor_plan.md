@@ -399,16 +399,19 @@ No PR may be skipped. Each requires its own test coverage where applicable.
 - 9E: Confirm live-readiness tools stay in `src/tools/` ✓ implemented — `TestPermanentToolsLocation` (76 tests)
 - 9F: Finalize isolation docs ✓ implemented — docs-only
 
-### PR 10 — README update
+### PR 10 — Architecture readiness snapshot + docs finalization
 
-**File:** `README.md`
+**Sub-PRs:**
 
-- Document new architecture and module layout.
-- Show trend-following backtest usage example.
-- Document how to run tests.
-- State live trading is disabled by default.
-- Document paper/live opt-in requirement.
-- No code changes.
+#### PR 10A — Architecture readiness snapshot
+
+**Status: implemented — `docs/automated_trading_architecture_readiness_snapshot.md`**
+
+Docs-only. Captures current implementation status after refactor PRs 1–9:
+full component inventory (implemented vs. not yet implemented), CLI surface,
+safety status table, test baseline (5 193 passed), and next-phase priorities.
+Updates `docs/automated_strategy_execution_roadmap.md` Phase B status to
+reflect that backtest runner and metrics are now implemented.
 
 ---
 
