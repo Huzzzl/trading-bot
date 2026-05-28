@@ -186,6 +186,10 @@ tool; default BLOCKED without `--allow-network`; fetches via YahooDataProvider
 backoff; post-fetch validation via `cached_data_availability_check`; no raw
 prices in output; all tests use mocked provider (no live network in tests);
 count 41 → 42 tools.
+Local fetch runbook: PR 10H (`docs/local_yahoo_cache_fetch_runbook.md`) —
+step-by-step operator runbook; confirm default BLOCKED; run fetch with
+`--allow-network`; verify via `cached_data_availability_check`; failure
+remediation; cache cleanup; PASS means cache populated only.
 
 ### Phase C — Paper trading execution
 

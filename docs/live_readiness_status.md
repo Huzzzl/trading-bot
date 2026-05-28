@@ -2,7 +2,7 @@
 
 Current operational status of the live-readiness gate baseline.
 Last updated: 2026-05-28. Full pre-submit pipeline complete through PR #98.
-Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. PR 10E cache checker (42 tests, 41 tools). PR 10F Yahoo fetch gate design. PR 10G Yahoo fetch tool (43 tests, 42 tools). Test baseline: 5 366 passed.
+Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. PR 10E cache checker (42 tests, 41 tools). PR 10F Yahoo fetch gate design. PR 10G Yahoo fetch tool (43 tests, 42 tools). PR 10H local fetch runbook. Test baseline: 5 366 passed.
 
 ---
 
@@ -4563,5 +4563,64 @@ python -m pytest  # 5 366 passed
 > **This milestone does not approve data fetch** without the explicit
 > `--allow-network` operator flag at runtime.
 > **No Alpaca endpoint was contacted. No credentials were read.**
+> The Phase A–H safety roadmap remains unchanged and required before any automation.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone — PR 10H: docs-local-yahoo-fetch-runbook
+
+**Date:** 2026-05-28
+**Branch:** `claude/docs-local-yahoo-fetch-runbook`
+**Files added:** `docs/local_yahoo_cache_fetch_runbook.md`
+**Files updated:** `docs/yahoo_fetch_gate_design.md`, `docs/real_data_backtest_gate_design.md`, `docs/automated_strategy_execution_roadmap.md`, `docs/live_readiness_status.md`
+**Tests:** No new tests (docs-only PR). Full suite: 5 366 passed.
+**Type:** Docs-only. No src, tests, config, output, scripts, or data changes.
+
+### What was documented
+
+`docs/local_yahoo_cache_fetch_runbook.md` — step-by-step operator runbook for
+populating `data/cache/` locally using `src/tools/yahoo_cache_fetch`.
+
+**Runbook sections:**
+
+| Section | Content |
+|---------|---------|
+| § 2 | Confirm tool is BLOCKED by default (no `--allow-network`) |
+| § 3 | Run fetch with explicit `--allow-network`; expected output fields |
+| § 4 | Verify cache with `cached_data_availability_check` |
+| § 5 | If fetch fails: blockers table and per-symbol retry commands |
+| § 6 | Subsequent runs — cache hit behaviour (no network) |
+| § 7 | Optional inspect/clear commands |
+| § 8 | What PASS means and does not mean |
+| § 9 | Safety summary table |
+| § 10 | Next steps: `@pytest.mark.integration` tests (PR 10I) |
+
+**Sub-PR renaming:** Old "PR 10H" (integration tests) is now PR 10I to
+accommodate this runbook PR.
+
+### Validation
+
+```bash
+git diff origin/main...HEAD -- src tests config output scripts data
+# Expected: empty
+python -m pytest  # 5 366 passed (suite unchanged)
+```
+
+### Safety confirmations
+
+- No `src/`, `tests/`, `config/`, `output/`, `scripts/`, or `data/` files changed
+- No broker/API access — no Alpaca calls, no HTTP, no credentials
+- No order submission. No live or paper trading enabled or changed.
+- All 42 tools remain in `src/tools/` and fail-closed.
+- No automated trading approved.
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> **PASS from the runbook means cache populated only.**
+> This is a docs-only PR. No source files, tests, or configs were changed.
 > The Phase A–H safety roadmap remains unchanged and required before any automation.
 > Nothing in this repository is financial advice.
