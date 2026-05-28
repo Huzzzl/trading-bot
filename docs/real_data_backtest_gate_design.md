@@ -285,14 +285,17 @@ changes.
 
 ### PR 10G — Yahoo fetch tool (explicit `--allow-network` gate)
 
-**Goal:** Implement `src/tools/yahoo_fetch.py` — a guarded fetch tool that
-makes network calls only when `--allow-network` is explicitly passed.
+**Status: implemented — `src/tools/yahoo_cache_fetch.py`**
 
-**Scope:**
-- `src/tools/yahoo_fetch.py`
-- `tests/test_yahoo_fetch.py` (all tests mock the provider; no live network)
-- `tests/test_tools_inventory.py` update (count 41 → 42)
-- Update relevant design docs
+**What was added:**
+- `src/tools/yahoo_cache_fetch.py` — guarded fetch tool (42nd tool in `src/tools/`);
+  default BLOCKED without `--allow-network`; fetches via `YahooDataProvider` +
+  `CachedMarketDataProvider`; conservative rate-limit (≥1s, max 3 retries,
+  exponential backoff); post-fetch validation via `cached_data_availability_check`;
+  no raw prices in output.
+- `tests/test_yahoo_cache_fetch.py` — 43 tests across 8 test classes; all mock the
+  inner provider; no live yfinance calls in any test.
+- `tests/test_tools_inventory.py` — count updated from 41 to 42.
 
 **Not in scope:** Broker calls, credentials, order submission, trading.
 

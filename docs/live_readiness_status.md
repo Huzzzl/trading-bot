@@ -2,7 +2,7 @@
 
 Current operational status of the live-readiness gate baseline.
 Last updated: 2026-05-28. Full pre-submit pipeline complete through PR #98.
-Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. PR 10E cache checker (42 tests, 41 tools). PR 10F Yahoo fetch gate design. Test baseline: 5 315 passed.
+Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. PR 10E cache checker (42 tests, 41 tools). PR 10F Yahoo fetch gate design. PR 10G Yahoo fetch tool (43 tests, 42 tools). Test baseline: 5 366 passed.
 
 ---
 
@@ -4486,5 +4486,82 @@ python -m pytest  # 5 315 passed (suite unchanged)
 > implementation and the explicit `--allow-network` operator flag.
 > **No Alpaca endpoint was contacted. No credentials were read.**
 > This is a docs-only PR. No source files, tests, or configs were changed.
+> The Phase A–H safety roadmap remains unchanged and required before any automation.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone — PR 10G: add-yahoo-fetch-cache-tool
+
+**Date:** 2026-05-28
+**Branch:** `claude/add-yahoo-fetch-cache-tool`
+**Files added:** `src/tools/yahoo_cache_fetch.py`, `tests/test_yahoo_cache_fetch.py`
+**Files updated:** `tests/test_tools_inventory.py`, `docs/yahoo_fetch_gate_design.md`, `docs/real_data_backtest_gate_design.md`, `docs/automated_strategy_execution_roadmap.md`, `docs/live_readiness_status.md`
+**Tests:** 43 new tests (5 366 total passed). Tool count: 41 → 42.
+**Type:** Implementation. New tool + tests. No src/main.py, src/backtest, src/strategy, src/execution, config, output, scripts, or data changes.
+
+### What was added
+
+`src/tools/yahoo_cache_fetch.py` — explicit `--allow-network` gated fetch tool for
+Yahoo/yfinance historical bar data.
+
+**Key gate rules:**
+
+| Rule | Value |
+|------|-------|
+| Default | BLOCKED — no network without `--allow-network` flag |
+| Operator opt-in | `--allow-network` flag required; zero network calls without it |
+| Symbols | SPY and QQQ (default); operator-configurable via `--symbols` |
+| Intervals | `1d` and `60m` (default); operator-configurable via `--intervals` |
+| Data source | `YahooDataProvider` only; no Alpaca, no broker API, no credentials |
+| Write target | `data/cache/` only (gitignored) |
+| Raw bars committed | **Never** |
+| Post-fetch validation | `cached_data_availability_check` must return PASS |
+| Raw prices in output | **Forbidden** — row counts and date ranges only |
+| Rate limit | ≥ 1 s between fetches; max 3 retries; exponential backoff |
+| Failure policy | Fail-closed — any failure → BLOCKED overall |
+| PASS meaning | Cache populated only; not strategy/paper/live approval |
+
+**Test breakdown (43 tests, 8 classes):**
+- `tests/test_yahoo_cache_fetch.py` — all use mocked inner provider +
+  real `CachedMarketDataProvider` writing to `tmp_path`; no live yfinance calls.
+  - `TestNoNetworkFlag` (5): blocked without flag; blocker message; network_calls_made=False; provider not called; CLI exit 1
+  - `TestWithMockedProvider` (8): PASS with mock data; rows count; inferred dates; files_written; availability check PASS; network_calls_made=True; exit code; safety flags
+  - `TestEmptyOrMissingData` (4): empty df → BLOCKED entry; overall BLOCKED; provider exception → BLOCKED; blocked entry in entries
+  - `TestPartialFailure` (4): one symbol fails → overall BLOCKED; OK entry still recorded; failed entry has no rows; files_written matches OK count
+  - `TestSafetyFlags` (5): broker/credentials/order flags always False (both blocked and pass paths)
+  - `TestNoPricesEmitted` (3): no floats in blocked output; no floats in entries; rows is int not float
+  - `TestOutputJson` (4): JSON file written; has result key; BLOCKED without flag; matches run_fetch
+  - `TestSourceScan` (10): AST scan — no yfinance/requests/httpx/aiohttp/urllib/alpaca imports; no os.environ; no submit/cancel/replace_order
+
+### Validation
+
+```bash
+git diff origin/main...HEAD -- src/main.py src/backtest src/strategy src/execution config output scripts data
+# Expected: empty
+python -m pytest  # 5 366 passed
+```
+
+### Safety confirmations
+
+- No broker/API access — no Alpaca calls, no HTTP, no credentials
+- No order submission. No live or paper trading enabled or changed.
+- 42 tools in `src/tools/`; all fail-closed.
+- No automated trading approved.
+- Tool source scanned by AST (both inventory tests and dedicated TestSourceScan):
+  no yfinance, requests, httpx, aiohttp, urllib, alpaca, os.environ, submit_order,
+  cancel_order, replace_order imports.
+- YahooDataProvider and CachedMarketDataProvider imported lazily only when
+  allow_network=True and no injectable provider given.
+- All tests use mocked inner provider + real CachedMarketDataProvider writing to
+  tmp_path; no real yfinance calls in any test.
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **This milestone does not approve data fetch** without the explicit
+> `--allow-network` operator flag at runtime.
+> **No Alpaca endpoint was contacted. No credentials were read.**
 > The Phase A–H safety roadmap remains unchanged and required before any automation.
 > Nothing in this repository is financial advice.

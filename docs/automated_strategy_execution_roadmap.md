@@ -180,6 +180,12 @@ explicit `--allow-network` approval gate for Yahoo/yfinance data fetch; default
 BLOCKED; scope SPY/QQQ × 1d/60m; conservative rate-limit and retry policy;
 post-fetch validation via `cached_data_availability_check`; fail-closed; no raw
 prices in output; PASS means cache populated only, not strategy/paper/live approval.
+Yahoo fetch tool: PR 10G (`src/tools/yahoo_cache_fetch.py`) — guarded fetch
+tool; default BLOCKED without `--allow-network`; fetches via YahooDataProvider
++ CachedMarketDataProvider; ≥1s between fetches; max 3 retries with exponential
+backoff; post-fetch validation via `cached_data_availability_check`; no raw
+prices in output; all tests use mocked provider (no live network in tests);
+count 41 → 42 tools.
 
 ### Phase C — Paper trading execution
 
