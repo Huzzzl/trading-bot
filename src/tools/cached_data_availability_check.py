@@ -157,8 +157,13 @@ def check_cache(
 
     for symbol in symbols:
         for interval in intervals:
-            if not cache_dir.exists():
-                # Cache directory missing entirely — mark as NOT_FOUND
+            if not cache_dir.is_dir():
+                # Cache directory missing or not a directory — mark as NOT_FOUND
+                reason = (
+                    f"cache directory not found: {cache_dir}"
+                    if not cache_dir.exists()
+                    else f"cache path exists but is not a directory: {cache_dir}"
+                )
                 files_checked.append({
                     "symbol": symbol,
                     "interval": interval,
@@ -170,7 +175,7 @@ def check_cache(
                 blocked_entries.append({
                     "symbol": symbol,
                     "interval": interval,
-                    "reason": f"cache directory not found: {cache_dir}",
+                    "reason": reason,
                 })
                 continue
 
