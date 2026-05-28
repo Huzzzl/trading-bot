@@ -190,6 +190,11 @@ Local fetch runbook: PR 10H (`docs/local_yahoo_cache_fetch_runbook.md`) —
 step-by-step operator runbook; confirm default BLOCKED; run fetch with
 `--allow-network`; verify via `cached_data_availability_check`; failure
 remediation; cache cleanup; PASS means cache populated only.
+Real-data backtest checker: PR 10I (`src/tools/cached_real_data_backtest_check.py`) —
+offline characterization tool; reads from data/cache/ only; no network; runs
+run_backtest() with trend_following for SPY/QQQ × 1d/60m; reports metric
+summaries (no raw prices); BLOCKED if cache missing; PASS means characterization
+ran only; count 42 → 43 tools.
 
 ### Phase C — Paper trading execution
 
