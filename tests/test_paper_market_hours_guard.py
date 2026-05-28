@@ -238,13 +238,6 @@ def _run_buy(cfg, tmp_path, *, clock_ts: pd.Timestamp | None = None):
 
     ts = clock_ts if clock_ts is not None else _FIXED_TS
 
-    fake_engine = mock.MagicMock()
-    fake_engine.run.return_value = {
-        "order_intents": [_make_buy_intent()],
-        "metrics": {}, "trades": [], "equity_curve": [],
-    }
-    fake_engine._portfolio.positions = {}
-
     mock_submit = mock.MagicMock(return_value=_make_buy_result())
     mock_cancel = mock.MagicMock()
 
@@ -257,13 +250,17 @@ def _run_buy(cfg, tmp_path, *, clock_ts: pd.Timestamp | None = None):
                            return_value=mock.MagicMock()), \
          mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
          mock.patch.object(AlpacaBrokerAdapter, "cancel_order", mock_cancel), \
-         mock.patch("src.main.build_engine", return_value=fake_engine), \
+         mock.patch("src.backtest.backtest_runner.run_backtest") as mock_run_backtest, \
          mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
                     _pass_recon_generate), \
          mock.patch("src.execution.paper_ledger.assert_client_order_id_unused"), \
          mock.patch("src.execution.paper_ledger.append_ledger_row"), \
          mock.patch("src.main.load_config", return_value=cfg), \
          mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+        mock_run_backtest.return_value.order_intents = [_make_buy_intent()]
+        mock_run_backtest.return_value.metrics = {}
+        mock_run_backtest.return_value.trades = []
+        mock_run_backtest.return_value.equity_curve = []
         src.main.main()
 
     return mock_submit, mock_cancel
@@ -322,12 +319,6 @@ class TestBuySubmitMarketHoursGuard:
         from src.execution.alpaca_broker import AlpacaBrokerAdapter
         import src.main
 
-        fake_engine = mock.MagicMock()
-        fake_engine.run.return_value = {
-            "order_intents": [_make_buy_intent()],
-            "metrics": {}, "trades": [], "equity_curve": [],
-        }
-        fake_engine._portfolio.positions = {}
         mock_submit = mock.MagicMock()
         ts = pd.Timestamp("2024-01-15 16:00:00", tz=_ET)
 
@@ -339,11 +330,15 @@ class TestBuySubmitMarketHoursGuard:
              mock.patch.object(AlpacaBrokerAdapter, "_get_client",
                                return_value=mock.MagicMock()), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
-             mock.patch("src.main.build_engine", return_value=fake_engine), \
+             mock.patch("src.backtest.backtest_runner.run_backtest") as mock_run_backtest, \
              mock.patch("src.execution.paper_ledger.assert_client_order_id_unused"), \
              mock.patch("src.execution.paper_ledger.append_ledger_row"), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            mock_run_backtest.return_value.order_intents = [_make_buy_intent()]
+            mock_run_backtest.return_value.metrics = {}
+            mock_run_backtest.return_value.trades = []
+            mock_run_backtest.return_value.equity_curve = []
             with pytest.raises(RuntimeError, match="market is closed"):
                 src.main.main()
         mock_submit.assert_not_called()
@@ -353,12 +348,6 @@ class TestBuySubmitMarketHoursGuard:
         from src.execution.alpaca_broker import AlpacaBrokerAdapter
         import src.main
 
-        fake_engine = mock.MagicMock()
-        fake_engine.run.return_value = {
-            "order_intents": [_make_buy_intent()],
-            "metrics": {}, "trades": [], "equity_curve": [],
-        }
-        fake_engine._portfolio.positions = {}
         mock_submit = mock.MagicMock()
         ts = pd.Timestamp("2024-01-15 09:29:00", tz=_ET)
 
@@ -370,11 +359,15 @@ class TestBuySubmitMarketHoursGuard:
              mock.patch.object(AlpacaBrokerAdapter, "_get_client",
                                return_value=mock.MagicMock()), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
-             mock.patch("src.main.build_engine", return_value=fake_engine), \
+             mock.patch("src.backtest.backtest_runner.run_backtest") as mock_run_backtest, \
              mock.patch("src.execution.paper_ledger.assert_client_order_id_unused"), \
              mock.patch("src.execution.paper_ledger.append_ledger_row"), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            mock_run_backtest.return_value.order_intents = [_make_buy_intent()]
+            mock_run_backtest.return_value.metrics = {}
+            mock_run_backtest.return_value.trades = []
+            mock_run_backtest.return_value.equity_curve = []
             with pytest.raises(RuntimeError, match="market is closed"):
                 src.main.main()
         mock_submit.assert_not_called()
@@ -384,12 +377,6 @@ class TestBuySubmitMarketHoursGuard:
         from src.execution.alpaca_broker import AlpacaBrokerAdapter
         import src.main
 
-        fake_engine = mock.MagicMock()
-        fake_engine.run.return_value = {
-            "order_intents": [_make_buy_intent()],
-            "metrics": {}, "trades": [], "equity_curve": [],
-        }
-        fake_engine._portfolio.positions = {}
         mock_submit = mock.MagicMock()
 
         with mock.patch.object(pd.Timestamp, "now", return_value=_WEEKEND_TS), \
@@ -400,11 +387,15 @@ class TestBuySubmitMarketHoursGuard:
              mock.patch.object(AlpacaBrokerAdapter, "_get_client",
                                return_value=mock.MagicMock()), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
-             mock.patch("src.main.build_engine", return_value=fake_engine), \
+             mock.patch("src.backtest.backtest_runner.run_backtest") as mock_run_backtest, \
              mock.patch("src.execution.paper_ledger.assert_client_order_id_unused"), \
              mock.patch("src.execution.paper_ledger.append_ledger_row"), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            mock_run_backtest.return_value.order_intents = [_make_buy_intent()]
+            mock_run_backtest.return_value.metrics = {}
+            mock_run_backtest.return_value.trades = []
+            mock_run_backtest.return_value.equity_curve = []
             with pytest.raises(RuntimeError, match="market is closed"):
                 src.main.main()
         mock_submit.assert_not_called()
@@ -431,13 +422,6 @@ class TestBuySubmitMarketHoursGuard:
         from src.execution.alpaca_broker import AlpacaBrokerAdapter
         import src.main
 
-        fake_engine = mock.MagicMock()
-        fake_engine.run.return_value = {
-            "order_intents": [_make_buy_intent()],
-            "metrics": {}, "trades": [], "equity_curve": [],
-        }
-        fake_engine._portfolio.positions = {}
-
         guard_spy = mock.MagicMock(
             side_effect=AssertionError("guard must not run in preview")
         )
@@ -451,13 +435,17 @@ class TestBuySubmitMarketHoursGuard:
                                return_value=mock.MagicMock()), \
              mock.patch("src.execution.paper_market_hours_guard.assert_regular_market_hours",
                         guard_spy), \
-             mock.patch("src.main.build_engine", return_value=fake_engine), \
+             mock.patch("src.backtest.backtest_runner.run_backtest") as mock_run_backtest, \
              mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
                         _pass_recon_generate), \
              mock.patch("src.execution.paper_ledger.assert_client_order_id_unused"), \
              mock.patch("src.execution.paper_ledger.append_ledger_row"), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            mock_run_backtest.return_value.order_intents = [_make_buy_intent()]
+            mock_run_backtest.return_value.metrics = {}
+            mock_run_backtest.return_value.trades = []
+            mock_run_backtest.return_value.equity_curve = []
             src.main.main()  # must not raise
 
         guard_spy.assert_not_called()

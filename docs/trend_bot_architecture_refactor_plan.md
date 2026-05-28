@@ -365,9 +365,10 @@ No PR may be skipped. Each requires its own test coverage where applicable.
 - `live` mode becomes an explicit `NotImplementedError` placeholder — not reachable by default.
 - All existing CLI behaviour preserved; no test regressions.
 - Sub-PRs: 8A (CLI characterization tests ✓ implemented) → 8B (route backtest through runner ✓ implemented) →
-  8C (remove `build_engine`) → 8D (paper/live placeholders) → 8E (README update).
+  8C (remove `build_engine` ✓ implemented) → 8D (paper/live placeholders) → 8E (README update).
 - 8A: 42 tests in `tests/test_main_characterization.py`; full suite 4 726 passed.
 - 8B: 43 tests in `tests/test_main_characterization.py` (+1); 94 tests in `tests/test_backtest_runner.py` (+27 field-validation); full suite 4 754 passed.
+- 8C: 43 tests in `tests/test_main_characterization.py` (unchanged count; `test_build_engine_is_callable` renamed to `test_build_engine_is_not_present`); `TestBuildEngineWiring` removed from `tests/test_backtest.py` (−2); paper-path tests updated to patch `run_backtest`; full suite 4 752 passed.
 
 ### PR 9 — Tools / scripts isolation
 

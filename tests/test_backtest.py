@@ -17,9 +17,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.backtest.engine import BacktestEngine
 from src.backtest.metrics import compute_metrics
 from src.backtest.trade import Trade
-from src.config.loader import AppConfig, BacktestConfig, DataConfig, LoggingConfig, RiskConfig, StrategyConfig
+from src.config.loader import RiskConfig
 from src.data.base import BaseDataProvider
-from src.main import build_engine
 from src.portfolio.portfolio import Portfolio
 from src.risk.risk_manager import RiskManager
 from src.strategy.opening_range_breakout import OpeningRangeBreakout
@@ -311,30 +310,6 @@ class TestMetrics(unittest.TestCase):
         self.assertAlmostEqual(m["total_return_pct"], 0.0)
 
 
-def _make_app_config(**risk_overrides) -> AppConfig:
-    """Build a minimal AppConfig for wiring tests (no file I/O)."""
-    return AppConfig(
-        backtest=BacktestConfig(
-            start_date="2026-04-10", end_date="2026-05-09",
-            initial_capital=100_000.0,
-            commission_per_share=0.0,
-            slippage_per_share=0.0,
-        ),
-        symbols=["SPY"],
-        data=DataConfig(provider="yahoo", bar_interval="5m", timezone="America/New_York"),
-        strategy=StrategyConfig(
-            name="opening_range_breakout",
-            params={
-                "opening_range_start": "09:30", "opening_range_end": "10:00",
-                "force_exit_time": "15:55", "position_size_pct": 0.95,
-                "long_only": True, "breakout_trigger": "close",
-            },
-        ),
-        risk=RiskConfig(**risk_overrides),
-        logging=LoggingConfig(level="WARNING", format="%(message)s"),
-    )
-
-
 class TestRiskConfig(unittest.TestCase):
     """RiskConfig dataclass and loader integration."""
 
@@ -380,19 +355,6 @@ class TestRiskConfig(unittest.TestCase):
         cfg = load_config(tmp_path)
         self.assertIsNone(cfg.risk.max_open_positions)
 
-
-class TestBuildEngineWiring(unittest.TestCase):
-    """build_engine() must pass RiskConfig values into RiskManager."""
-
-    def test_build_engine_passes_max_open_positions_none(self):
-        cfg = _make_app_config()   # max_open_positions=None
-        engine = build_engine(cfg)
-        self.assertIsNone(engine._risk_manager._max_open_positions)
-
-    def test_build_engine_passes_max_open_positions_value(self):
-        cfg = _make_app_config(max_open_positions=2)
-        engine = build_engine(cfg)
-        self.assertEqual(engine._risk_manager._max_open_positions, 2)
 
 
 if __name__ == "__main__":

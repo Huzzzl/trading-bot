@@ -356,13 +356,6 @@ def _run_buy_submit(cfg, tmp_path, *, intent=None, submit_return=None, extra_pos
     _intent = intent or _make_buy_intent()
     _result = submit_return or _make_buy_result()
 
-    fake_engine = mock.MagicMock()
-    fake_engine.run.return_value = {
-        "order_intents": [_intent],
-        "metrics": {}, "trades": [], "equity_curve": [],
-    }
-    fake_engine._portfolio.positions = {}
-
     fake_preflight = {
         "ok": True, "account": {"status": "ACTIVE"},
         "positions": extra_positions or {}, "symbols": ["SPY"],
@@ -377,13 +370,17 @@ def _run_buy_submit(cfg, tmp_path, *, intent=None, submit_return=None, extra_pos
                            return_value=fake_preflight), \
          mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
          mock.patch.object(AlpacaBrokerAdapter, "cancel_order", mock_cancel), \
-         mock.patch("src.main.build_engine", return_value=fake_engine), \
+         mock.patch("src.backtest.backtest_runner.run_backtest") as mock_run_backtest, \
          mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
                     _pass_recon_generate), \
          mock.patch("src.execution.paper_ledger.assert_client_order_id_unused"), \
          mock.patch("src.execution.paper_ledger.append_ledger_row"), \
          mock.patch("src.main.load_config", return_value=cfg), \
          mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+        mock_run_backtest.return_value.order_intents = [_intent]
+        mock_run_backtest.return_value.metrics = {}
+        mock_run_backtest.return_value.trades = []
+        mock_run_backtest.return_value.equity_curve = []
         src.main.main()
 
     return mock_submit, mock_cancel
@@ -402,12 +399,6 @@ class TestBuySubmitDailyLimits:
         # Should not raise even though max_orders=3 is reached.
         from src.execution.alpaca_broker import AlpacaBrokerAdapter
         import src.main
-        fake_engine = mock.MagicMock()
-        fake_engine.run.return_value = {
-            "order_intents": [_make_buy_intent()],
-            "metrics": {}, "trades": [], "equity_curve": [],
-        }
-        fake_engine._portfolio.positions = {}
         fake_preflight = {
             "ok": True, "account": {"status": "ACTIVE"},
             "positions": {}, "symbols": ["SPY"],
@@ -416,13 +407,17 @@ class TestBuySubmitDailyLimits:
              mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=fake_preflight), \
-             mock.patch("src.main.build_engine", return_value=fake_engine), \
+             mock.patch("src.backtest.backtest_runner.run_backtest") as mock_run_backtest, \
              mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
                         _pass_recon_generate), \
              mock.patch("src.execution.paper_ledger.assert_client_order_id_unused"), \
              mock.patch("src.execution.paper_ledger.append_ledger_row"), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            mock_run_backtest.return_value.order_intents = [_make_buy_intent()]
+            mock_run_backtest.return_value.metrics = {}
+            mock_run_backtest.return_value.trades = []
+            mock_run_backtest.return_value.equity_curve = []
             src.main.main()  # must not raise
 
     def test_missing_ledger_counts_as_zero(self, tmp_path):
@@ -442,12 +437,6 @@ class TestBuySubmitDailyLimits:
         mock_submit = mock.MagicMock()
         from src.execution.alpaca_broker import AlpacaBrokerAdapter
         import src.main
-        fake_engine = mock.MagicMock()
-        fake_engine.run.return_value = {
-            "order_intents": [_make_buy_intent()],
-            "metrics": {}, "trades": [], "equity_curve": [],
-        }
-        fake_engine._portfolio.positions = {}
         fake_preflight = {
             "ok": True, "account": {"status": "ACTIVE"},
             "positions": {}, "symbols": ["SPY"],
@@ -457,11 +446,15 @@ class TestBuySubmitDailyLimits:
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=fake_preflight), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
-             mock.patch("src.main.build_engine", return_value=fake_engine), \
+             mock.patch("src.backtest.backtest_runner.run_backtest") as mock_run_backtest, \
              mock.patch("src.execution.paper_ledger.assert_client_order_id_unused"), \
              mock.patch("src.execution.paper_ledger.append_ledger_row"), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            mock_run_backtest.return_value.order_intents = [_make_buy_intent()]
+            mock_run_backtest.return_value.metrics = {}
+            mock_run_backtest.return_value.trades = []
+            mock_run_backtest.return_value.equity_curve = []
             with pytest.raises(RuntimeError, match="daily paper limit exceeded"):
                 src.main.main()
         mock_submit.assert_not_called()
@@ -476,12 +469,6 @@ class TestBuySubmitDailyLimits:
         mock_submit = mock.MagicMock()
         from src.execution.alpaca_broker import AlpacaBrokerAdapter
         import src.main
-        fake_engine = mock.MagicMock()
-        fake_engine.run.return_value = {
-            "order_intents": [_make_buy_intent()],
-            "metrics": {}, "trades": [], "equity_curve": [],
-        }
-        fake_engine._portfolio.positions = {}
         fake_preflight = {
             "ok": True, "account": {"status": "ACTIVE"},
             "positions": {}, "symbols": ["SPY"],
@@ -491,11 +478,15 @@ class TestBuySubmitDailyLimits:
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=fake_preflight), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
-             mock.patch("src.main.build_engine", return_value=fake_engine), \
+             mock.patch("src.backtest.backtest_runner.run_backtest") as mock_run_backtest, \
              mock.patch("src.execution.paper_ledger.assert_client_order_id_unused"), \
              mock.patch("src.execution.paper_ledger.append_ledger_row"), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            mock_run_backtest.return_value.order_intents = [_make_buy_intent()]
+            mock_run_backtest.return_value.metrics = {}
+            mock_run_backtest.return_value.trades = []
+            mock_run_backtest.return_value.equity_curve = []
             with pytest.raises(RuntimeError, match="daily paper limit exceeded"):
                 src.main.main()
         mock_submit.assert_not_called()
@@ -519,12 +510,6 @@ class TestBuySubmitDailyLimits:
         mock_submit = mock.MagicMock()
         from src.execution.alpaca_broker import AlpacaBrokerAdapter
         import src.main
-        fake_engine = mock.MagicMock()
-        fake_engine.run.return_value = {
-            "order_intents": [intent],
-            "metrics": {}, "trades": [], "equity_curve": [],
-        }
-        fake_engine._portfolio.positions = {}
         fake_preflight = {
             "ok": True, "account": {"status": "ACTIVE"},
             "positions": {}, "symbols": ["SPY"],
@@ -534,11 +519,15 @@ class TestBuySubmitDailyLimits:
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=fake_preflight), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
-             mock.patch("src.main.build_engine", return_value=fake_engine), \
+             mock.patch("src.backtest.backtest_runner.run_backtest") as mock_run_backtest, \
              mock.patch("src.execution.paper_ledger.assert_client_order_id_unused"), \
              mock.patch("src.execution.paper_ledger.append_ledger_row"), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            mock_run_backtest.return_value.order_intents = [intent]
+            mock_run_backtest.return_value.metrics = {}
+            mock_run_backtest.return_value.trades = []
+            mock_run_backtest.return_value.equity_curve = []
             with pytest.raises(RuntimeError, match="daily paper limit exceeded"):
                 src.main.main()
         mock_submit.assert_not_called()
@@ -550,12 +539,6 @@ class TestBuySubmitDailyLimits:
         mock_submit = mock.MagicMock()
         from src.execution.alpaca_broker import AlpacaBrokerAdapter
         import src.main
-        fake_engine = mock.MagicMock()
-        fake_engine.run.return_value = {
-            "order_intents": [intent],
-            "metrics": {}, "trades": [], "equity_curve": [],
-        }
-        fake_engine._portfolio.positions = {}
         fake_preflight = {
             "ok": True, "account": {"status": "ACTIVE"},
             "positions": {}, "symbols": ["SPY"],
@@ -565,11 +548,15 @@ class TestBuySubmitDailyLimits:
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=fake_preflight), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
-             mock.patch("src.main.build_engine", return_value=fake_engine), \
+             mock.patch("src.backtest.backtest_runner.run_backtest") as mock_run_backtest, \
              mock.patch("src.execution.paper_ledger.assert_client_order_id_unused"), \
              mock.patch("src.execution.paper_ledger.append_ledger_row"), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            mock_run_backtest.return_value.order_intents = [intent]
+            mock_run_backtest.return_value.metrics = {}
+            mock_run_backtest.return_value.trades = []
+            mock_run_backtest.return_value.equity_curve = []
             with pytest.raises(RuntimeError, match="daily paper limit exceeded"):
                 src.main.main()
         mock_submit.assert_not_called()

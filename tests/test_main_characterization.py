@@ -128,8 +128,8 @@ class TestMainImport:
     def test_main_is_callable(self) -> None:
         assert callable(_main_mod.main)
 
-    def test_build_engine_is_callable(self) -> None:
-        assert callable(_main_mod.build_engine)
+    def test_build_engine_is_not_present(self) -> None:
+        assert not hasattr(_main_mod, "build_engine")
 
     def test_apply_candidate_b_is_callable(self) -> None:
         assert callable(_main_mod.apply_candidate_b)

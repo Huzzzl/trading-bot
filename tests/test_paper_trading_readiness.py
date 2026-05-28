@@ -111,7 +111,7 @@ class TestStartupLogs:
     def _capture_startup_logs(self, mode: str = "backtest", dry_run: bool = False) -> list[str]:
         """
         Run main() up to and including the startup log block, then abort
-        by raising inside build_engine so we never need real bar data.
+        by raising inside run_backtest so we never need real bar data.
         """
         cfg = _make_minimal_config(mode=mode, dry_run=dry_run)
 
