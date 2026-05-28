@@ -164,6 +164,8 @@ is unchanged. Live and paper trading remain not enabled.
 
 **Next step within Phase B:** Run offline backtest scenarios for TrendFollowing
 on SPY/QQQ; compare vs ORB baseline; document results before Phase C begins.
+Scenario design: PR 10B (`docs/trendfollowing_offline_backtest_scenarios_design.md`).
+Implementation: PR 10C (fixtures + scenario runner tests).
 
 ### Phase C — Paper trading execution
 

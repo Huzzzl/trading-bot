@@ -2,7 +2,7 @@
 
 Current operational status of the live-readiness gate baseline.
 Last updated: 2026-05-28. Full pre-submit pipeline complete through PR #98.
-Refactor PRs 1–9 complete. PR 10A architecture snapshot added. All 40 tools remain in src/tools/. Test baseline: 5 193 passed.
+Refactor PRs 1–9 complete. PR 10A snapshot added. PR 10B backtest scenario design added. Test baseline: 5 193 passed.
 
 ---
 
@@ -4187,6 +4187,68 @@ git diff origin/main...HEAD -- src tests config output scripts
 > **This milestone does not approve automated live trading.**
 > **This milestone does not approve any individual trade.**
 > **No Alpaca endpoint was contacted. No credentials were read.**
+> This is a docs-only PR. No source files, tests, or configs were changed.
+> The Phase A–H safety roadmap remains unchanged and required before any automation.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone — PR 10B: docs-design-trendfollowing-backtest-scenarios
+
+**Date:** 2026-05-28
+**Branch:** `claude/docs-design-trendfollowing-backtest-scenarios`
+**Files added:** `docs/trendfollowing_offline_backtest_scenarios_design.md`
+**Files updated:** `docs/automated_trading_architecture_readiness_snapshot.md`, `docs/automated_strategy_execution_roadmap.md`, `docs/live_readiness_status.md`
+**Tests:** not run (docs-only PR; no src/tests/config/output/scripts changes)
+**Type:** Docs-only. No code, test, config, output, or script changes.
+
+### What was designed
+
+`docs/trendfollowing_offline_backtest_scenarios_design.md` defines five offline
+backtest validation scenarios for the TrendFollowing strategy:
+
+| Scenario | Symbol | Interval | Strategy |
+|----------|--------|----------|----------|
+| 1 | SPY | 1d | TrendFollowing (default params) |
+| 2 | SPY | 1h | TrendFollowing (fixture data) |
+| 3 | QQQ | 1d | TrendFollowing (default params) |
+| 4 | QQQ | 1h | TrendFollowing (fixture data) |
+| 5 | SPY | 5m (intraday) | ORB — legacy benchmark comparison |
+
+Key design decisions:
+- **Characterisation, not optimisation** — no parameter sweep in these scenarios.
+- **Daily bars use multi-year history** (2020–2024); yfinance `"1d"` data available.
+- **Hourly bars require pre-committed fixtures** — Yahoo 1h retention ~60 days;
+  live fetches prohibited in CI; fixtures under `tests/fixtures/` required.
+- **No network access in tests** — all scenario runner tests must use local data.
+- **Determinism requirement** — two runs with the same config must produce
+  identical metrics.
+- **`broker_calls_made == False` asserted** in every scenario test.
+- **Positive result ≠ live trading approval** — goal is characterisation only.
+
+Next implementation PR: 10C — fixtures + `tests/test_trendfollowing_backtest_scenarios.py`.
+
+### Validation
+
+```bash
+git diff origin/main...HEAD -- src tests config output scripts
+# Expected: empty
+```
+
+### Safety confirmations
+
+- No `src/`, `tests/`, `config/`, `output/`, or `scripts/` files changed
+- No broker/API access — no Alpaca calls, no HTTP, no credentials
+- No order submission. No live or paper trading enabled or changed.
+- All 40 tools remain in `src/tools/` and fail-closed.
+- No automated trading approved.
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> **A positive backtest result does not approve live trading.**
 > This is a docs-only PR. No source files, tests, or configs were changed.
 > The Phase A–H safety roadmap remains unchanged and required before any automation.
 > Nothing in this repository is financial advice.
