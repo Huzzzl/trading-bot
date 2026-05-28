@@ -171,6 +171,10 @@ Real-data gate design: PR 10D (`docs/real_data_backtest_gate_design.md`) —
 defines safe use of cached Yahoo data for offline validation; corrects 1h
 retention limit to 730 days; specifies cache policy, operator runbook, and
 two-tier test strategy (CI: synthetic; local: `@pytest.mark.integration`).
+Cache availability checker: PR 10E (`src/tools/cached_data_availability_check.py`)
+— offline read-only tool; scans `data/cache/` for SPY/QQQ × 1d/60m files; validates
+OHLCV columns; 60m ↔ 1h aliasing; 42 tests; PASS/BLOCKED result; no network,
+no broker, no credentials; `data/cache/` added to `.gitignore`.
 
 ### Phase C — Paper trading execution
 
