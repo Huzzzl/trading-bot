@@ -17,9 +17,10 @@ Usage
     # Custom config file
     python -m src.main --config path/to/settings.yaml
 
-TODO (Alpaca integration):
-  Add a ``--mode live`` CLI flag that swaps out YahooDataProvider for an
-  AlpacaDataProvider.  Everything else (strategy, risk manager) stays identical.
+Disabled modes (not accepted by ``--mode``):
+    ``--mode live`` and ``--mode paper`` are not valid CLI options.
+    Paper execution is gated via ``execution.mode = paper`` in config (fail-closed).
+    Live trading is not enabled. See docs/live_readiness_status.md.
 """
 
 from __future__ import annotations
@@ -454,9 +455,8 @@ def main() -> None:
     if cfg.execution.mode == "paper":
         if not cfg.execution.paper_trading_enabled:
             raise NotImplementedError(
-                "Paper trading is disabled. "
-                "Set execution.paper_trading_enabled to true in config to enable preflight checks. "
-                "Paper order execution is not yet wired."
+                "Paper trading is disabled (execution.paper_trading_enabled is false). "
+                "Set execution.paper_trading_enabled to true in config to reach the paper execution gate."
             )
 
         # ------------------------------------------------------------------

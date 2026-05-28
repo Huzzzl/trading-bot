@@ -3747,3 +3747,57 @@ Deleted `build_engine()` from `src/main.py` and removed all imports that were on
 > No strategy is connected to live or paper trading.
 > The Phase A–H safety roadmap remains unchanged and required.
 > Nothing in this repository is financial advice.
+
+---
+
+## Milestone — Refactor PR 8D: clarify-main-paper-live-placeholders
+
+**Date:** 2026-05-28
+**Branch:** `claude/clarify-main-paper-live-placeholders`
+**Files changed:** `src/main.py`, `tests/test_main_characterization.py`
+**Files updated (docs):** `docs/main_dispatcher_slimdown_design.md`, `docs/trend_bot_architecture_refactor_plan.md`, `docs/live_readiness_status.md`
+**Tests:** 4 754 passed (+2 from PR 8C: two source-scan tests added)
+**Type:** Clarification + test. No behavior change. No new features.
+
+### What was done
+
+Removed the stale `TODO (Alpaca integration)` comment from `src/main.py` that implied
+live trading would be added as a simple `--mode live` flag swap. Replaced it with an
+accurate note: paper/live are not valid `--mode` options; paper is gated via config;
+live is not enabled. Updated the paper gate `NotImplementedError` message to remove the
+phrase "not yet wired". Added two source-scan regression tests.
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `src/main.py` | Stale TODO removed; paper gate message clarified |
+| `tests/test_main_characterization.py` | `test_no_stale_live_mode_todo`, `test_live_not_in_cli_choices` added to `TestSourceCharacterization` |
+
+### Test counts
+
+| File | Targeted tests |
+|------|---------------|
+| `tests/test_main_characterization.py` | 45 (+2) |
+| `tests/test_paper_trading_readiness.py` | 24 (unchanged) |
+| Full suite | **4 754 passed** |
+
+### Safety confirmations
+
+- No broker/API access — no Alpaca calls, no HTTP, no credentials, no env vars
+- Paper gate logic unchanged — `_run_paper_close` and all guards unmodified
+- Paper gate still raises `NotImplementedError` when `paper_trading_enabled=False` ✓
+- `--mode live` remains argparse-rejected (not added to `choices`) ✓
+- `run_backtest` remains the sole dispatch path for backtest/candidate-b modes ✓
+- `build_engine` remains absent from `src.main` ✓
+- No `src/backtest/`, `src/execution/`, `src/strategy/`, config, or output changes
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> No production behaviour was changed — only stale comments removed and error messages clarified.
+> Paper/live remain fail-closed: paper requires explicit config gate; live is not enabled.
+> The Phase A–H safety roadmap remains unchanged and required.
+> Nothing in this repository is financial advice.
