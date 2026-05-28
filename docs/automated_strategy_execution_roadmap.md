@@ -167,6 +167,10 @@ on SPY/QQQ; compare vs ORB baseline; document results before Phase C begins.
 Scenario design: PR 10B (`docs/trendfollowing_offline_backtest_scenarios_design.md`).
 Implementation: PR 10C (`tests/test_trendfollowing_offline_scenarios.py`, 72 tests,
 synthetic in-test fixtures, no network access).
+Real-data gate design: PR 10D (`docs/real_data_backtest_gate_design.md`) —
+defines safe use of cached Yahoo data for offline validation; corrects 1h
+retention limit to 730 days; specifies cache policy, operator runbook, and
+two-tier test strategy (CI: synthetic; local: `@pytest.mark.integration`).
 
 ### Phase C — Paper trading execution
 

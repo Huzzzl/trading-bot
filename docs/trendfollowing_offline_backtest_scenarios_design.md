@@ -53,16 +53,23 @@ SPY runs **first** in all scenarios. QQQ runs after SPY baseline is reviewed.
 | Daily | `"1d"` | Longest clean history; no intraday gap risk |
 | Hourly | `"1h"` / `"60m"` | Requires `bars_per_year_for_interval("1h") = 252 × 6 = 1 512` |
 
-**Yahoo Finance 1h / 60m retention limitation:**
-Yahoo Finance retains intraday data (1m, 2m, 5m, 15m, 30m, 60m, 90m) for
-only approximately **60 days** in the free API. This means:
+**Yahoo Finance 1h / 60m retention:**
+Yahoo Finance retains sub-hourly intraday data (1m, 2m, 5m, 15m, 30m, 90m)
+for approximately **60 days**. However, **60m / 1h data is retained for
+approximately 730 days (~2 years)**, per
+`src/data/yahoo_provider.py` `_INTRADAY_MAX_HISTORY_DAYS["60m"] = 730`.
+
+**Correction note (PR 10D):** An earlier version of this document stated
+"approximately 60 days" for 1h/60m — this is accurate for sub-hourly intervals
+only. The correct limit for 60m/1h is 730 days. See
+`docs/real_data_backtest_gate_design.md` § 3.1 for the full table.
+
+Implications:
 - `"1d"` scenarios can use multi-year history (2020–present).
-- `"1h"` / `"60m"` scenarios are limited to the most recent ~60 days of
-  live data, which is insufficient for meaningful backtest statistics.
-- **For the implementation sub-PR:** hourly scenarios must use either
-  pre-downloaded CSV fixtures committed to the repo, or a synthetic data
-  generator that produces deterministic bar sequences. Live `yfinance` fetches
-  for hourly data are not suitable as a test default.
+- `"1h"` / `"60m"` scenarios can use up to ~730 days of history from a single fetch.
+- **For the implementation sub-PR:** CI tests must not make live network requests.
+  Synthetic in-test fixtures (as implemented in PR 10C) satisfy this requirement
+  without any CSV files or live yfinance calls.
 
 ---
 
@@ -141,10 +148,11 @@ recovery, 2021–2022 bull/bear cycle, and 2023–2024 recovery.
 | Slippage | $0.010 / share |
 | Force exit time | `"15:55"` Eastern |
 
-**Data note:** Live yfinance 1h fetch is limited to ~60 days. For the
-implementation PR, this scenario must use a pre-downloaded CSV fixture or a
-synthetic deterministic bar sequence. The fixture must be committed to the
-repo under `tests/fixtures/` or equivalent (not `config/` or `output/`).
+**Data note:** PR 10C implemented this scenario using a synthetic in-test
+fixture (`_make_1h_bars(n_days=25)`) — no CSV file, no live fetch, no network.
+Yahoo Finance actually retains 60m/1h data for ~730 days (see correction note
+in § 2.2 and `docs/real_data_backtest_gate_design.md`), enabling real cached
+data runs via the gate defined in PR 10D.
 
 **Purpose:** Validates TrendFollowing on intraday bars with the interval-aware
 Sharpe annualisation (`bars_per_year = 1 512` for `"1h"`).
@@ -178,7 +186,8 @@ ETF that diverges from SPY during sector rotations (2022 bear, 2023 AI rally).
 | Slippage | $0.010 / share |
 | Force exit time | `"15:55"` Eastern |
 
-**Data note:** Same 60-day retention limitation as Scenario 2. Requires fixture.
+**Data note:** Same approach as Scenario 2 — synthetic in-test fixture in PR 10C;
+real cached data available via the PR 10D gate (730-day retention for 60m/1h).
 
 **Purpose:** Intraday TrendFollowing on QQQ; compare trade frequency and drawdown
 vs. Scenario 2 (SPY 1h).
@@ -327,6 +336,16 @@ all four symbol × interval combinations.
 
 **No CSV fixture files committed; no yfinance calls; no network access.**
 **Full suite after PR 10C:** 5 265 passed.
+
+### PR 10D — Real-data backtest gate design
+
+**Status: designed — `docs/real_data_backtest_gate_design.md`**
+
+Docs-only. Defines the safe gate for using cached Yahoo historical data in
+offline backtests. Corrects the 1h retention claim in this document (60 days →
+730 days). Specifies cache strategy, operator runbook, two-tier test approach,
+and sub-PRs 10E/10F. No `src/`, `tests/`, `config/`, `output/`, or `scripts/`
+changes.
 
 ---
 
