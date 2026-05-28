@@ -246,17 +246,28 @@ Docs-only. No `src/`, `tests/`, `config/`, `output/`, or `scripts/` changes.
 
 ### PR 10E — Cache availability checker (no trading, no credentials)
 
-**Goal:** Add a read-only offline tool or test that checks whether the
-`data/cache/` directory contains the expected bar files for SPY/QQQ at 1d
-and 1h/60m, and reports what is available vs. missing.
+**Status: implemented — `src/tools/cached_data_availability_check.py`**
 
-**Scope:**
-- `src/tools/cache_status.py` or `tests/test_cache_availability.py`
-  (read-only; no fetch; no network)
-- Reports: which symbol/interval/date-range combinations are cached
-- Warns when cache is empty (so operator knows to run fetch runbook)
-- No `.gitignore` modification needed unless `data/cache/` is not already listed
-- Full suite must not regress
+**What was added:**
+- `src/tools/cached_data_availability_check.py` — offline read-only tool (41st tool
+  in `src/tools/`); scans `data/cache/` for SPY/QQQ × 1d/60m bar files; validates
+  OHLCV columns; reports PASS or BLOCKED; 60m ↔ 1h aliasing supported.
+- `tests/test_cached_data_availability_check.py` — 42 tests across 9 test classes:
+  `TestMissingCacheDir`, `TestMissingFiles`, `TestValidCache`, `TestIntervalAliasing`,
+  `TestInvalidColumns`, `TestSafetyFlags`, `TestNoPricesEmitted`, `TestDeterminism`,
+  `TestOutputJson`, `TestSourceScan` (AST-based forbidden-import checks).
+- `tests/test_tools_inventory.py` — updated count from 40 to 41; added `DATA_TOOLS`
+  tuple containing `cached_data_availability_check`.
+- `.gitignore` — added `data/cache/` entry per § 4.3.
+
+**CLI:**
+```bash
+python -m src.tools.cached_data_availability_check
+python -m src.tools.cached_data_availability_check --cache-dir data/cache --symbols SPY QQQ --intervals 1d 60m
+python -m src.tools.cached_data_availability_check --output cache_status.json
+```
+
+Exit 0 on PASS; exit 1 on BLOCKED. Prints human-readable summary; JSON only with `--output`.
 
 **Not in scope:** Live data fetch, broker calls, credentials, trading.
 

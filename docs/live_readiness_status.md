@@ -2,7 +2,7 @@
 
 Current operational status of the live-readiness gate baseline.
 Last updated: 2026-05-28. Full pre-submit pipeline complete through PR #98.
-Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. Test baseline: 5 265 passed.
+Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. PR 10E cache availability checker (42 tests, 41 tools). Test baseline: 5 315 passed.
 
 ---
 
@@ -4370,5 +4370,57 @@ python -m pytest  # 5 265 passed (suite unchanged)
 > **No Alpaca endpoint was contacted. No credentials were read.**
 > **A positive backtest result does not approve live trading.**
 > This is a docs-only PR. No source files, tests, or configs were changed.
+> The Phase A–H safety roadmap remains unchanged and required before any automation.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone: PR 10E — Cache Availability Checker
+
+**Date:** 2026-05-28
+**Branch:** `claude/add-cached-data-availability-checker`
+**Commit:** `feat: add cached data availability checker (PR 10E)`
+
+### What was implemented
+
+- `src/tools/cached_data_availability_check.py` — offline read-only tool (41st tool in
+  `src/tools/`). Scans `data/cache/` for bar files matching
+  `{symbol}_*_{interval}.(parquet|csv)` for SPY/QQQ × 1d/60m. Validates OHLCV
+  columns. Supports 60m ↔ 1h aliasing. Returns PASS or BLOCKED. No network, no
+  broker, no credentials, no order actions.
+- `tests/test_cached_data_availability_check.py` — 42 tests across 10 test classes
+  (TestMissingCacheDir, TestMissingFiles, TestValidCache, TestIntervalAliasing,
+  TestInvalidColumns, TestSafetyFlags, TestNoPricesEmitted, TestDeterminism,
+  TestOutputJson, TestSourceScan). All use `tmp_path` with synthetic CSV fixtures.
+- `tests/test_tools_inventory.py` — added `DATA_TOOLS` tuple; updated count from
+  40 to 41.
+- `.gitignore` — added `data/cache/` per design doc § 4.3.
+- `docs/real_data_backtest_gate_design.md` — PR 10E section updated from Goal to
+  Status: implemented.
+- `docs/automated_strategy_execution_roadmap.md` — Phase B updated with PR 10E entry.
+
+### Validation
+
+```bash
+git diff origin/main...HEAD -- src/main.py src/backtest src/strategy src/execution config output scripts
+# Expected: empty
+python -m pytest  # 5 315 passed
+```
+
+### Safety confirmations
+
+- No broker/API access — no Alpaca calls, no HTTP, no credentials
+- No order submission. No live or paper trading enabled or changed.
+- 41 tools in `src/tools/`; all fail-closed.
+- No automated trading approved.
+- Tool source scanned by AST: no yfinance, requests, httpx, aiohttp, urllib, alpaca,
+  os.environ, submit_order, cancel_order, replace_order imports.
+- All tests use `tmp_path` with synthetic CSV fixtures; no real cache files.
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
 > The Phase A–H safety roadmap remains unchanged and required before any automation.
 > Nothing in this repository is financial advice.

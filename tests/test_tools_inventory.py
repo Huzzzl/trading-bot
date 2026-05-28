@@ -7,6 +7,9 @@ Locks the classification from docs/tools_scripts_isolation_design.md:
   - 30 live safety / readiness gate tools (stay in src/tools/ permanently)
   -  4 manual live/paper guard tools (stay in src/tools/ permanently)
   -  6 paper diagnostic utilities (move candidates in a future PR)
+  -  1 data tool (PR 10E: cached data availability checker)
+
+Total: 41 tools.
 
 No broker/API/credentials access.  No file moves.  No order submission.
 No live trading.  No automated paper trading.
@@ -75,7 +78,11 @@ PAPER_DIAGNOSTIC_TOOLS: tuple[str, ...] = (
     "replay_order_reconciliation",
 )
 
-ALL_TOOLS: tuple[str, ...] = LIVE_SAFETY_TOOLS + MANUAL_GUARD_TOOLS + PAPER_DIAGNOSTIC_TOOLS
+DATA_TOOLS: tuple[str, ...] = (
+    "cached_data_availability_check",
+)  # 1 tool
+
+ALL_TOOLS: tuple[str, ...] = LIVE_SAFETY_TOOLS + MANUAL_GUARD_TOOLS + PAPER_DIAGNOSTIC_TOOLS + DATA_TOOLS
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -222,7 +229,7 @@ class TestToolsInventory:
         assert len(PAPER_DIAGNOSTIC_TOOLS) == 6
 
     def test_all_tools_count(self) -> None:
-        assert len(ALL_TOOLS) == 40
+        assert len(ALL_TOOLS) == 41
 
     def test_categories_are_mutually_exclusive(self) -> None:
         live_set = set(LIVE_SAFETY_TOOLS)
