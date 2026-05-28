@@ -2,7 +2,7 @@
 
 Current operational status of the live-readiness gate baseline.
 Last updated: 2026-05-28. Full pre-submit pipeline complete through PR #98.
-Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. PR 10E cache availability checker (42 tests, 41 tools). Test baseline: 5 315 passed.
+Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. PR 10E cache checker (42 tests, 41 tools). PR 10F Yahoo fetch gate design. Test baseline: 5 315 passed.
 
 ---
 
@@ -4422,5 +4422,69 @@ python -m pytest  # 5 315 passed
 > **This milestone does not approve automated live trading.**
 > **This milestone does not approve any individual trade.**
 > **No Alpaca endpoint was contacted. No credentials were read.**
+> The Phase A–H safety roadmap remains unchanged and required before any automation.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone — PR 10F: docs-design-yahoo-fetch-gate
+
+**Date:** 2026-05-28
+**Branch:** `claude/docs-design-yahoo-fetch-gate`
+**Files added:** `docs/yahoo_fetch_gate_design.md`
+**Files updated:** `docs/real_data_backtest_gate_design.md`, `docs/automated_strategy_execution_roadmap.md`, `docs/live_readiness_status.md`
+**Tests:** No new tests (docs-only PR). Full suite: 5 315 passed.
+**Type:** Docs-only. No src, tests, config, output, scripts, or data changes.
+
+### What was designed
+
+`docs/yahoo_fetch_gate_design.md` — explicit approval gate for Yahoo/yfinance
+historical bar data fetch into `data/cache/`.
+
+**Key gate rules:**
+
+| Rule | Value |
+|------|-------|
+| Default | BLOCKED — no network without `--allow-network` flag |
+| Operator opt-in | `--allow-network` flag required; zero network calls without it |
+| Symbols | SPY and QQQ only |
+| Intervals | `1d` and `60m`/`1h` only |
+| Data source | `YahooDataProvider` only; no Alpaca, no broker API, no credentials |
+| Write target | `data/cache/` only (gitignored) |
+| Raw bars committed | **Never** |
+| Post-fetch validation | `cached_data_availability_check` must return PASS |
+| Raw prices in output | **Forbidden** — row counts and date ranges only |
+| Rate limit | ≥ 1 s between fetches; max 3 retries; exponential backoff |
+| Failure policy | Fail-closed — any failure → BLOCKED overall; no partial approval |
+| PASS meaning | Cache populated only; not strategy/paper/live approval |
+
+**Sub-PR plan:**
+- PR 10G: implement `src/tools/yahoo_fetch.py` with `--allow-network` gate (all tests mock provider; no live network in tests)
+- PR 10H: integration tests with real cached data (`@pytest.mark.integration`, skipped in CI)
+
+### Validation
+
+```bash
+git diff origin/main...HEAD -- src tests config output scripts data
+# Expected: empty
+python -m pytest  # 5 315 passed (suite unchanged)
+```
+
+### Safety confirmations
+
+- No `src/`, `tests/`, `config/`, `output/`, `scripts/`, or `data/` files changed
+- No broker/API access — no Alpaca calls, no HTTP, no credentials
+- No order submission. No live or paper trading enabled or changed.
+- All 41 tools remain in `src/tools/` and fail-closed.
+- No automated trading approved.
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **This milestone does not approve data fetch.** Data fetch requires PR 10G
+> implementation and the explicit `--allow-network` operator flag.
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> This is a docs-only PR. No source files, tests, or configs were changed.
 > The Phase A–H safety roadmap remains unchanged and required before any automation.
 > Nothing in this repository is financial advice.
