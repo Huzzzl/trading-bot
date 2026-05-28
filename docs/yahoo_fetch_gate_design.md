@@ -295,23 +295,29 @@ changes.
 
 ### PR 10G — Yahoo fetch tool (explicit `--allow-network` gate)
 
-**Goal:** Implement `src/tools/yahoo_fetch.py` — the first tool in `src/tools/`
-that may make a network call when explicitly opted in by the operator.
+**Status: implemented — `src/tools/yahoo_cache_fetch.py`**
 
-**Scope:**
-- `src/tools/yahoo_fetch.py`
-- `tests/test_yahoo_fetch.py` (all tests use mocks; no live network in tests)
-- `tests/test_tools_inventory.py` update (count 41 → 42; new tool in `DATA_TOOLS`)
-- Update `docs/yahoo_fetch_gate_design.md` with implemented status
+**What was added:**
+- `src/tools/yahoo_cache_fetch.py` — guarded fetch tool (42nd tool in `src/tools/`);
+  default BLOCKED without `--allow-network`; fetches via `YahooDataProvider` +
+  `CachedMarketDataProvider`; conservative rate-limit (≥1s, max 3 retries,
+  exponential backoff); post-fetch validation via `cached_data_availability_check`;
+  no raw prices in output; `network_calls_made=true` only when flag given.
+- `tests/test_yahoo_cache_fetch.py` — 43 tests across 8 test classes;
+  all tests use mocked inner provider + real `CachedMarketDataProvider` writing
+  to `tmp_path`; no live yfinance calls in any test.
+- `tests/test_tools_inventory.py` — count updated from 41 to 42.
 
-**Behaviour:**
-- Without `--allow-network`: result=BLOCKED, exit 1, zero network calls made
-- With `--allow-network`: fetches via `YahooDataProvider` + `CachedMarketDataProvider`,
-  applies rate-limit policy, runs post-fetch availability check, exits 0 on PASS
-- All tests mock the provider; no live `yfinance` calls in any test
-- Source scan: no Alpaca, no credentials, no order calls
+**CLI:**
+```bash
+python -m src.tools.yahoo_cache_fetch                   # BLOCKED (default)
+python -m src.tools.yahoo_cache_fetch --allow-network   # fetches
+python -m src.tools.yahoo_cache_fetch --allow-network --symbols SPY QQQ --intervals 1d 60m
+python -m src.tools.yahoo_cache_fetch --allow-network --output report.json
+```
+Exit 0 on PASS; exit 1 on BLOCKED. Prints human-readable summary; JSON only with `--output`.
 
-**Not in scope:** Live data fetch in CI, broker calls, credentials, trading.
+**Not in scope:** Broker calls, credentials, order submission, trading.
 
 ### PR 10H — Integration tests with real cached data
 
