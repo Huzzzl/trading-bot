@@ -2,7 +2,7 @@
 
 Current operational status of the live-readiness gate baseline.
 Last updated: 2026-05-28. Full pre-submit pipeline complete through PR #98.
-Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. PR 10E cache checker (42 tests, 41 tools). PR 10F Yahoo fetch gate design. PR 10G Yahoo fetch tool (43 tests, 42 tools). PR 10H local fetch runbook. PR 10I cached real-data backtest checker (53 tests, 43 tools). PR 10J first real-data results snapshot (docs-only). PR 10K backtest metrics diagnostics (60 tests). Test baseline: 5 487 passed.
+Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. PR 10E cache checker (42 tests, 41 tools). PR 10F Yahoo fetch gate design. PR 10G Yahoo fetch tool (43 tests, 42 tools). PR 10H local fetch runbook. PR 10I cached real-data backtest checker (53 tests, 43 tools). PR 10J first real-data results snapshot (docs-only). PR 10K backtest metrics diagnostics (67 tests). Test baseline: 5 494 passed.
 
 ---
 
@@ -4824,7 +4824,7 @@ diagnose_sharpe(equity_curve, interval, *, risk_free_rate=0.05,
 **BLOCKED conditions:** invalid interval, NaN/inf in equity, fewer than 2
 points, missing equity column, zero std (prevents misleading Sharpe output).
 
-**`tests/test_backtest_metrics_diagnostics.py`** — 60 tests across 9 classes:
+**`tests/test_backtest_metrics_diagnostics.py`** — 67 tests across 10 classes:
 
 | Class | Tests |
 |-------|-------|
@@ -4837,6 +4837,15 @@ points, missing equity column, zero std (prevents misleading Sharpe output).
 | `TestNoPricesEmitted` | 5 — no OHLCV/equity keys, scalar types |
 | `TestDeterminism` | 3 — identical results on repeated calls |
 | `TestSourceScan` | 10 — AST scans for yfinance, requests, httpx, aiohttp, urllib, alpaca, os.environ, submit/cancel/replace_order |
+| `TestDiagnosticVsProduction` | 7 — cross-module invariants: compute_metrics still returns numeric sharpe after this PR; diagnostic BLOCKED ≠ backtest BLOCKED; no input mutation |
+
+**Scope boundary (explicit):** `diagnose_sharpe()` does not alter `compute_metrics()`,
+`BacktestEngine`, or `cached_real_data_backtest_check`. `compute_metrics()` on a flat
+equity curve still returns a numeric float `sharpe_ratio` (not BLOCKED, not an
+exception). Due to floating-point noise in `np.std` on constant arrays, the value may
+be large-magnitude rather than 0.0 — this is unchanged pre-existing behaviour.
+The diagnostic BLOCKED result means "Sharpe would be misleading" — it has no effect
+on the production backtest pipeline.
 
 ### What this diagnoses
 

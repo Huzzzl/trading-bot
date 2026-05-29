@@ -180,7 +180,24 @@ changes little, std approaches zero, and the ratio explodes.
 The diagnostic tool detects this condition and returns BLOCKED instead
 of a misleading extreme value.
 
-60 tests across 9 test classes. No strategy or engine changes.
+67 tests across 10 test classes (includes 7-test `TestDiagnosticVsProduction` class).
+No strategy, engine, or execution changes.
+
+**Critical scope boundary:**
+
+> `diagnose_sharpe()` is a **read-only diagnostic helper** that runs
+> independently of the backtest pipeline. It does NOT change:
+> - `src/backtest/metrics.py` — `compute_metrics()` behaviour is **unchanged**.
+>   A flat equity curve still returns `sharpe_ratio=0.0` (numeric, not BLOCKED).
+> - `src/backtest/engine.py` — unchanged.
+> - `src/tools/cached_real_data_backtest_check.py` — unchanged; the scenario
+>   metrics reported in § 2 above are the same values this tool would produce today.
+>
+> **diagnostic BLOCKED ≠ backtest run BLOCKED.** The diagnostic's BLOCKED
+> result only means "the Sharpe value would be misleading" — it does not
+> affect `run_backtest()`, `compute_metrics()`, or any production path.
+> The snapshot metrics in § 2 remain the authoritative record of what the
+> pipeline returned.
 
 **Not in scope:** Paper trading, live trading, parameter changes, new strategies.
 
