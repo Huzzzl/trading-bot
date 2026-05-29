@@ -420,6 +420,68 @@ class TestSourceScan:
 
 
 # ---------------------------------------------------------------------------
+# TestAnnualizedVolThreshold
+# ---------------------------------------------------------------------------
+# _LOW_ANNUALIZED_VOL_THRESHOLD = 0.001 (0.1 %)
+# Fires when annualized_volatility < 0.001, even if per-bar std > 1e-6.
+# Catches the SPY/QQQ 1d real-data cases (ann_vol ≈ 0.0003, |Sharpe| > 100).
+# ---------------------------------------------------------------------------
+
+
+class TestAnnualizedVolThreshold:
+    """Annualized-vol threshold (0.1%) triggers low_variance_warning independently."""
+
+    def test_daily_tiny_vol_warns(self) -> None:
+        """1d series: ann_vol ≈ 0.000278 (below 0.001) → low_variance_warning=True, PASS."""
+        rng = np.random.default_rng(11)
+        bar_rets = rng.normal(0.0, 1.89e-5, 252)
+        s = pd.Series(np.cumprod(1.0 + bar_rets) * 100_000.0)
+        d = diagnose_sharpe(s, "1d")
+        assert d["result"] == "PASS"
+        assert d["annualized_volatility"] < 0.001
+        assert d["low_variance_warning"] is True
+
+    def test_daily_tiny_vol_per_bar_std_above_legacy_threshold(self) -> None:
+        """The per-bar std is above 1e-6 (old threshold) — it is the NEW annualized
+        threshold that fires.  Without the new threshold this case would have been PASS
+        with low_variance_warning=False despite |Sharpe| > 100."""
+        rng = np.random.default_rng(11)
+        bar_rets = rng.normal(0.0, 1.89e-5, 252)
+        s = pd.Series(np.cumprod(1.0 + bar_rets) * 100_000.0)
+        d = diagnose_sharpe(s, "1d")
+        assert d["std_period_return"] > 1e-6  # above legacy per-bar threshold
+        assert d["low_variance_warning"] is True  # caught by annualized threshold
+
+    def test_60m_normal_vol_no_warning(self) -> None:
+        """60m series: ann_vol ≈ 0.030 (above 0.001) → low_variance_warning=False, PASS."""
+        rng = np.random.default_rng(12)
+        bar_rets = rng.normal(0.0, 7.71e-4, 1512)
+        s = pd.Series(np.cumprod(1.0 + bar_rets) * 100_000.0)
+        d = diagnose_sharpe(s, "60m")
+        assert d["result"] == "PASS"
+        assert d["annualized_volatility"] >= 0.001
+        assert d["low_variance_warning"] is False
+
+    def test_real_daily_scale_warns(self) -> None:
+        """1610-bar 1d series at SPY/QQQ real-data scale: ann_vol ≈ 0.0003 → warns."""
+        rng = np.random.default_rng(13)
+        bar_rets = rng.normal(0.0, 2.04e-5, 1610)
+        s = pd.Series(np.cumprod(1.0 + bar_rets) * 100_000.0)
+        d = diagnose_sharpe(s, "1d")
+        assert d["result"] == "PASS"
+        assert d["low_variance_warning"] is True
+        assert d["annualized_volatility"] < 0.001
+
+    def test_zero_std_still_blocked_not_affected_by_new_threshold(self) -> None:
+        """Zero std → BLOCKED (unchanged).  New threshold only applies to PASS cases."""
+        s = pd.Series([100_000.0] * 50)
+        d = diagnose_sharpe(s, "1d")
+        assert d["result"] == "BLOCKED"
+        assert d["zero_std_detected"] is True
+        assert d["low_variance_warning"] is False
+
+
+# ---------------------------------------------------------------------------
 # TestDiagnosticVsProduction
 # ---------------------------------------------------------------------------
 # Explicit cross-behaviour tests confirming that:

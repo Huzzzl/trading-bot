@@ -169,7 +169,7 @@ formula as `compute_metrics()` and returns diagnostic flags:
 | Flag | Meaning |
 |------|---------|
 | `zero_std_detected` | std of bar returns is 0 → BLOCKED (prevents misleading Sharpe) |
-| `low_variance_warning` | std non-zero but < 1e-6 → PASS but Sharpe may be inflated |
+| `low_variance_warning` | std non-zero but below threshold → PASS but Sharpe may be inflated (calibrated in PR 10N) |
 | `finite_values_only` | False → BLOCKED (NaN/inf in equity) |
 | `sharpe_ratio_recomputed` | Recomputed value (or `None` if zero std) |
 | `annualized_volatility` | `std × sqrt(bars_per_year)` |
@@ -224,6 +224,22 @@ values (−163.35, −134.92) immediately visible in the output.
 
 8 new tests (`TestSharpeDiagnostics`).
 No strategy, engine, `metrics.py`, or execution changes.
+
+**Not in scope:** Parameter tuning, paper trading, live trading.
+
+### PR 10N — Calibrate Sharpe diagnostic low-vol threshold
+
+**Status: implemented — `src/backtest/metrics_diagnostics.py`**
+
+The first real-data run showed SPY 1d (annualized_vol = 0.000323) and QQQ 1d
+(annualized_vol = 0.000394) diagnostic results of PASS without `low_variance_warning`,
+despite |Sharpe| > 100. The per-bar std (≈ 2e-5) was above the old 1e-6 threshold.
+
+Added `_LOW_ANNUALIZED_VOL_THRESHOLD = 0.001` (0.1%). `low_variance_warning` now fires
+when `annualized_volatility < 0.001`, in addition to the legacy per-bar std check.
+SPY/QQQ 1d scenarios now correctly show `low_variance_warning=True` and remain PASS.
+5 new tests (`TestAnnualizedVolThreshold`); 72 tests total in diagnostics file.
+No strategy, engine, `metrics.py`, or `cached_real_data_backtest_check.py` changes.
 
 **Not in scope:** Parameter tuning, paper trading, live trading.
 

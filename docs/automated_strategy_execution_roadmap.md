@@ -223,6 +223,13 @@ the scenario. 8 new tests (`TestSharpeDiagnostics`). No strategy/engine/metrics 
 Document and resolve checker `fast_ema_period=10` vs strategy default
 `fast_ema_period=20`. Align or justify the non-default value.
 
+**PR 10N — Calibrate Sharpe diagnostic low-vol threshold — implemented**
+`src/backtest/metrics_diagnostics.py`: added `_LOW_ANNUALIZED_VOL_THRESHOLD = 0.001`
+(0.1%). `low_variance_warning` now fires when `annualized_volatility < 0.001`, in
+addition to the legacy per-bar std check. SPY/QQQ 1d cases (ann_vol ≈ 0.0003) now
+correctly show `low_variance_warning=True`. 5 new tests (`TestAnnualizedVolThreshold`).
+No strategy/engine/metrics changes.
+
 No parameter optimisation or paper/live progression until diagnostics complete.
 
 ### Phase C — Paper trading execution

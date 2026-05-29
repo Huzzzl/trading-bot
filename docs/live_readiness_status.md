@@ -2,7 +2,7 @@
 
 Current operational status of the live-readiness gate baseline.
 Last updated: 2026-05-28. Full pre-submit pipeline complete through PR #98.
-Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. PR 10E cache checker (42 tests, 41 tools). PR 10F Yahoo fetch gate design. PR 10G Yahoo fetch tool (43 tests, 42 tools). PR 10H local fetch runbook. PR 10I cached real-data backtest checker (53 tests, 43 tools). PR 10J first real-data results snapshot (docs-only). PR 10K backtest metrics diagnostics (67 tests). PR 10L Sharpe diagnostics in cached checker (61 tests). Test baseline: 5 502 passed.
+Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. PR 10E cache checker (42 tests, 41 tools). PR 10F Yahoo fetch gate design. PR 10G Yahoo fetch tool (43 tests, 42 tools). PR 10H local fetch runbook. PR 10I cached real-data backtest checker (53 tests, 43 tools). PR 10J first real-data results snapshot (docs-only). PR 10K backtest metrics diagnostics (67 tests). PR 10L Sharpe diagnostics in cached checker (61 tests). PR 10N calibrate Sharpe diagnostic low-vol threshold (72 tests). Test baseline: 5 507 passed.
 
 ---
 
@@ -4754,6 +4754,7 @@ does not approve trading. All safety flags remain False.
 - PR 10K: inspect Sharpe calculation for daily scenarios — implemented
 - PR 10L: integrate diagnose_sharpe() into cached_real_data_backtest_check output — implemented
 - PR 10M: compare default params (`fast_ema_period=10` in checker vs `20` in strategy defaults)
+- PR 10N: calibrate diagnose_sharpe() low-vol threshold so SPY/QQQ daily tiny-vol cases warn — implemented
 
 ### Validation
 
@@ -4971,6 +4972,85 @@ python -m pytest                                                   # 5 502 passe
 - Strategy, engine, execution layer, `metrics.py` unchanged.
 - `diagnose_sharpe()` is read-only diagnostic: no side effects, no network calls.
 - All inputs are synthetic in-test fixtures; no real market data in any test.
+- No automated trading approved.
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> **Diagnostics do not constitute strategy validation or trading approval.**
+> The Phase A–H safety roadmap remains unchanged and required before any automation.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone — PR 10N: calibrate-sharpe-diagnostic-low-vol-threshold
+
+**Date:** 2026-05-29
+**Branch:** `claude/hopeful-cray-56Jfr`
+**Files updated:** `src/backtest/metrics_diagnostics.py`, `tests/test_backtest_metrics_diagnostics.py`
+**Files docs-updated:** `docs/first_cached_real_data_backtest_results_snapshot.md`, `docs/real_data_backtest_gate_design.md`, `docs/automated_strategy_execution_roadmap.md`, `docs/live_readiness_status.md`
+**Tests:** 5 new tests (`TestAnnualizedVolThreshold`). Full suite: 5 507 passed.
+**Type:** Diagnostic calibration. No strategy/engine/metrics/execution/broker changes.
+
+### Problem addressed
+
+The first real-data cached backtest run (PR 10J) showed:
+
+| Scenario | Sharpe | Annualized vol | Diagnostic before this PR |
+|----------|--------|----------------|--------------------------|
+| SPY 1d   | −163.35 | 0.000323 (0.032%) | PASS, no warning |
+| QQQ 1d   | −134.92 | 0.000394 (0.039%) | PASS, no warning |
+
+The diagnostic returned PASS without `low_variance_warning` because the per-bar std
+(≈ 2e-5) was above the old threshold (1e-6). However, 0.03% annualized volatility
+implies the equity curve barely moves — the Sharpe magnitude is determined by the
+sign of a tiny mean excess return, not genuine risk-adjusted performance.
+
+### What was changed
+
+`_LOW_ANNUALIZED_VOL_THRESHOLD = 0.001` (0.1 %) added to `metrics_diagnostics.py`.
+
+`low_variance_warning` now fires if **either**:
+- (a) per-bar std < `low_variance_threshold` (1e-6) — existing legacy check, or
+- (b) `annualized_volatility` < 0.001 — new check
+
+Result: SPY/QQQ 1d scenarios now produce `low_variance_warning=True` (PASS, not BLOCKED).
+The `zero_std_detected` / BLOCKED path is unchanged.
+
+**`tests/test_backtest_metrics_diagnostics.py`** — 5 new tests (`TestAnnualizedVolThreshold`, 72 total):
+
+| Test | What it verifies |
+|------|-----------------|
+| `test_daily_tiny_vol_warns` | 1d ann_vol ≈ 0.000278 → warns |
+| `test_daily_tiny_vol_per_bar_std_above_legacy_threshold` | per-bar std > 1e-6; new threshold is what fires |
+| `test_60m_normal_vol_no_warning` | 60m ann_vol ≈ 0.030 → no warning |
+| `test_real_daily_scale_warns` | 1610-bar 1d at SPY/QQQ real-data scale → warns |
+| `test_zero_std_still_blocked_not_affected_by_new_threshold` | BLOCKED path unchanged |
+
+### What this does NOT do
+
+- Does not change `compute_metrics()` or `metrics.py`
+- Does not change the backtest engine, strategy, or execution layer
+- Does not fix or suppress extreme Sharpe values from `compute_metrics()`
+- Does not approve paper or live trading
+- Does not change any gate status
+
+### Validation
+
+```bash
+python -m pytest tests/test_backtest_metrics_diagnostics.py    # 72 passed
+python -m pytest tests/test_cached_real_data_backtest_check.py # 61 passed
+python -m pytest                                                # 5 507 passed
+```
+
+### Safety confirmations
+
+- No broker/API access — no Alpaca calls, no HTTP, no credentials
+- No order submission. No live or paper trading enabled or changed.
+- Strategy, engine, execution layer, `metrics.py`, `cached_real_data_backtest_check.py` unchanged.
+- All test inputs are deterministic synthetic series (fixed seeds). No real market data.
 - No automated trading approved.
 
 ### Warning

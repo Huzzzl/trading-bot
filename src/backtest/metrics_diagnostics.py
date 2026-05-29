@@ -40,8 +40,19 @@ from src.backtest.metrics import bars_per_year_for_interval
 # 1e-14 is well above that noise floor and well below any real variance.
 _ZERO_STD_THRESHOLD: float = 1e-14
 
-# std of period returns below this triggers low_variance_warning
+# Per-bar std of period returns below this triggers low_variance_warning.
+# Legacy threshold — catches near-constant equity curves with sub-microscopic
+# variance (e.g. std ≈ 1e-8).
 _LOW_VARIANCE_THRESHOLD: float = 1e-6
+
+# Annualized volatility below this also triggers low_variance_warning.
+# Real-world market volatility is typically 15–30% annualized; values below
+# 0.1% (0.001) indicate the equity curve is so flat that the Sharpe ratio is
+# dominated by the sign of the mean excess return, not genuine risk-adjusted
+# performance.  This catches the SPY/QQQ 1d real-data cases where
+# annualized_vol ≈ 0.0003 produced |Sharpe| > 100 (diagnostic PASS without
+# warning under the old per-bar threshold alone).
+_LOW_ANNUALIZED_VOL_THRESHOLD: float = 0.001  # 0.1 %
 
 
 # ---------------------------------------------------------------------------
@@ -73,8 +84,11 @@ def diagnose_sharpe(
     risk_free_rate:
         Annualised risk-free rate (default 0.05 = 5 %).
     low_variance_threshold:
-        std of period returns below this value triggers ``low_variance_warning``
-        (default 1e-6).
+        Per-bar std of period returns below this value triggers
+        ``low_variance_warning`` (default 1e-6).  Note that
+        ``low_variance_warning`` is also triggered when
+        ``annualized_volatility < _LOW_ANNUALIZED_VOL_THRESHOLD`` (0.1 %),
+        regardless of this parameter.
 
     Returns
     -------
@@ -95,9 +109,11 @@ def diagnose_sharpe(
             returned ``sharpe_ratio_recomputed`` is 0.0 and ``result`` is
             ``"BLOCKED"``.
         ``low_variance_warning``
-            ``True`` if std is non-zero but below ``low_variance_threshold``.
-            The Sharpe is mathematically valid but may be inflated by
-            near-zero variance.  ``result`` is still ``"PASS"``.
+            ``True`` if either (a) per-bar std is non-zero but below
+            ``low_variance_threshold``, or (b) ``annualized_volatility`` is
+            below ``_LOW_ANNUALIZED_VOL_THRESHOLD`` (0.1 %).  The Sharpe is
+            mathematically valid but may be inflated by near-zero variance.
+            ``result`` is still ``"PASS"``.
         ``finite_values_only``
             ``True`` if all equity values are finite (no NaN or inf).
             ``False`` triggers ``result == "BLOCKED"``.
@@ -211,9 +227,14 @@ def diagnose_sharpe(
     # Use a small threshold rather than exact equality: np.diff on a perfectly
     # flat array can produce floating-point noise (~2.7e-20) rather than 0.0.
     zero_std_detected = (std_excess <= _ZERO_STD_THRESHOLD) or not math.isfinite(std_excess)
-    low_variance_warning = (
-        not zero_std_detected
-        and std_excess < low_variance_threshold
+
+    # low_variance_warning fires if EITHER:
+    #   (a) per-bar std is below the legacy threshold (catches near-constant curves), OR
+    #   (b) annualized volatility is below 0.1% (catches the SPY/QQQ daily cases where
+    #       std is non-negligible per-bar but tiny after annualisation, producing |Sharpe|>100)
+    low_variance_warning = not zero_std_detected and (
+        std_excess < low_variance_threshold
+        or annualized_volatility < _LOW_ANNUALIZED_VOL_THRESHOLD
     )
 
     # 7. Compute Sharpe (BLOCKED if zero std, to avoid misleading result)

@@ -345,7 +345,7 @@ Docs-only. Records the first operator-run results from the full three-step
 real-data pipeline (yahoo_cache_fetch → cached_data_availability_check →
 cached_real_data_backtest_check). All four scenarios (SPY/QQQ × 1d/60m)
 returned PASS. Captures raw metric values, interpretation, and follow-up
-diagnostic plan (PR 10K: Sharpe diagnostic implemented; PR 10L: Sharpe diagnostics integrated into cached checker implemented; PR 10M:
+diagnostic plan (PR 10K: Sharpe diagnostic implemented; PR 10L: Sharpe diagnostics integrated into cached checker implemented; PR 10N: annualized-vol warning threshold calibrated; PR 10M:
 default params comparison). No strategy/paper/live approval.
 No `src/`, `tests/`, `config/`, `output/`, `scripts/`, or `data/` changes.
 
@@ -378,6 +378,19 @@ No `src/`, `tests/`, `config/`, `output/`, `scripts/`, or `data/` changes.
 - Diagnostic BLOCKED does not affect scenario status (independent code paths).
 - `sharpe_ratio` from `compute_metrics()` is unchanged.
 - `tests/test_cached_real_data_backtest_check.py` — 8 new tests (`TestSharpeDiagnostics`).
+
+**Not in scope:** `metrics.py` changes, strategy changes, paper/live trading.
+
+### PR 10N — Calibrate diagnose_sharpe() low-vol threshold
+
+**Status: implemented — `src/backtest/metrics_diagnostics.py`**
+
+**What was added:**
+- `_LOW_ANNUALIZED_VOL_THRESHOLD = 0.001` constant; `low_variance_warning` now fires
+  when `annualized_volatility < 0.001` in addition to the legacy per-bar std check.
+  SPY/QQQ 1d real-data cases (ann_vol ≈ 0.0003) now show `low_variance_warning=True`.
+- `tests/test_backtest_metrics_diagnostics.py` — 5 new tests (`TestAnnualizedVolThreshold`);
+  72 total. `cached_real_data_backtest_check.py` unchanged.
 
 **Not in scope:** `metrics.py` changes, strategy changes, paper/live trading.
 
