@@ -349,6 +349,23 @@ diagnostic plan (PR 10K: Sharpe diagnostic; PR 10L: trade summary; PR 10M:
 default params comparison). No strategy/paper/live approval.
 No `src/`, `tests/`, `config/`, `output/`, `scripts/`, or `data/` changes.
 
+### PR 10K — Backtest metrics diagnostics
+
+**Status: implemented — `src/backtest/metrics_diagnostics.py`**
+
+**What was added:**
+- `src/backtest/metrics_diagnostics.py` — offline Sharpe diagnostic helper;
+  `diagnose_sharpe(equity_curve, interval)` recomputes Sharpe using the same
+  formula as `compute_metrics()`; detects zero std (BLOCKED), near-zero std
+  (warning), and non-finite values (BLOCKED); no raw equity values in output;
+  no strategy/engine/execution changes.
+- `tests/test_backtest_metrics_diagnostics.py` — 60 tests across 9 classes:
+  `TestInvalidInputs`, `TestFlatCurve`, `TestNormalCurve`, `TestLowVariance`,
+  `TestIntervalLookup`, `TestSafetyFlags`, `TestNoPricesEmitted`,
+  `TestDeterminism`, `TestSourceScan`.
+
+**Not in scope:** `compute_metrics()` changes, strategy changes, paper/live trading.
+
 ---
 
 ## 10. Validation for This Docs PR

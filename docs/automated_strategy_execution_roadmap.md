@@ -206,10 +206,11 @@ approval; no src/tests/config/output/scripts/data changes.
 
 ### Phase B diagnostics (pending)
 
-**PR 10K — Sharpe calculation diagnostic (daily scenarios)**
-Investigate extreme daily Sharpe values (SPY 1d: −163.35, QQQ 1d: −134.92).
-Inspect `src/backtest/metrics.py` annualisation and risk-free rate assumptions.
-Read-only diagnostic first; fix in separate sub-PR if bug found.
+**PR 10K — Sharpe calculation diagnostic (daily scenarios) — implemented**
+`src/backtest/metrics_diagnostics.py`: offline `diagnose_sharpe()` helper
+recomputes Sharpe and detects zero/near-zero std (which explains extreme values
+−134 to −163 seen in daily scenarios). Returns BLOCKED when std=0 rather than
+emitting a misleading extreme value. 60 tests. No strategy/engine changes.
 
 **PR 10L — Trade summary diagnostics**
 Add avg holding period, entry/exit reason breakdown, exposure %, win rate by
