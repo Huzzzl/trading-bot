@@ -319,10 +319,11 @@ No `src/`, `tests/`, `config/`, `output/`, `scripts/`, or `data/` changes.
   `run_backtest()` with `trend_following` for SPY/QQQ × 1d/60m; reports metric
   summaries (no raw prices); BLOCKED if cache missing; PASS means characterization
   ran only; 60m ↔ 1h aliasing supported.
-- `tests/test_cached_real_data_backtest_check.py` — 45 tests across 9 test classes:
+- `tests/test_cached_real_data_backtest_check.py` — 53 tests across 10 test classes:
   `TestMissingCache`, `TestValidCache`, `TestInvalidColumns`, `TestDeterminism`,
   `TestIntervalAliasing`, `TestSafetyFlags`, `TestNoPricesEmitted`, `TestOutputJson`,
-  `TestSourceScan` (AST-based forbidden-import checks).
+  `TestSourceScan` (AST-based forbidden-import checks), `TestTrendParams` (verifies
+  `fast_ema_period=10`/`slow_ema_period=50` — correct strategy param names).
 - `tests/test_tools_inventory.py` — count updated from 42 to 43.
 
 **CLI:**

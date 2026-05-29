@@ -25,6 +25,7 @@ import pytest
 from zoneinfo import ZoneInfo
 
 from src.tools.cached_real_data_backtest_check import (
+    _TREND_PARAMS,
     _LoadedFileProvider,
     _load_cache_file,
     main,
@@ -523,3 +524,60 @@ class TestSourceScan:
     def test_no_replace_order(self) -> None:
         src_text = _TOOL_SRC_PATH.read_text(encoding="utf-8")
         assert "replace_order" not in src_text, "replace_order found in source"
+
+
+# ---------------------------------------------------------------------------
+# TestTrendParams — default _TREND_PARAMS uses correct strategy param names
+# ---------------------------------------------------------------------------
+
+
+class TestTrendParams:
+    """Verify default _TREND_PARAMS uses the actual TrendFollowing param names."""
+
+    def test_default_params_contain_fast_ema_period(self) -> None:
+        assert "fast_ema_period" in _TREND_PARAMS
+
+    def test_default_params_contain_slow_ema_period(self) -> None:
+        assert "slow_ema_period" in _TREND_PARAMS
+
+    def test_default_params_do_not_contain_ema_fast(self) -> None:
+        assert "ema_fast" not in _TREND_PARAMS
+
+    def test_default_params_do_not_contain_ema_slow(self) -> None:
+        assert "ema_slow" not in _TREND_PARAMS
+
+    def test_default_fast_ema_period_value(self) -> None:
+        assert _TREND_PARAMS["fast_ema_period"] == 10
+
+    def test_default_slow_ema_period_value(self) -> None:
+        assert _TREND_PARAMS["slow_ema_period"] == 50
+
+    def test_run_check_passes_fast_ema_period_to_backtest(self, tmp_path: pathlib.Path) -> None:
+        _write_fixture(tmp_path, "SPY", "1d", n=80)
+        captured: list[dict] = []
+
+        def _capture_config(config, *, data_provider=None):
+            captured.append(dict(config.strategy_params))
+            from src.backtest.backtest_runner import run_backtest as _real
+            return _real(config, data_provider=data_provider)
+
+        with patch("src.tools.cached_real_data_backtest_check.run_backtest", side_effect=_capture_config):
+            run_check(cache_dir=tmp_path, symbols=["SPY"], intervals=["1d"])
+
+        assert len(captured) == 1
+        assert captured[0].get("fast_ema_period") == 10
+
+    def test_run_check_passes_slow_ema_period_to_backtest(self, tmp_path: pathlib.Path) -> None:
+        _write_fixture(tmp_path, "SPY", "1d", n=80)
+        captured: list[dict] = []
+
+        def _capture_config(config, *, data_provider=None):
+            captured.append(dict(config.strategy_params))
+            from src.backtest.backtest_runner import run_backtest as _real
+            return _real(config, data_provider=data_provider)
+
+        with patch("src.tools.cached_real_data_backtest_check.run_backtest", side_effect=_capture_config):
+            run_check(cache_dir=tmp_path, symbols=["SPY"], intervals=["1d"])
+
+        assert len(captured) == 1
+        assert captured[0].get("slow_ema_period") == 50
