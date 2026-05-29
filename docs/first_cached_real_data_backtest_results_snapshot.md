@@ -190,8 +190,9 @@ No strategy, engine, or execution changes.
 > - `src/backtest/metrics.py` — `compute_metrics()` behaviour is **unchanged**.
 >   A flat equity curve still returns `sharpe_ratio=0.0` (numeric, not BLOCKED).
 > - `src/backtest/engine.py` — unchanged.
-> - `src/tools/cached_real_data_backtest_check.py` — unchanged; the scenario
->   metrics reported in § 2 above are the same values this tool would produce today.
+> - `src/tools/cached_real_data_backtest_check.py` — updated in PR 10L to call
+>   `diagnose_sharpe()` per scenario, adding 5 diagnostic fields; the existing
+>   `sharpe_ratio` field and all other scenario metrics are **unchanged**.
 >
 > **diagnostic BLOCKED ≠ backtest run BLOCKED.** The diagnostic's BLOCKED
 > result only means "the Sharpe value would be misleading" — it does not
@@ -201,24 +202,28 @@ No strategy, engine, or execution changes.
 
 **Not in scope:** Paper trading, live trading, parameter changes, new strategies.
 
-### PR 10L — Trade summary diagnostics
+### PR 10L — Sharpe diagnostics in cached_real_data_backtest_check
 
-**Problem:** 280 trades in 1610 daily bars ≈ 1 trade every 5.75 bars, which
-is extremely high turnover for a trend-following strategy with `slow_ema_period=50`.
-This suggests the strategy is frequently entering and exiting, likely whipsawing.
+**Status: implemented — `src/tools/cached_real_data_backtest_check.py`**
 
-**Diagnostics to add:**
+After each successful `run_backtest()`, `run_check()` now calls
+`diagnose_sharpe(result_bt.equity_curve, interval)` and appends 5 per-scenario
+diagnostic fields:
 
-| Metric | Purpose |
-|--------|---------|
-| Average holding period (bars) | Detect excessive turnover |
-| Entry reason breakdown (EMA crossover vs breakout) | Understand entry driver |
-| Exit reason breakdown (stop-loss vs force-exit vs bearish signal) | Understand exit driver |
-| Exposure % (bars in position / total bars) | Assess time in market |
-| Win rate by exit reason | Identify dominant loss source |
+| Field | Meaning |
+|-------|---------|
+| `sharpe_diagnostic_result` | `"PASS"` or `"BLOCKED"` (whether Sharpe is reliable) |
+| `zero_std_detected` | `True` → near-zero variance; extreme Sharpe values explained |
+| `low_variance_warning` | `True` → near-flat equity; Sharpe may still be inflated |
+| `annualized_volatility` | `std × sqrt(bars_per_year)` (float or None) |
+| `return_points` | count of bar-level returns computed (int) |
 
-**Scope:** Extend `BacktestRunResult.metrics` or add a `trade_summary` field.
-No live or paper code changes. No strategy changes.
+The daily SPY/QQQ scenarios from § 2 would now show `zero_std_detected=True`
+and `sharpe_diagnostic_result="BLOCKED"`, making the source of the extreme
+values (−163.35, −134.92) immediately visible in the output.
+
+8 new tests (`TestSharpeDiagnostics`).
+No strategy, engine, `metrics.py`, or execution changes.
 
 **Not in scope:** Parameter tuning, paper trading, live trading.
 

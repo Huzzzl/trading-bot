@@ -210,12 +210,14 @@ approval; no src/tests/config/output/scripts/data changes.
 `src/backtest/metrics_diagnostics.py`: offline `diagnose_sharpe()` helper
 recomputes Sharpe and detects zero/near-zero std (which explains extreme values
 −134 to −163 seen in daily scenarios). Returns BLOCKED when std=0 rather than
-emitting a misleading extreme value. 60 tests. No strategy/engine changes.
+emitting a misleading extreme value. 67 tests. No strategy/engine changes.
 
-**PR 10L — Trade summary diagnostics**
-Add avg holding period, entry/exit reason breakdown, exposure %, win rate by
-exit reason to `BacktestRunResult.metrics`. High turnover (280 trades / 1610
-daily bars for SPY 1d) suggests whipsawing at current params.
+**PR 10L — Sharpe diagnostics integrated into cached_real_data_backtest_check — implemented**
+`src/tools/cached_real_data_backtest_check.py`: after each `run_backtest()`,
+calls `diagnose_sharpe()` and adds 5 per-scenario diagnostic fields
+(`sharpe_diagnostic_result`, `zero_std_detected`, `low_variance_warning`,
+`annualized_volatility`, `return_points`). Diagnostic BLOCKED does not block
+the scenario. 8 new tests (`TestSharpeDiagnostics`). No strategy/engine/metrics changes.
 
 **PR 10M — Default params comparison**
 Document and resolve checker `fast_ema_period=10` vs strategy default

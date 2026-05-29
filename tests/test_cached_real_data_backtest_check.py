@@ -47,6 +47,12 @@ _ALLOWED_SCENARIO_KEYS = frozenset({
     "max_drawdown_pct",
     "sharpe_ratio",
     "num_trades",
+    # Sharpe diagnostic fields (PR 10L)
+    "sharpe_diagnostic_result",
+    "zero_std_detected",
+    "low_variance_warning",
+    "annualized_volatility",
+    "return_points",
 })
 
 _FORBIDDEN_OHLCV_KEYS = frozenset({"open", "high", "low", "close", "volume"})
@@ -167,6 +173,8 @@ class TestValidCache:
             "symbol", "interval", "rows", "status",
             "total_return_pct", "annualized_return_pct",
             "max_drawdown_pct", "sharpe_ratio", "num_trades",
+            "sharpe_diagnostic_result", "zero_std_detected",
+            "low_variance_warning", "annualized_volatility", "return_points",
         }
         for s in result["scenarios"]:
             assert required_keys.issubset(s.keys()), f"Missing keys in scenario: {s}"
@@ -581,3 +589,158 @@ class TestTrendParams:
 
         assert len(captured) == 1
         assert captured[0].get("slow_ema_period") == 50
+
+
+# ---------------------------------------------------------------------------
+# TestSharpeDiagnostics — per-scenario diagnose_sharpe() integration (PR 10L)
+# ---------------------------------------------------------------------------
+
+
+def _make_flat_ohlcv(n: int, interval: str = "1d") -> pd.DataFrame:
+    """Flat OHLCV with constant prices — strategy never trades → flat equity."""
+    if interval in ("1d",):
+        dates = pd.bdate_range("2020-01-02", periods=n, tz=ZoneInfo("America/New_York"))
+    else:
+        bdays = pd.bdate_range("2020-01-02", periods=(n // 6) + 2, tz=ZoneInfo("America/New_York"))
+        timestamps = []
+        for d in bdays:
+            for h in [9, 10, 11, 12, 13, 14]:
+                timestamps.append(d.replace(hour=h, minute=30, second=0, microsecond=0))
+        dates = pd.DatetimeIndex(timestamps[:n])
+    return pd.DataFrame(
+        {
+            "open":   np.full(n, 100.0),
+            "high":   np.full(n, 101.0),
+            "low":    np.full(n, 99.0),
+            "close":  np.full(n, 100.0),
+            "volume": np.full(n, 1_000_000.0),
+        },
+        index=dates,
+    )
+
+
+def _write_flat_fixture(cache_dir: pathlib.Path, symbol: str, interval: str, n: int = 80) -> None:
+    """Write a flat-OHLCV CSV fixture file."""
+    df = _make_flat_ohlcv(n, interval=interval)
+    start = df.index[0].date().isoformat()
+    end = df.index[-1].date().isoformat()
+    fname = f"{symbol}_{start}_{end}_{interval}.csv"
+    df.to_csv(cache_dir / fname)
+
+
+_DIAGNOSTIC_KEYS = frozenset({
+    "sharpe_diagnostic_result",
+    "zero_std_detected",
+    "low_variance_warning",
+    "annualized_volatility",
+    "return_points",
+})
+
+
+class TestSharpeDiagnostics:
+    """Per-scenario diagnose_sharpe() integration tests."""
+
+    def test_valid_cache_includes_diagnostic_fields_per_scenario(self, tmp_path: pathlib.Path) -> None:
+        """Every OK scenario includes all 5 diagnostic fields."""
+        _write_all_four_fixtures(tmp_path)
+        result = run_check(cache_dir=tmp_path)
+        assert result["result"] == "PASS"
+        for s in result["scenarios"]:
+            if s["status"] == "OK":
+                assert _DIAGNOSTIC_KEYS.issubset(s.keys()), (
+                    f"Missing diagnostic keys in scenario {s['symbol']}/{s['interval']}: "
+                    f"{_DIAGNOSTIC_KEYS - set(s.keys())}"
+                )
+
+    def test_sharpe_diagnostic_result_is_pass_or_blocked(self, tmp_path: pathlib.Path) -> None:
+        """sharpe_diagnostic_result is always 'PASS' or 'BLOCKED'."""
+        _write_all_four_fixtures(tmp_path)
+        result = run_check(cache_dir=tmp_path)
+        for s in result["scenarios"]:
+            if s["status"] == "OK":
+                assert s["sharpe_diagnostic_result"] in ("PASS", "BLOCKED"), (
+                    f"Unexpected sharpe_diagnostic_result: {s['sharpe_diagnostic_result']}"
+                )
+
+    def test_zero_std_detected_is_bool(self, tmp_path: pathlib.Path) -> None:
+        """zero_std_detected field is always a bool."""
+        _write_all_four_fixtures(tmp_path)
+        result = run_check(cache_dir=tmp_path)
+        for s in result["scenarios"]:
+            if s["status"] == "OK":
+                assert isinstance(s["zero_std_detected"], bool)
+
+    def test_low_variance_warning_is_bool(self, tmp_path: pathlib.Path) -> None:
+        """low_variance_warning field is always a bool."""
+        _write_all_four_fixtures(tmp_path)
+        result = run_check(cache_dir=tmp_path)
+        for s in result["scenarios"]:
+            if s["status"] == "OK":
+                assert isinstance(s["low_variance_warning"], bool)
+
+    def test_return_points_is_non_negative_int(self, tmp_path: pathlib.Path) -> None:
+        """return_points is always a non-negative int."""
+        _write_all_four_fixtures(tmp_path)
+        result = run_check(cache_dir=tmp_path)
+        for s in result["scenarios"]:
+            if s["status"] == "OK":
+                assert isinstance(s["return_points"], int)
+                assert s["return_points"] >= 0
+
+    def test_flat_fixture_zero_std_detected(self, tmp_path: pathlib.Path) -> None:
+        """Flat OHLCV → no trades → flat equity → zero_std_detected=True (BLOCKED diagnostic).
+
+        Constant prices produce no EMA crossovers or breakouts; the strategy
+        stays flat and equity never changes.  diagnose_sharpe() detects this
+        and returns BLOCKED with zero_std_detected=True.  The scenario status
+        remains OK (diagnostic BLOCKED ≠ scenario BLOCKED).
+        """
+        _write_flat_fixture(tmp_path, "SPY", "1d", n=80)
+        result = run_check(cache_dir=tmp_path, symbols=["SPY"], intervals=["1d"])
+        assert result["result"] == "PASS"
+        s = result["scenarios"][0]
+        assert s["status"] == "OK"
+        assert s["zero_std_detected"] is True
+        assert s["sharpe_diagnostic_result"] == "BLOCKED"
+
+    def test_diagnostic_blocked_does_not_block_scenario(self, tmp_path: pathlib.Path) -> None:
+        """Even when diagnose_sharpe returns BLOCKED, scenario status stays OK."""
+        from unittest.mock import patch as _patch
+
+        _write_fixture(tmp_path, "SPY", "1d", n=80)
+        blocked_diag = {
+            "result": "BLOCKED",
+            "zero_std_detected": True,
+            "low_variance_warning": False,
+            "annualized_volatility": None,
+            "return_points": 0,
+            "broker_calls_made": False,
+            "credentials_read": False,
+            "network_calls_made": False,
+            "order_action_requested": False,
+        }
+        with _patch(
+            "src.tools.cached_real_data_backtest_check.diagnose_sharpe",
+            return_value=blocked_diag,
+        ):
+            result = run_check(cache_dir=tmp_path, symbols=["SPY"], intervals=["1d"])
+
+        assert result["result"] == "PASS"
+        s = result["scenarios"][0]
+        assert s["status"] == "OK"
+        assert s["sharpe_diagnostic_result"] == "BLOCKED"
+
+    def test_no_raw_equity_values_in_diagnostic_fields(self, tmp_path: pathlib.Path) -> None:
+        """Diagnostic fields must not contain raw equity curve values.
+
+        Only statistical aggregates (float scalars, bools, strings) are allowed.
+        """
+        _write_all_four_fixtures(tmp_path)
+        result = run_check(cache_dir=tmp_path)
+        for s in result["scenarios"]:
+            if s["status"] == "OK":
+                for key in _DIAGNOSTIC_KEYS:
+                    val = s[key]
+                    assert not isinstance(val, (list, pd.DataFrame, pd.Series)), (
+                        f"Scenario field {key!r} contains a sequence/DataFrame: {type(val)}"
+                    )

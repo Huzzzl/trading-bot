@@ -2,7 +2,7 @@
 
 Current operational status of the live-readiness gate baseline.
 Last updated: 2026-05-28. Full pre-submit pipeline complete through PR #98.
-Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. PR 10E cache checker (42 tests, 41 tools). PR 10F Yahoo fetch gate design. PR 10G Yahoo fetch tool (43 tests, 42 tools). PR 10H local fetch runbook. PR 10I cached real-data backtest checker (53 tests, 43 tools). PR 10J first real-data results snapshot (docs-only). PR 10K backtest metrics diagnostics (67 tests). Test baseline: 5 494 passed.
+Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. PR 10E cache checker (42 tests, 41 tools). PR 10F Yahoo fetch gate design. PR 10G Yahoo fetch tool (43 tests, 42 tools). PR 10H local fetch runbook. PR 10I cached real-data backtest checker (53 tests, 43 tools). PR 10J first real-data results snapshot (docs-only). PR 10K backtest metrics diagnostics (67 tests). PR 10L Sharpe diagnostics in cached checker (61 tests). Test baseline: 5 502 passed.
 
 ---
 
@@ -4751,8 +4751,8 @@ Sharpe calculation or annualisation bug. QQQ 60m positive total return (+0.34%)
 does not approve trading. All safety flags remain False.
 
 **Diagnostic plan:**
-- PR 10K: inspect Sharpe calculation for daily scenarios
-- PR 10L: add trade summary diagnostics (avg holding, entry/exit reasons, exposure, turnover)
+- PR 10K: inspect Sharpe calculation for daily scenarios — implemented
+- PR 10L: integrate diagnose_sharpe() into cached_real_data_backtest_check output — implemented
 - PR 10M: compare default params (`fast_ema_period=10` in checker vs `20` in strategy defaults)
 
 ### Validation
@@ -4790,7 +4790,7 @@ git diff origin/main...HEAD -- src tests config output scripts data
 **Branch:** `claude/add-backtest-metrics-diagnostics`
 **Files added:** `src/backtest/metrics_diagnostics.py`, `tests/test_backtest_metrics_diagnostics.py`
 **Files updated:** `docs/first_cached_real_data_backtest_results_snapshot.md`, `docs/real_data_backtest_gate_design.md`, `docs/automated_strategy_execution_roadmap.md`, `docs/live_readiness_status.md`
-**Tests:** 60 new tests (9 classes). Full suite: 5 487 passed.
+**Tests:** 67 new tests (10 classes, including 7 `TestDiagnosticVsProduction`). Full suite: 5 494 passed.
 **Type:** Feature. No strategy/engine/execution/broker changes. No network in tests.
 
 ### What was added
@@ -4870,8 +4870,8 @@ rather than a misleading extreme value.
 ```bash
 git diff origin/main...HEAD -- src/main.py src/backtest/engine.py src/strategy src/execution config output scripts data
 # Expected: empty (metrics_diagnostics.py is a new pure-helper module)
-python -m pytest tests/test_backtest_metrics_diagnostics.py  # 60 passed
-python -m pytest                                              # 5 487 passed
+python -m pytest tests/test_backtest_metrics_diagnostics.py  # 67 passed
+python -m pytest                                              # 5 494 passed
 ```
 
 ### Safety confirmations
@@ -4882,6 +4882,95 @@ python -m pytest                                              # 5 487 passed
 - Tool source scanned by AST: no yfinance, requests, httpx, aiohttp, urllib,
   alpaca, os.environ, submit_order, cancel_order, replace_order.
 - All inputs are synthetic in-test arrays; no real market data in any test.
+- No automated trading approved.
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> **Diagnostics do not constitute strategy validation or trading approval.**
+> The Phase A–H safety roadmap remains unchanged and required before any automation.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone — PR 10L: add-cached-real-data-sharpe-diagnostics
+
+**Date:** 2026-05-29
+**Branch:** `claude/hopeful-cray-56Jfr`
+**Files updated:** `src/tools/cached_real_data_backtest_check.py`, `tests/test_cached_real_data_backtest_check.py`
+**Files docs-updated:** `docs/first_cached_real_data_backtest_results_snapshot.md`, `docs/real_data_backtest_gate_design.md`, `docs/automated_strategy_execution_roadmap.md`, `docs/live_readiness_status.md`
+**Tests:** 8 new tests (`TestSharpeDiagnostics`). Full suite: 5 502 passed.
+**Type:** Feature. No strategy/engine/metrics/execution/broker changes.
+
+### What was added
+
+`src/tools/cached_real_data_backtest_check.py` — after each successful
+`run_backtest()` call, `diagnose_sharpe(result_bt.equity_curve, interval)` is
+called and the following per-scenario diagnostic fields are added to the output:
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `sharpe_diagnostic_result` | `"PASS"` / `"BLOCKED"` | Whether the Sharpe calculation is reliable |
+| `zero_std_detected` | bool | `True` → std of bar returns ≈ 0; Sharpe is meaningless |
+| `low_variance_warning` | bool | `True` → near-zero std; Sharpe may be inflated |
+| `annualized_volatility` | float or None | `std × sqrt(bars_per_year)` |
+| `return_points` | int | number of bar-level period returns computed |
+
+**Critical constraint:** `sharpe_diagnostic_result == "BLOCKED"` does **not** make
+the scenario `status == "BLOCKED"`. The two are fully independent:
+- `scenario["status"] == "OK"` means the backtest ran without error
+- `scenario["sharpe_diagnostic_result"] == "BLOCKED"` means the Sharpe
+  value from `compute_metrics()` is unreliable (e.g. near-zero variance)
+
+The existing `sharpe_ratio` field (from `compute_metrics()`) is **unchanged**.
+
+**`tests/test_cached_real_data_backtest_check.py`** — 8 new tests (`TestSharpeDiagnostics`):
+
+| Test | What it verifies |
+|------|-----------------|
+| `test_valid_cache_includes_diagnostic_fields_per_scenario` | All 5 fields present in every OK scenario |
+| `test_sharpe_diagnostic_result_is_pass_or_blocked` | Value is always `"PASS"` or `"BLOCKED"` |
+| `test_zero_std_detected_is_bool` | Type is bool |
+| `test_low_variance_warning_is_bool` | Type is bool |
+| `test_return_points_is_non_negative_int` | Type is int ≥ 0 |
+| `test_flat_fixture_zero_std_detected` | Flat OHLCV → no trades → `zero_std_detected=True`, `sharpe_diagnostic_result="BLOCKED"`, `scenario["status"]=="OK"` |
+| `test_diagnostic_blocked_does_not_block_scenario` | Mocked BLOCKED diagnostic still leaves scenario status OK |
+| `test_no_raw_equity_values_in_diagnostic_fields` | Fields are scalars/strings only; no DataFrame/Series/lists |
+
+### What this diagnoses
+
+The extreme daily Sharpe values from PR 10J (SPY 1d: −163.35, QQQ 1d: −134.92)
+are now visible in the `cached_real_data_backtest_check` output. When a real-data
+run produces extreme Sharpe values, the per-scenario `sharpe_diagnostic_result`
+and `zero_std_detected` fields immediately identify whether the value is due to
+near-zero variance rather than genuine strategy performance.
+
+### What this does NOT do
+
+- Does not change `compute_metrics()` or `metrics.py`
+- Does not change the backtest engine, strategy, or execution layer
+- Does not fix or suppress the extreme Sharpe values from `compute_metrics()`
+- Does not approve paper or live trading
+- Does not change any gate status
+
+### Validation
+
+```bash
+python -m pytest tests/test_cached_real_data_backtest_check.py   # 61 passed
+python -m pytest tests/test_backtest_metrics_diagnostics.py       # 67 passed
+python -m pytest tests/test_tools_inventory.py                    # ≥ 363 passed
+python -m pytest                                                   # 5 502 passed
+```
+
+### Safety confirmations
+
+- No broker/API access — no Alpaca calls, no HTTP, no credentials
+- No order submission. No live or paper trading enabled or changed.
+- Strategy, engine, execution layer, `metrics.py` unchanged.
+- `diagnose_sharpe()` is read-only diagnostic: no side effects, no network calls.
+- All inputs are synthetic in-test fixtures; no real market data in any test.
 - No automated trading approved.
 
 ### Warning
