@@ -42,6 +42,7 @@ from typing import Any
 import pandas as pd
 
 from src.backtest.backtest_runner import BacktestRunConfig, run_backtest
+from src.backtest.metrics_diagnostics import diagnose_sharpe
 from src.data.base import BaseDataProvider
 from src.tools.cached_data_availability_check import check_cache
 
@@ -306,6 +307,26 @@ def run_check(
                 "sharpe_ratio": float(metrics.get(_METRIC_SHARPE, 0.0)),
                 "num_trades": int(metrics.get(_METRIC_NUM_TRADES, 0)),
             }
+
+            # Sharpe diagnostic — does not affect scenario status or overall result.
+            # Diagnostic BLOCKED means the Sharpe value is unreliable; it never
+            # causes the scenario itself to be BLOCKED.
+            try:
+                diag = diagnose_sharpe(result_bt.equity_curve, interval)
+            except Exception:
+                diag = {
+                    "result": "BLOCKED",
+                    "zero_std_detected": False,
+                    "low_variance_warning": False,
+                    "annualized_volatility": None,
+                    "return_points": 0,
+                }
+            scenario["sharpe_diagnostic_result"] = str(diag["result"])
+            scenario["zero_std_detected"] = bool(diag["zero_std_detected"])
+            scenario["low_variance_warning"] = bool(diag["low_variance_warning"])
+            scenario["annualized_volatility"] = diag["annualized_volatility"]
+            scenario["return_points"] = int(diag["return_points"]) if diag.get("return_points") is not None else 0
+
             scenarios.append(scenario)
 
     # 6. Determine overall result

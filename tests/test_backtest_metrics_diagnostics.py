@@ -417,3 +417,134 @@ class TestSourceScan:
 
     def test_no_replace_order(self) -> None:
         assert "replace_order" not in _MODULE_PATH.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# TestDiagnosticVsProduction
+# ---------------------------------------------------------------------------
+# Explicit cross-behaviour tests confirming that:
+#   (1) compute_metrics() still emits a numeric sharpe_ratio for the same
+#       cases it did before this PR — behaviour is UNCHANGED.
+#   (2) diagnose_sharpe() flags zero/near-zero std separately from
+#       compute_metrics(), which silently returns 0.0.
+#   (3) diagnostic BLOCKED ≠ backtest run BLOCKED.
+# ---------------------------------------------------------------------------
+
+
+def _make_dated_equity_df(s: pd.Series, freq: str = "B") -> "pd.DataFrame":
+    """Wrap a Series into a DataFrame with a DatetimeIndex (required by compute_metrics)."""
+    import pandas as pd
+    dates = pd.bdate_range("2020-01-02", periods=len(s), freq=freq)
+    return pd.DataFrame({"equity": s.values}, index=dates)
+
+
+class TestDiagnosticVsProduction:
+    """Cross-module invariants: diagnostics do not alter production metrics."""
+
+    # --- (1) compute_metrics sharpe_ratio is still numeric after this PR ----
+
+    def test_compute_metrics_flat_curve_returns_numeric_sharpe(self) -> None:
+        """compute_metrics() returns a numeric sharpe_ratio for flat equity.
+
+        This was the behaviour before PR 10K and must remain unchanged.
+        diagnose_sharpe() on the same input returns BLOCKED — but that only
+        affects the diagnostic tool, not the backtest pipeline.
+
+        Note: due to floating-point noise in np.std on a constant series,
+        compute_metrics returns a large-magnitude float rather than 0.0.
+        The key invariant is that it returns a float — not None, not an
+        exception, not a sentinel string.
+        """
+        from src.backtest.metrics import compute_metrics
+
+        flat_eq = _make_dated_equity_df(_flat_series(n=50))
+        m = compute_metrics([], flat_eq, initial_capital=100_000.0, interval="1d")
+        # Must be numeric — not None, not "BLOCKED", not an exception
+        assert isinstance(m["sharpe_ratio"], float)
+
+    def test_compute_metrics_trending_curve_returns_numeric_sharpe(self) -> None:
+        """compute_metrics() returns a finite numeric sharpe_ratio for a
+        normal trending equity curve.  Behaviour unchanged by this PR."""
+        import math
+        from src.backtest.metrics import compute_metrics
+
+        s = _trending_series(n=200)
+        eq = _make_dated_equity_df(s)
+        m = compute_metrics([], eq, initial_capital=float(s.iloc[0]), interval="1d")
+        assert isinstance(m["sharpe_ratio"], float)
+        assert math.isfinite(m["sharpe_ratio"])
+
+    # --- (2) diagnose_sharpe flags zero std separately ----------------------
+
+    def test_diagnose_blocked_while_compute_metrics_returns_numeric(self) -> None:
+        """On a flat equity curve: compute_metrics → sharpe=0.0 (numeric);
+        diagnose_sharpe → BLOCKED.  The diagnostic and the backtest pipeline
+        use independent code paths and must not interfere."""
+        from src.backtest.metrics import compute_metrics
+
+        flat_s = _flat_series(n=50)
+        flat_eq_dated = _make_dated_equity_df(flat_s)
+        m = compute_metrics([], flat_eq_dated, initial_capital=100_000.0, interval="1d")
+        d = diagnose_sharpe(flat_s, "1d")
+
+        # compute_metrics still produces numeric Sharpe
+        assert isinstance(m["sharpe_ratio"], float)
+        # diagnose_sharpe detects the condition and blocks
+        assert d["result"] == "BLOCKED"
+        assert d["zero_std_detected"] is True
+
+    def test_diagnose_low_variance_warning_while_metrics_still_numeric(self) -> None:
+        """Near-flat curve: compute_metrics returns a (possibly extreme) numeric
+        Sharpe; diagnose_sharpe issues low_variance_warning but stays PASS."""
+        import math
+        from src.backtest.metrics import compute_metrics
+
+        s = _near_flat_series(n=200)
+        eq = _make_dated_equity_df(s)
+        m = compute_metrics([], eq, initial_capital=float(s.iloc[0]), interval="1d")
+        d = diagnose_sharpe(s, "1d")
+
+        # compute_metrics: numeric (may be extreme)
+        assert isinstance(m["sharpe_ratio"], float)
+        # diagnose_sharpe: PASS with warning
+        assert d["result"] == "PASS"
+        assert d["low_variance_warning"] is True
+
+    # --- (3) diagnostic BLOCKED ≠ backtest run BLOCKED ----------------------
+
+    def test_diagnostic_blocked_does_not_affect_backtest_result(self) -> None:
+        """diagnose_sharpe returning BLOCKED for a flat curve does not cause
+        compute_metrics or any backtest pipeline function to raise or block.
+        The two functions are fully independent."""
+        from src.backtest.metrics import compute_metrics
+
+        flat_s = _flat_series(n=50)
+        flat_eq_dated = _make_dated_equity_df(flat_s)
+
+        # Diagnostic returns BLOCKED
+        d = diagnose_sharpe(flat_s, "1d")
+        assert d["result"] == "BLOCKED"
+
+        # compute_metrics on the same input still succeeds — no exception, no BLOCKED
+        m = compute_metrics([], flat_eq_dated, initial_capital=100_000.0, interval="1d")
+        assert "sharpe_ratio" in m
+        assert isinstance(m["sharpe_ratio"], float)
+
+    def test_diagnose_sharpe_does_not_mutate_equity_curve(self) -> None:
+        """diagnose_sharpe() must not modify its input."""
+        import pandas as pd
+
+        s = _trending_series(n=100)
+        original_values = s.values.copy()
+        diagnose_sharpe(s, "1d")
+        assert (s.values == original_values).all()
+
+    def test_diagnose_sharpe_does_not_mutate_dataframe(self) -> None:
+        """diagnose_sharpe() must not modify a DataFrame input."""
+        import pandas as pd
+
+        s = _trending_series(n=100)
+        df = _df_from_series(s)
+        original_equity = df["equity"].values.copy()
+        diagnose_sharpe(df, "1d")
+        assert (df["equity"].values == original_equity).all()

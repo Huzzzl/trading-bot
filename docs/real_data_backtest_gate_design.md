@@ -345,7 +345,7 @@ Docs-only. Records the first operator-run results from the full three-step
 real-data pipeline (yahoo_cache_fetch → cached_data_availability_check →
 cached_real_data_backtest_check). All four scenarios (SPY/QQQ × 1d/60m)
 returned PASS. Captures raw metric values, interpretation, and follow-up
-diagnostic plan (PR 10K: Sharpe diagnostic; PR 10L: trade summary; PR 10M:
+diagnostic plan (PR 10K: Sharpe diagnostic implemented; PR 10L: Sharpe diagnostics integrated into cached checker implemented; PR 10M:
 default params comparison). No strategy/paper/live approval.
 No `src/`, `tests/`, `config/`, `output/`, `scripts/`, or `data/` changes.
 
@@ -359,12 +359,27 @@ No `src/`, `tests/`, `config/`, `output/`, `scripts/`, or `data/` changes.
   formula as `compute_metrics()`; detects zero std (BLOCKED), near-zero std
   (warning), and non-finite values (BLOCKED); no raw equity values in output;
   no strategy/engine/execution changes.
-- `tests/test_backtest_metrics_diagnostics.py` — 60 tests across 9 classes:
+- `tests/test_backtest_metrics_diagnostics.py` — 67 tests across 10 classes:
   `TestInvalidInputs`, `TestFlatCurve`, `TestNormalCurve`, `TestLowVariance`,
   `TestIntervalLookup`, `TestSafetyFlags`, `TestNoPricesEmitted`,
-  `TestDeterminism`, `TestSourceScan`.
+  `TestDeterminism`, `TestSourceScan`, `TestDiagnosticVsProduction`.
 
 **Not in scope:** `compute_metrics()` changes, strategy changes, paper/live trading.
+
+### PR 10L — Sharpe diagnostics in cached_real_data_backtest_check
+
+**Status: implemented — `src/tools/cached_real_data_backtest_check.py`**
+
+**What was added:**
+- `run_check()` now calls `diagnose_sharpe(result_bt.equity_curve, interval)`
+  after each successful `run_backtest()` and appends 5 per-scenario fields:
+  `sharpe_diagnostic_result`, `zero_std_detected`, `low_variance_warning`,
+  `annualized_volatility`, `return_points`.
+- Diagnostic BLOCKED does not affect scenario status (independent code paths).
+- `sharpe_ratio` from `compute_metrics()` is unchanged.
+- `tests/test_cached_real_data_backtest_check.py` — 8 new tests (`TestSharpeDiagnostics`).
+
+**Not in scope:** `metrics.py` changes, strategy changes, paper/live trading.
 
 ---
 
