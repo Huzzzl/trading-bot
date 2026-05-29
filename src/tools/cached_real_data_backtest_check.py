@@ -54,8 +54,8 @@ _DEFAULT_SYMBOLS = ["SPY", "QQQ"]
 _DEFAULT_INTERVALS = ["1d", "60m"]
 
 _TREND_PARAMS: dict[str, Any] = {
-    "ema_fast": 10,
-    "ema_slow": 50,
+    "fast_ema_period": 10,
+    "slow_ema_period": 50,
     "atr_period": 14,
     "atr_stop_mult": 2.0,
     "volatility_lookback": 50,

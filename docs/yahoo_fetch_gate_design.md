@@ -338,8 +338,9 @@ No `src/`, `tests/`, `config/`, `output/`, `scripts/`, or `data/` changes.
   `run_backtest()` with `trend_following` for SPY/QQQ × 1d/60m; reports metric
   summaries (no raw prices); BLOCKED if cache missing; PASS means characterization
   ran only; count 42 → 43 tools.
-- `tests/test_cached_real_data_backtest_check.py` — 45 tests; all use synthetic
-  CSV fixtures; no real cache files, no network in any test.
+- `tests/test_cached_real_data_backtest_check.py` — 53 tests (10 classes, incl.
+  `TestTrendParams` verifying `fast_ema_period=10`/`slow_ema_period=50`); all use
+  synthetic CSV fixtures; no real cache files, no network in any test.
 - `tests/test_tools_inventory.py` — count updated from 42 to 43.
 
 **Not in scope:** Live data fetch in CI, broker calls, credentials, trading, raw OHLCV values in output.
