@@ -2808,18 +2808,6 @@ class TestPaperTradingEnabledFlag:
 
     # --- enabled path (paper_trading_enabled=True) ---
 
-    def _fake_engine(self, intents=None):
-        """Return a MagicMock that mimics BacktestEngine for paper path tests."""
-        eng = mock.MagicMock()
-        eng.run.return_value = {
-            "order_intents": intents if intents is not None else [],
-            "metrics": {"total_return": 0.0},
-            "trades": [],
-            "equity_curve": [],
-        }
-        eng._portfolio.positions = {}
-        return eng
-
     def _fake_preflight(self, symbols=None):
         return {
             "ok": True,
@@ -2848,11 +2836,15 @@ class TestPaperTradingEnabledFlag:
                                return_value=None) as mock_init, \
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()) as mock_pf, \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine()), \
+             mock.patch("src.backtest.backtest_runner.run_backtest") as mock_run_backtest, \
              mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
                         self._make_generate_all_mock(tmp_path)), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            mock_run_backtest.return_value.order_intents = []
+            mock_run_backtest.return_value.metrics = {"total_return": 0.0}
+            mock_run_backtest.return_value.trades = []
+            mock_run_backtest.return_value.equity_curve = []
             from src.main import main as _main
             _main()
         mock_init.assert_called_once()
@@ -2867,11 +2859,15 @@ class TestPaperTradingEnabledFlag:
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine()), \
+             mock.patch("src.backtest.backtest_runner.run_backtest") as mock_run_backtest, \
              mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
                         self._make_generate_all_mock(tmp_path)), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            mock_run_backtest.return_value.order_intents = []
+            mock_run_backtest.return_value.metrics = {"total_return": 0.0}
+            mock_run_backtest.return_value.trades = []
+            mock_run_backtest.return_value.equity_curve = []
             from src.main import main as _main
             _main()
         mock_submit.assert_not_called()
@@ -2884,11 +2880,15 @@ class TestPaperTradingEnabledFlag:
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
              mock.patch.object(AlpacaBrokerAdapter, "cancel_order", mock_cancel), \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine()), \
+             mock.patch("src.backtest.backtest_runner.run_backtest") as mock_run_backtest, \
              mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
                         self._make_generate_all_mock(tmp_path)), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            mock_run_backtest.return_value.order_intents = []
+            mock_run_backtest.return_value.metrics = {"total_return": 0.0}
+            mock_run_backtest.return_value.trades = []
+            mock_run_backtest.return_value.equity_curve = []
             from src.main import main as _main
             _main()
         mock_cancel.assert_not_called()
@@ -2900,11 +2900,15 @@ class TestPaperTradingEnabledFlag:
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
              mock.patch("alpaca.trading.client.TradingClient") as MockTC, \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine()), \
+             mock.patch("src.backtest.backtest_runner.run_backtest") as mock_run_backtest, \
              mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
                         self._make_generate_all_mock(tmp_path)), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            mock_run_backtest.return_value.order_intents = []
+            mock_run_backtest.return_value.metrics = {"total_return": 0.0}
+            mock_run_backtest.return_value.trades = []
+            mock_run_backtest.return_value.equity_curve = []
             from src.main import main as _main
             _main()
         MockTC.assert_not_called()
@@ -3131,11 +3135,6 @@ class TestIntendedPaperExecutionFlow:
         )
         fake_preflight = {"ok": True, "account": {"status": "ACTIVE"},
                           "positions": {}, "symbols": ["SPY"]}
-        fake_engine = mock.MagicMock()
-        fake_engine.run.return_value = {
-            "order_intents": [], "metrics": {}, "trades": [], "equity_curve": [],
-        }
-        fake_engine._portfolio.positions = {}
 
         def _fake_generate(rg_self):
             rg_self._output_dir.mkdir(parents=True, exist_ok=True)
@@ -3146,14 +3145,18 @@ class TestIntendedPaperExecutionFlow:
         with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=fake_preflight), \
-             mock.patch("src.main.build_engine", return_value=fake_engine), \
+             mock.patch("src.backtest.backtest_runner.run_backtest") as mock_run_backtest, \
              mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
                         _fake_generate), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            mock_run_backtest.return_value.order_intents = []
+            mock_run_backtest.return_value.metrics = {}
+            mock_run_backtest.return_value.trades = []
+            mock_run_backtest.return_value.equity_curve = []
             from src.main import main as _main
             _main()
-        fake_engine.run.assert_called_once()
+        mock_run_backtest.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -3227,16 +3230,14 @@ class TestPaperExecutionPath:
             metadata={"raw_status": status, "partial_fill": False},
         )
 
-    def _fake_engine(self, intents=None):
-        eng = mock.MagicMock()
-        eng.run.return_value = {
-            "order_intents": intents if intents is not None else [],
-            "metrics": {"total_return": 0.0},
-            "trades": [],
-            "equity_curve": [],
-        }
-        eng._portfolio.positions = {}
-        return eng
+    def _fake_run_result(self, intents=None):
+        """Return a MagicMock that mimics BacktestRunResult for paper path tests."""
+        result = mock.MagicMock()
+        result.order_intents = intents if intents is not None else []
+        result.metrics = {"total_return": 0.0}
+        result.trades = []
+        result.equity_curve = []
+        return result
 
     def _fake_preflight(self):
         return {"ok": True, "account": {"status": "ACTIVE"}, "positions": {}, "symbols": ["SPY"]}
@@ -3259,13 +3260,13 @@ class TestPaperExecutionPath:
         import tempfile
         from src.execution.alpaca_broker import AlpacaBrokerAdapter
         out = str(tmp_path) if tmp_path is not None else tempfile.mkdtemp()
-        eng = self._fake_engine(intents)
+        result = self._fake_run_result(intents)
         mock_submit = mock.MagicMock(return_value=mock_submit_return)
         with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
-             mock.patch("src.main.build_engine", return_value=eng), \
+             mock.patch("src.backtest.backtest_runner.run_backtest", return_value=result), \
              mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
                         self._pass_recon_generate), \
              mock.patch("src.main.load_config", return_value=cfg), \
@@ -3309,7 +3310,7 @@ class TestPaperExecutionPath:
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.backtest.backtest_runner.run_backtest", return_value=self._fake_run_result([intent])), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog"]):
             from src.main import main as _main
@@ -3329,7 +3330,7 @@ class TestPaperExecutionPath:
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.backtest.backtest_runner.run_backtest", return_value=self._fake_run_result([intent])), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog"]):
             from src.main import main as _main
@@ -3349,7 +3350,7 @@ class TestPaperExecutionPath:
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.backtest.backtest_runner.run_backtest", return_value=self._fake_run_result([intent])), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog"]):
             from src.main import main as _main
@@ -3369,7 +3370,7 @@ class TestPaperExecutionPath:
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.backtest.backtest_runner.run_backtest", return_value=self._fake_run_result([intent])), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog"]):
             from src.main import main as _main
@@ -3387,7 +3388,7 @@ class TestPaperExecutionPath:
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.backtest.backtest_runner.run_backtest", return_value=self._fake_run_result([intent])), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog"]):
             from src.main import main as _main
@@ -3407,8 +3408,8 @@ class TestPaperExecutionPath:
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
-             mock.patch("src.main.build_engine",
-                        return_value=self._fake_engine([self._make_intent()])), \
+             mock.patch("src.backtest.backtest_runner.run_backtest",
+                        return_value=self._fake_run_result([self._make_intent()])), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog"]):
             from src.main import main as _main
@@ -3440,7 +3441,7 @@ class TestPaperExecutionPath:
         with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine([])), \
+             mock.patch("src.backtest.backtest_runner.run_backtest", return_value=self._fake_run_result([])), \
              mock.patch("src.reporting.report_generator.ReportGenerator.generate_all", _gen), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
@@ -3465,7 +3466,7 @@ class TestPaperExecutionPath:
                                return_value=self._fake_preflight()), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order",
                                return_value=result), \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.backtest.backtest_runner.run_backtest", return_value=self._fake_run_result([intent])), \
              mock.patch("src.reporting.report_generator.ReportGenerator.generate_all", _gen), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
@@ -3482,7 +3483,7 @@ class TestPaperExecutionPath:
         with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine([])), \
+             mock.patch("src.backtest.backtest_runner.run_backtest", return_value=self._fake_run_result([])), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
             from src.main import main as _main
@@ -3503,7 +3504,7 @@ class TestPaperExecutionPath:
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", return_value=result), \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.backtest.backtest_runner.run_backtest", return_value=self._fake_run_result([intent])), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
             from src.main import main as _main
@@ -3526,7 +3527,7 @@ class TestPaperExecutionPath:
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", return_value=result), \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.backtest.backtest_runner.run_backtest", return_value=self._fake_run_result([intent])), \
              mock.patch("src.reporting.report_generator.ReportGenerator.generate_all"), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
@@ -3554,7 +3555,7 @@ class TestPaperExecutionPath:
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", return_value=result), \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.backtest.backtest_runner.run_backtest", return_value=self._fake_run_result([intent])), \
              mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
                         _write_warn), \
              mock.patch("src.main.load_config", return_value=cfg), \
@@ -3570,7 +3571,7 @@ class TestPaperExecutionPath:
         with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine([])), \
+             mock.patch("src.backtest.backtest_runner.run_backtest", return_value=self._fake_run_result([])), \
              mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
                         self._pass_recon_generate), \
              mock.patch("src.main.load_config", return_value=cfg), \
@@ -3591,7 +3592,7 @@ class TestPaperExecutionPath:
                                return_value=self._fake_preflight()), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order",
                                return_value=result_no_id), \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.backtest.backtest_runner.run_backtest", return_value=self._fake_run_result([intent])), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
             from src.main import main as _main
@@ -3608,7 +3609,7 @@ class TestPaperExecutionPath:
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
              mock.patch.object(AlpacaBrokerAdapter, "cancel_order", mock_cancel), \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine([])), \
+             mock.patch("src.backtest.backtest_runner.run_backtest", return_value=self._fake_run_result([])), \
              mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
                         self._pass_recon_generate), \
              mock.patch("src.main.load_config", return_value=cfg), \
@@ -3620,7 +3621,7 @@ class TestPaperExecutionPath:
     # --- preflight called before engine ---
 
     def test_preflight_called_before_engine(self, tmp_path):
-        """preflight_check is invoked before build_engine (preview mode)."""
+        """preflight_check is invoked before run_backtest (preview mode)."""
         from src.execution.alpaca_broker import AlpacaBrokerAdapter
         call_log: list[str] = []
         cfg = self._make_config(paper_preview_only=True, paper_selected_client_order_id=None)
@@ -3629,21 +3630,21 @@ class TestPaperExecutionPath:
             call_log.append("preflight")
             return self._fake_preflight()
 
-        def fake_build(c):
-            call_log.append("build_engine")
-            return self._fake_engine([])
+        def fake_run(config, *, data_provider):
+            call_log.append("run_backtest")
+            return self._fake_run_result([])
 
         with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                side_effect=fake_preflight), \
-             mock.patch("src.main.build_engine", side_effect=fake_build), \
+             mock.patch("src.backtest.backtest_runner.run_backtest", side_effect=fake_run), \
              mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
                         self._pass_recon_generate), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
             from src.main import main as _main
             _main()
-        assert call_log.index("preflight") < call_log.index("build_engine")
+        assert call_log.index("preflight") < call_log.index("run_backtest")
 
     # --- candidate_intents passed to reporter (not just submitted) ---
 
@@ -3664,7 +3665,7 @@ class TestPaperExecutionPath:
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", return_value=result), \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.backtest.backtest_runner.run_backtest", return_value=self._fake_run_result([intent])), \
              mock.patch("src.reporting.report_generator.ReportGenerator.generate_all", _gen), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
@@ -3688,7 +3689,7 @@ class TestPaperExecutionPath:
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
              mock.patch("alpaca.trading.client.TradingClient") as MockTC, \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine([])), \
+             mock.patch("src.backtest.backtest_runner.run_backtest", return_value=self._fake_run_result([])), \
              mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
                         self._pass_recon_generate), \
              mock.patch("src.main.load_config", return_value=cfg), \
@@ -3760,15 +3761,14 @@ class TestPaperOrderQuantityOverride:
             metadata={"raw_status": status, "partial_fill": False},
         )
 
-    def _fake_engine(self, intents):
-        eng = mock.MagicMock()
-        eng.run.return_value = {
-            "order_intents": intents,
-            "metrics": {"total_return": 0.0},
-            "trades": [], "equity_curve": [],
-        }
-        eng._portfolio.positions = {}
-        return eng
+    def _fake_run_result(self, intents=None):
+        """Return a MagicMock that mimics BacktestRunResult for paper path tests."""
+        result = mock.MagicMock()
+        result.order_intents = intents if intents is not None else []
+        result.metrics = {"total_return": 0.0}
+        result.trades = []
+        result.equity_curve = []
+        return result
 
     def _fake_preflight(self):
         return {"ok": True, "account": {"status": "ACTIVE"}, "positions": {}, "symbols": ["SPY"]}
@@ -3805,7 +3805,7 @@ class TestPaperOrderQuantityOverride:
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.backtest.backtest_runner.run_backtest", return_value=self._fake_run_result([intent])), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog"]):
             from src.main import main as _main
@@ -3826,7 +3826,7 @@ class TestPaperOrderQuantityOverride:
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.backtest.backtest_runner.run_backtest", return_value=self._fake_run_result([intent])), \
              mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
                         self._pass_recon_generate), \
              mock.patch("src.main.load_config", return_value=cfg), \
@@ -3848,7 +3848,7 @@ class TestPaperOrderQuantityOverride:
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.backtest.backtest_runner.run_backtest", return_value=self._fake_run_result([intent])), \
              mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
                         self._pass_recon_generate), \
              mock.patch("src.main.load_config", return_value=cfg), \
@@ -3869,7 +3869,7 @@ class TestPaperOrderQuantityOverride:
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.backtest.backtest_runner.run_backtest", return_value=self._fake_run_result([intent])), \
              mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
                         self._pass_recon_generate), \
              mock.patch("src.main.load_config", return_value=cfg), \
@@ -3892,7 +3892,7 @@ class TestPaperOrderQuantityOverride:
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.backtest.backtest_runner.run_backtest", return_value=self._fake_run_result([intent])), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog"]):
             from src.main import main as _main
@@ -3910,7 +3910,7 @@ class TestPaperOrderQuantityOverride:
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.backtest.backtest_runner.run_backtest", return_value=self._fake_run_result([intent])), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog"]):
             from src.main import main as _main
@@ -3928,7 +3928,7 @@ class TestPaperOrderQuantityOverride:
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.backtest.backtest_runner.run_backtest", return_value=self._fake_run_result([intent])), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog"]):
             from src.main import main as _main
@@ -3948,7 +3948,7 @@ class TestPaperOrderQuantityOverride:
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.backtest.backtest_runner.run_backtest", return_value=self._fake_run_result([intent])), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog"]):
             from src.main import main as _main
@@ -3966,7 +3966,7 @@ class TestPaperOrderQuantityOverride:
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.backtest.backtest_runner.run_backtest", return_value=self._fake_run_result([intent])), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog"]):
             from src.main import main as _main
@@ -3989,7 +3989,7 @@ class TestPaperOrderQuantityOverride:
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine(intents)), \
+             mock.patch("src.backtest.backtest_runner.run_backtest", return_value=self._fake_run_result(intents)), \
              mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
                         self._pass_recon_generate), \
              mock.patch("src.main.load_config", return_value=cfg), \
@@ -4014,7 +4014,7 @@ class TestPaperOrderQuantityOverride:
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", return_value=result), \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.backtest.backtest_runner.run_backtest", return_value=self._fake_run_result([intent])), \
              mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
                         self._pass_recon_generate), \
              mock.patch("src.main.load_config", return_value=cfg), \
@@ -4042,7 +4042,7 @@ class TestPaperOrderQuantityOverride:
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", return_value=result), \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.backtest.backtest_runner.run_backtest", return_value=self._fake_run_result([intent])), \
              mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
                         self._pass_recon_generate), \
              mock.patch("src.main.load_config", return_value=cfg), \
@@ -4063,7 +4063,7 @@ class TestPaperOrderQuantityOverride:
         with mock.patch.object(AlpacaBrokerAdapter, "__init__", return_value=None), \
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine([])), \
+             mock.patch("src.backtest.backtest_runner.run_backtest", return_value=self._fake_run_result([])), \
              mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
                         self._pass_recon_generate), \
              mock.patch("src.main.load_config", return_value=cfg), \
@@ -4091,7 +4091,7 @@ class TestPaperOrderQuantityOverride:
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", return_value=result), \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.backtest.backtest_runner.run_backtest", return_value=self._fake_run_result([intent])), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
             from src.main import main as _main
@@ -4111,7 +4111,7 @@ class TestPaperOrderQuantityOverride:
                                return_value=self._fake_preflight()), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", return_value=result), \
              mock.patch("alpaca.trading.client.TradingClient") as MockTC, \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.backtest.backtest_runner.run_backtest", return_value=self._fake_run_result([intent])), \
              mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
                         self._pass_recon_generate), \
              mock.patch("src.main.load_config", return_value=cfg), \
@@ -4211,6 +4211,15 @@ class TestPaperPreviewFlow:
         eng._portfolio.positions = {}
         return eng
 
+    def _fake_run_result(self, intents=None):
+        """Return a MagicMock that mimics BacktestRunResult for paper path tests."""
+        result = mock.MagicMock()
+        result.order_intents = intents if intents is not None else []
+        result.metrics = {"total_return": 0.0}
+        result.trades = []
+        result.equity_curve = []
+        return result
+
     def _fake_preflight(self):
         return {"ok": True, "account": {"status": "ACTIVE"}, "positions": {}, "symbols": ["SPY"]}
 
@@ -4231,7 +4240,7 @@ class TestPaperPreviewFlow:
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine(intents)), \
+             mock.patch("src.backtest.backtest_runner.run_backtest", return_value=self._fake_run_result(intents)), \
              mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
                         self._pass_recon_generate), \
              mock.patch("src.main.load_config", return_value=cfg), \
@@ -4324,8 +4333,8 @@ class TestPaperPreviewFlow:
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
-             mock.patch("src.main.build_engine",
-                        return_value=self._fake_engine([self._make_intent()])), \
+             mock.patch("src.backtest.backtest_runner.run_backtest",
+                        return_value=self._fake_run_result([self._make_intent()])), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog"]):
             from src.main import main as _main
@@ -4343,8 +4352,8 @@ class TestPaperPreviewFlow:
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
-             mock.patch("src.main.build_engine",
-                        return_value=self._fake_engine([self._make_intent()])), \
+             mock.patch("src.backtest.backtest_runner.run_backtest",
+                        return_value=self._fake_run_result([self._make_intent()])), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog"]):
             from src.main import main as _main
@@ -4363,7 +4372,7 @@ class TestPaperPreviewFlow:
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine(intents)), \
+             mock.patch("src.backtest.backtest_runner.run_backtest", return_value=self._fake_run_result(intents)), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog"]):
             from src.main import main as _main
@@ -4386,7 +4395,7 @@ class TestPaperPreviewFlow:
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine(intents)), \
+             mock.patch("src.backtest.backtest_runner.run_backtest", return_value=self._fake_run_result(intents)), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog"]):
             from src.main import main as _main
@@ -4439,7 +4448,7 @@ class TestPaperPreviewFlow:
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine(intents)), \
+             mock.patch("src.backtest.backtest_runner.run_backtest", return_value=self._fake_run_result(intents)), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog"]):
             from src.main import main as _main
@@ -4489,7 +4498,7 @@ class TestPaperPreviewFlow:
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", return_value=result), \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine(intents)), \
+             mock.patch("src.backtest.backtest_runner.run_backtest", return_value=self._fake_run_result(intents)), \
              mock.patch("src.reporting.report_generator.ReportGenerator.generate_all", _gen), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
@@ -4524,7 +4533,7 @@ class TestPaperPreviewFlow:
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", tracking_submit), \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.backtest.backtest_runner.run_backtest", return_value=self._fake_run_result([intent])), \
              mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
                         self._pass_recon_generate), \
              mock.patch("src.main.load_config", return_value=cfg), \
@@ -4543,7 +4552,7 @@ class TestPaperPreviewFlow:
              mock.patch.object(AlpacaBrokerAdapter, "preflight_check",
                                return_value=self._fake_preflight()), \
              mock.patch("alpaca.trading.client.TradingClient") as MockTC, \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine([])), \
+             mock.patch("src.backtest.backtest_runner.run_backtest", return_value=self._fake_run_result([])), \
              mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
                         self._pass_recon_generate), \
              mock.patch("src.main.load_config", return_value=cfg), \
@@ -4564,7 +4573,7 @@ class TestPaperPreviewFlow:
                                return_value=self._fake_preflight()), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", return_value=result), \
              mock.patch("alpaca.trading.client.TradingClient") as MockTC, \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine([intent])), \
+             mock.patch("src.backtest.backtest_runner.run_backtest", return_value=self._fake_run_result([intent])), \
              mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
                         self._pass_recon_generate), \
              mock.patch("src.main.load_config", return_value=cfg), \
@@ -4648,6 +4657,15 @@ class TestPositionAwarePaperSafety:
         eng._portfolio.positions = {}
         return eng
 
+    def _fake_run_result(self, intents=None):
+        """Return a MagicMock that mimics BacktestRunResult for paper path tests."""
+        result = mock.MagicMock()
+        result.order_intents = intents if intents is not None else []
+        result.metrics = {"total_return": 0.0}
+        result.trades = []
+        result.equity_curve = []
+        return result
+
     def _fake_preflight(self, positions=None):
         return {
             "ok": True,
@@ -4678,7 +4696,7 @@ class TestPositionAwarePaperSafety:
                                return_value=preflight), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
              mock.patch.object(AlpacaBrokerAdapter, "cancel_order", mock_cancel), \
-             mock.patch("src.main.build_engine", return_value=self._fake_engine(intents)), \
+             mock.patch("src.backtest.backtest_runner.run_backtest", return_value=self._fake_run_result(intents)), \
              mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
                         self._pass_recon_generate), \
              mock.patch("src.main.load_config", return_value=cfg), \
@@ -4735,8 +4753,8 @@ class TestPositionAwarePaperSafety:
                                return_value=preflight), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
              mock.patch.object(AlpacaBrokerAdapter, "cancel_order", mock_cancel), \
-             mock.patch("src.main.build_engine",
-                        return_value=self._fake_engine(intents)), \
+             mock.patch("src.backtest.backtest_runner.run_backtest",
+                        return_value=self._fake_run_result(intents)), \
              mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
                         self._pass_recon_generate), \
              mock.patch("src.main.load_config", return_value=cfg), \

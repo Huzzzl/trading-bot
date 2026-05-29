@@ -1,7 +1,8 @@
 # Live Readiness Status
 
 Current operational status of the live-readiness gate baseline.
-Last updated: 2026-05-20. Full pre-submit pipeline complete through PR #98.
+Last updated: 2026-05-28. Full pre-submit pipeline complete through PR #98.
+Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. PR 10E cache checker (42 tests, 41 tools). PR 10F Yahoo fetch gate design. PR 10G Yahoo fetch tool (43 tests, 42 tools). PR 10H local fetch runbook. PR 10I cached real-data backtest checker (53 tests, 43 tools). PR 10J first real-data results snapshot (docs-only). PR 10K backtest metrics diagnostics (60 tests). Test baseline: 5 487 passed.
 
 ---
 
@@ -2483,4 +2484,2403 @@ Source scan tests updated:
 > `cancel_order`, `replace_order`, `close_position`, and `close_all_positions`
 > are absent from the adapter source.
 > Emergency actions remain manual via the Alpaca broker UI only.
+
+---
+
+## Milestone: Manual Position Status Checker Without Flag — BLOCKED Observed
+
+**Branch:** `claude/docs-snapshot-manual-position-status-checker-without-flag-blocked`
+**Status:** Complete
+
+Dry-run snapshot taken after PR #137 merged to `main`, confirming the flag
+gate fires correctly when `--allow-live-broker-api-readonly` is absent.
+
+**No Alpaca endpoint was contacted.**
+**No credentials were read.**
+**No TradingClient was constructed.**
+**No orders were submitted, sold, cancelled, replaced, or closed.**
+**No broker mutation call was made.**
+**No live ledger was written.**
+**No config was mutated.**
+**No position decision was made.**
+
+### What was confirmed
+
+| Run | Tool | Result |
+|-----|------|--------|
+| 1 | `manual_position_status_checker_readonly` (without `--allow-live-broker-api-readonly`) | BLOCKED |
+
+The tool returned BLOCKED at gate 4 (flag check) before reading any
+environment variable, constructing any `TradingClient`, or making any
+broker API call.
+
+### Key observed fields
+
+| Field | Observed |
+|-------|---------|
+| `result` | `"BLOCKED"` |
+| `broker_calls_made` | `false` |
+| `broker_calls_readonly` | `false` |
+| `broker_mutation_calls_made` | `false` |
+| `credentials_read` | `false` |
+| `credential_values_exposed` | `false` |
+| `position_observed` | `null` |
+| `open_order_observed` | `null` |
+| `market_session_status` | `null` |
+| `position_decision_made` | `false` |
+| `blocker` | `"readonly broker api flag not set"` |
+
+### Safety invariants confirmed
+
+| Invariant | Confirmed |
+|-----------|----------|
+| No Alpaca endpoint contacted | ✓ |
+| No credentials read | ✓ (`credentials_read=false`) |
+| No TradingClient constructed | ✓ |
+| No submit/cancel/replace called | ✓ |
+| No broker mutation calls | ✓ |
+| No live ledger written | ✓ |
+| No config mutated | ✓ |
+| No position decision made | ✓ |
+| `--allow-live-broker-api-readonly` required | ✓ — BLOCKED without it |
+
+### Reference
+
+- `docs/manual_position_status_checker_without_flag_blocked_snapshot.md` — full snapshot document
+- Suggested git tag: `manual-position-status-checker-without-flag-blocked-observed`
+
+### Warning
+
+> **This milestone does not approve real trading.**
+> **This milestone does not approve future broker calls.**
+> **No Alpaca endpoint was contacted.**
+> **No credentials were read.**
+> **No position decision was made.**
+> The `--allow-live-broker-api-readonly` flag remains required for any live
+> read-only broker contact. Any position decision remains a manual operator
+> action. Emergency actions remain manual via the Alpaca broker UI only.
+
+---
+
+## Milestone: Automated Strategy Execution Roadmap — Designed
+
+**Branch:** `claude/docs-design-automated-strategy-execution-roadmap`
+**Status:** Complete
+
+Roadmap document created at
+`docs/automated_strategy_execution_roadmap.md`.
+
+**No code was implemented.**
+**No Alpaca endpoint was contacted.**
+**No credentials were read.**
+**No order was submitted, sold, cancelled, replaced, or closed.**
+**No automated live trading was approved.**
+**All position and trading decisions remain entirely manual.**
+
+### What was designed
+
+A staged roadmap from current manual infrastructure to fully automated
+strategy execution, covering:
+
+1. **Final target system** — strategy signal generator, risk gate, order
+   executor, position manager, exit manager, scheduler, audit logger,
+   kill switch, read-only monitor, paper/live separation
+2. **Strategy scope** — SPY only, long only, 1h to 1d bars, one position
+   at a time, deterministic rules only, no leverage/options/shorting
+3. **Current foundation** — summarises all completed infrastructure PRs
+   as the safety foundation for future automation
+4. **Gap to final automation** — 12 missing components, each requiring
+   its own design and implementation PR
+5. **Staged roadmap** — Phases A–H from offline signal module through
+   limited live automation; no phase may be skipped
+6. **Required state machine** — 13 states; no live automation until
+   fully designed and tested with a mock broker
+7. **Risk rules** — hard rules enforced by automated risk gate;
+   SPY only, long only, one position, notional cap, kill switch, stale
+   data, order ambiguity, position ambiguity
+8. **Strategy interface** — pure function contract; no broker calls;
+   deterministic; cannot bypass risk gate
+9. **Execution interface** — accepts approved action only; never computes
+   strategy; one mutation per run; fail-closed
+10. **Audit and safety requirements** — what to record and what to exclude
+11. **Non-goals** — multi-symbol, options, leverage, ML, HFT all out of scope
+12. **Next step** — design `strategy_signal_engine` offline-only first
+
+### Safety invariants confirmed
+
+- No code changes
+- No Alpaca endpoint contacted
+- No credentials read or written
+- No order submitted, sold, cancelled, or replaced
+- No live ledger written
+- No automated trading approved
+- No automated position decision made
+
+### Reference
+
+- `docs/automated_strategy_execution_roadmap.md` — full roadmap document
+- Suggested git tag: `automated-strategy-execution-roadmap-designed`
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No code is implemented. No Alpaca endpoint was contacted. No credentials were read.**
+> All automated live trading requires completing the full staged roadmap
+> (Phases A–H), with each phase reviewed and approved in its own PR.
+> Until automation is implemented, tested, and approved, all trading
+> decisions remain entirely manual operator actions.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone: Phase A — Strategy Signal Engine Offline Core — Implemented
+
+**Branch:** `claude/add-strategy-signal-engine-offline-core`
+**Status:** Complete
+
+Offline-only deterministic strategy signal engine implemented at
+`src/strategy/signal_engine.py`. Tests at
+`tests/test_strategy_signal_engine.py`.
+
+**No Alpaca endpoint was contacted.**
+**No credentials were read.**
+**No network library was imported.**
+**No order was submitted, sold, cancelled, replaced, or closed.**
+**No live ledger was written.**
+**No config was mutated.**
+**No scheduler was implemented.**
+**No broker executor was implemented.**
+**No live or paper trading was implemented.**
+**No automated trading was approved.**
+**All signals are recommendations only — risk gate and executor are not implemented.**
+**All position and trading decisions remain entirely manual.**
+
+### What was implemented
+
+| File | Description |
+|------|-------------|
+| `src/strategy/signal_engine.py` | Pure offline signal engine: `evaluate_signal()` |
+| `tests/test_strategy_signal_engine.py` | 96 tests covering all signal types, gates, edge cases, source scans |
+
+### Signal engine contract
+
+`evaluate_signal(bars, position_state, open_order_state, market_session, config) → SignalResult`
+
+Pure function. Same inputs always produce same output. No side effects.
+
+#### Inputs
+
+| Input | Type |
+|-------|------|
+| `bars` | `list[Bar]` — OHLCV; most recent last; not mutated |
+| `position_state` | `PositionState` — `has_position: bool`; no entry price |
+| `open_order_state` | `OpenOrderState` — `has_open_order: bool` |
+| `market_session` | `str \| None` — `"open"` / `"closed"` / `"pre_market"` / `"after_hours"` / `None` |
+| `config` | `SignalEngineConfig` — strategy params, symbol, timeframe, windows |
+
+#### Gate sequence (BLOCK on any failure)
+
+| Gate | Reason code |
+|------|-------------|
+| 1 — insufficient bars | `INSUFFICIENT_BARS` |
+| 2 — symbol != SPY | `INVALID_SYMBOL` |
+| 3 — timeframe not in {1h, 1d} | `INVALID_TIMEFRAME` |
+| 4 — market_session != "open" | `MARKET_NOT_OPEN` |
+| 5 — open order present | `OPEN_ORDER_PRESENT` |
+
+#### Signal logic (SMA crossover)
+
+| Condition | Signal | Reason code |
+|-----------|--------|-------------|
+| short SMA > long SMA, no position | BUY | `SMA_CROSSOVER_BULLISH` |
+| short SMA < long SMA, has position | SELL | `SMA_CROSSOVER_BEARISH` |
+| bullish but already in position | HOLD | `HOLD_ALREADY_IN_POSITION` |
+| bearish but flat | HOLD | `HOLD_NO_POSITION_TO_EXIT` |
+
+#### Output invariants (always)
+
+| Field | Value |
+|-------|-------|
+| `deterministic` | `true` |
+| `broker_calls_made` | `false` |
+| `credentials_read` | `false` |
+| `live_submit_enabled` | `false` |
+| `order_action_requested` | `false` |
+| `position_decision_is_recommendation_only` | `true` |
+
+### Test coverage
+
+| Metric | Value |
+|--------|-------|
+| Targeted tests | 96 passed |
+| Full suite | 4164 passed |
+| Real broker calls | None |
+| Credentials read | None |
+
+### Test classes
+
+| Class | Tests | What it covers |
+|-------|-------|----------------|
+| `TestBuySignal` | 6 | Bullish crossover, no position → BUY |
+| `TestSellSignal` | 4 | Bearish crossover, has position → SELL |
+| `TestHoldSignal` | 5 | Bullish+position and bearish+flat → HOLD |
+| `TestBlockInsufficientBars` | 5 | Zero, one, and boundary bar counts → BLOCK |
+| `TestBlockInvalidSymbol` | 5 | Non-SPY, lowercase, empty symbol → BLOCK |
+| `TestBlockInvalidTimeframe` | 6 | 5m, empty, tick timeframes → BLOCK; 1h/1d pass |
+| `TestBlockMarketSession` | 9 | closed/pre_market/after_hours/None → BLOCK; open passes |
+| `TestBlockOpenOrder` | 4 | Open order present → BLOCK |
+| `TestDeterminism` | 5 | Same input → same output; flag always true |
+| `TestInputNotMutated` | 3 | bars list not modified by engine |
+| `TestOutputFields` | 9 | All result fields present and correct types |
+| `TestSafetyFields` | 12 | All safety invariants on every signal path |
+| `TestGateOrder` | 4 | Gates checked in correct order |
+| `TestSmaLogic` | 3 | Custom windows, equal SMAs |
+| `TestSourceScans` | 16 | No Alpaca/network/os.environ/mutation markers |
+
+### Safety invariants confirmed
+
+| Invariant | Method | Result |
+|-----------|--------|--------|
+| No Alpaca SDK imported | `TestSourceScans::test_no_alpaca_import` | Confirmed absent |
+| No network library imports | `TestSourceScans` (requests/httpx/aiohttp/urllib) | Confirmed absent |
+| No environment variable access | `TestSourceScans::test_no_os_environ` | Confirmed absent |
+| No `os` import | `TestSourceScans::test_no_os_import` | Confirmed absent |
+| No submit/cancel/replace/close calls | `TestSourceScans` | Confirmed absent |
+| No POST/PATCH/DELETE markers | `TestSourceScans` | Confirmed absent |
+| No ledger writes | `TestSourceScans` (write_text/json.dump) | Confirmed absent |
+| `broker_calls_made` always false | `TestSafetyFields` | Confirmed |
+| `credentials_read` always false | `TestSafetyFields` | Confirmed |
+| `position_decision_is_recommendation_only` always true | `TestSafetyFields` | Confirmed |
+| Same input → same output | `TestDeterminism` | Confirmed |
+| Input bars not mutated | `TestInputNotMutated` | Confirmed |
+
+### What remains (not implemented, each requires its own PR)
+
+| Component | Status |
+|-----------|--------|
+| Historical data ingestion / backtest (Phase B) | Not implemented |
+| Paper trading executor (Phase C) | Not implemented |
+| Automated risk gate (Phase D) | Not implemented |
+| Mock automated buy/sell state machine (Phase E) | Not implemented |
+| Paper broker integration (Phase F) | Not implemented |
+| Live automation (Phase G) | Not implemented |
+| Scheduler | Not implemented |
+| Kill switch | Not implemented |
+| Monitoring and alerting | Not implemented |
+
+### Reference
+
+- `src/strategy/signal_engine.py` — signal engine source
+- `tests/test_strategy_signal_engine.py` — 96 tests
+- `docs/automated_strategy_execution_roadmap.md` — full roadmap (Phase A marked complete)
+- Suggested git tag: `strategy-signal-engine-offline-core-implemented`
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **BUY/SELL signals from this module do not execute anything.**
+> **The risk gate, executor, and scheduler are not implemented.**
+> All signals are recommendations only. Any position decision remains a manual
+> operator action. Live automation requires completing Phases B–G, each reviewed
+> in its own PR.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone: Phase A — Strategy Signal Engine Offline Core — Complete (Snapshot)
+
+**Branch:** `claude/docs-snapshot-strategy-signal-engine-offline-core-complete`
+**Status:** Complete
+
+Snapshot document created at
+`docs/strategy_signal_engine_offline_core_complete_snapshot.md`.
+
+**No code was changed in this PR.**
+**No Alpaca endpoint was contacted.**
+**No credentials were read.**
+**No order was submitted, sold, cancelled, replaced, or closed.**
+**No automated trading was approved.**
+**All position and trading decisions remain entirely manual.**
+
+### What this snapshot records
+
+- `src/strategy/signal_engine.py` exists and is offline-only and deterministic.
+- `tests/test_strategy_signal_engine.py` exists with 96 tests; full suite 4164.
+- `evaluate_signal()` is a pure function: same inputs always produce same output.
+- BUY/SELL/HOLD/BLOCK are recommendations only — no execution occurs.
+- All source scan invariants confirmed: no Alpaca SDK, no network libraries,
+  no environment variable access, no submit/cancel/replace/close, no ledger writes.
+- All safety fields confirmed always: `deterministic=true`, `broker_calls_made=false`,
+  `credentials_read=false`, `live_submit_enabled=false`, `order_action_requested=false`,
+  `position_decision_is_recommendation_only=true`.
+- Risk gate, executor, scheduler, paper trading, and live trading remain not implemented.
+
+### Reference
+
+- `docs/strategy_signal_engine_offline_core_complete_snapshot.md` — full snapshot document
+- Suggested git tag: `strategy-signal-engine-offline-core-complete`
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No code is implemented in this PR. No Alpaca endpoint was contacted.**
+> **No credentials were read.**
+> The risk gate, executor, and scheduler remain not implemented.
+> All automated live trading requires completing the full staged roadmap
+> (Phases A–H), with each phase reviewed and approved in its own PR.
+> Until automation is implemented, tested, and approved, all trading
+> decisions remain entirely manual operator actions.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone: Phase B — Backtest and Metrics Offline — Designed
+
+**Branch:** `claude/docs-design-backtest-and-metrics-offline`
+**Status:** Complete
+
+Design document created at `docs/backtest_and_metrics_offline_design.md`.
+
+**No code was implemented.**
+**No Alpaca endpoint was contacted.**
+**No credentials were read.**
+**No order was submitted, sold, cancelled, replaced, or closed.**
+**No automated trading was approved.**
+**All position and trading decisions remain entirely manual.**
+
+### What was designed
+
+Offline backtest system for Phase B covering:
+
+1. **Data scope** — local CSV/fixture only; SPY; 1h/1d; no live data API
+2. **Backtest engine** — pure function `run_backtest(bars, config, starting_equity) → BacktestResult`; fill at next-bar open; no broker calls
+3. **Simulation rules** — long only, one position, no pyramiding, no same-day re-entry
+4. **Metrics** — total_return_pct, trade_count, win_rate, max_drawdown_pct, exposure_pct, average_hold_bars, signal_counts, blocked_reason_counts, and more
+5. **Output safety** — no credentials, account IDs, broker IDs, live balances, or raw broker responses in output
+6. **Determinism** — same bars/config → same output; no randomness; no wall-clock dependency
+7. **Proposed files** — `src/backtest/offline_backtest_engine.py`, `tests/test_offline_backtest_engine.py`
+8. **Testing requirements** — 20+ test scenarios including source scans
+9. **Non-goals** — no paper/live trading, no broker, no scheduler, no risk gate, no ML
+10. **Phase dependency** — Phase C cannot start until Phase B implementation and snapshot are reviewed
+
+### Safety invariants confirmed
+
+- No code changes
+- No Alpaca endpoint contacted
+- No credentials read or written
+- No order submitted, sold, cancelled, or replaced
+- No live ledger written
+- No automated trading approved
+
+### Reference
+
+- `docs/backtest_and_metrics_offline_design.md` — full design document
+- `docs/automated_strategy_execution_roadmap.md` — Phase B marked designed
+- Suggested git tag: `backtest-and-metrics-offline-designed`
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No code is implemented. No Alpaca endpoint was contacted. No credentials were read.**
+> A positive backtest does not approve live trading and does not guarantee
+> future performance. All automated live trading requires completing the full
+> staged roadmap (Phases A–H), with each phase reviewed and approved in its
+> own PR. Until automation is implemented, tested, and approved, all trading
+> decisions remain entirely manual operator actions.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone: Trend Bot Architecture Refactor Plan — Designed
+
+**Branch:** `claude/docs-design-trend-bot-architecture-refactor-plan`
+**Status:** Complete
+
+Architecture refactor plan created at
+`docs/trend_bot_architecture_refactor_plan.md`.
+
+**No code was changed.**
+**No files were moved.**
+**No Alpaca endpoint was contacted.**
+**No credentials were read.**
+**No order was submitted, sold, cancelled, replaced, or closed.**
+**No automated trading was approved.**
+**All position and trading decisions remain entirely manual.**
+
+### What was designed
+
+A 10-PR staged refactor plan to align the repository with the trend-following
+MVP goal, covering:
+
+1. **Refactor decision** — additive, no rewrite; preserve tests, no-look-ahead, safety, ORB, broker abstraction
+2. **Target architecture** — data → indicators → analysis → strategy → risk → portfolio → backtest → broker → paper/live runner
+3. **What to preserve** — all existing live-safety tools, broker abstractions, ORB strategy, data providers
+4. **Current problems** — `main.py` too large, ORB-dominant, missing indicators/trend layers, metrics assume 5m bars
+5. **Staged plan** — PR 1 (factory) → PR 2 (indicators) → PR 3 (trend analysis) → PR 4 (TrendFollowing) → PR 5 (position sizer) → PR 6 (metrics fix) → PR 7 (backtest runner) → PR 8 (slim main.py) → PR 9 (tools audit) → PR 10 (README)
+6. **MVP definition** — SPY, long-only, 1h bars, trend-following, backtest first
+7. **Safety rules** — fail-closed, no API keys stored, mock-only tests, strategy cannot call broker
+8. **No-look-ahead requirements** — rolling breakout excludes current bar; indicators no future data; engine design preserved
+9. **Relationship to Phase A/B** — complements, does not replace; Phase B implementation precedes PR 7
+10. **Non-goals** — no code changes, no file moves, no trading, no broker calls in this PR
+
+### Reference
+
+- `docs/trend_bot_architecture_refactor_plan.md` — full plan
+- `docs/automated_strategy_execution_roadmap.md` — architecture alignment note added
+- Suggested git tag: `trend-bot-architecture-refactor-plan-designed`
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No code is implemented. No Alpaca endpoint was contacted. No credentials were read.**
+> All refactor PRs must be individually reviewed before merging.
+> The Phase A–H safety roadmap remains unchanged and required.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone: Strategy Factory Added — Refactor PR 1 Complete
+
+**Branch:** `claude/add-strategy-factory`
+**Status:** Complete
+
+`src/strategy/factory.py` and `tests/test_strategy_factory.py` added.
+
+**No Alpaca endpoint was contacted.**
+**No credentials were read.**
+**No environment variables were accessed.**
+**No order was submitted, sold, cancelled, replaced, or closed.**
+**No live ledger was written.**
+**No config was mutated.**
+**No live or paper trading was implemented.**
+**No automated trading was approved.**
+**No main.py refactor was done.**
+**No tools were moved.**
+**No ORB behavior was changed.**
+
+### What was added
+
+| File | Description |
+|------|-------------|
+| `src/strategy/factory.py` | `build_strategy(name, params) → BaseStrategy`; `supported_strategy_names()` |
+| `tests/test_strategy_factory.py` | 45 tests |
+
+### Factory contract
+
+- `build_strategy("opening_range_breakout", params)` → `OpeningRangeBreakout`
+- `build_strategy("orb", params)` → `OpeningRangeBreakout` (alias)
+- `params=None` treated as empty dict
+- Caller's params dict never mutated
+- Unknown name → `ValueError("unknown strategy name")` — raw name not echoed
+- Invalid params → `ValueError("invalid strategy parameters")` — raw values not echoed
+- No Alpaca import; no network; no environ; no execution layer imports
+
+### Test coverage
+
+| Metric | Value |
+|--------|-------|
+| Targeted tests | 45 passed |
+| Full suite | 4209 passed |
+| Real broker calls | None |
+| Credentials read | None |
+
+### Safety invariants confirmed
+
+| Invariant | Confirmed |
+|-----------|----------|
+| No Alpaca SDK imported | ✓ (source scan) |
+| No network library imports | ✓ (source scan) |
+| No environment variable access | ✓ (source scan) |
+| No execution layer imports | ✓ (source scan) |
+| No submit/cancel/replace/close calls | ✓ (source scan) |
+| No POST/PATCH/DELETE markers | ✓ (source scan) |
+| Params dict not mutated | ✓ (TestParamsNotMutated) |
+| Raw values not echoed in errors | ✓ (TestUnknownStrategyName, TestInvalidParams) |
+| ORB behavior unchanged | ✓ (full suite 4209 passed) |
+
+### Reference
+
+- `src/strategy/factory.py` — factory source
+- `tests/test_strategy_factory.py` — 45 tests
+- `docs/trend_bot_architecture_refactor_plan.md` — PR 1 marked implemented
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> ORB behavior is unchanged. No live or paper execution was implemented.
+> The Phase A–H safety roadmap remains unchanged and required.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone: Indicators Package Added — Refactor PR 2 Complete
+
+**Branch:** `claude/add-indicators-package`
+**Status:** Complete
+
+`src/indicators/` package and `tests/test_indicators.py` added.
+
+**No Alpaca endpoint was contacted.**
+**No credentials were read.**
+**No environment variables were accessed.**
+**No order was submitted, sold, cancelled, replaced, or closed.**
+**No live ledger was written.**
+**No config was mutated.**
+**No live or paper trading was implemented.**
+**No automated trading was approved.**
+**No main.py refactor was done.**
+**No tools were moved.**
+**No strategy behavior was changed.**
+
+### What was added
+
+| File | Description |
+|------|-------------|
+| `src/indicators/__init__.py` | Package exports |
+| `src/indicators/moving_average.py` | `sma()`, `ema()` |
+| `src/indicators/volatility.py` | `true_range()`, `atr()` |
+| `src/indicators/trend.py` | `rolling_high()`, `rolling_low()`, `breakout_above()`, `breakout_below()` |
+| `tests/test_indicators.py` | 83 tests |
+
+### Indicators contract
+
+| Function | Signature | Notes |
+|----------|-----------|-------|
+| `sma` | `(values, window) → Series` | Rolling mean; NaN until window filled |
+| `ema` | `(values, span) → Series` | EWM mean with `adjust=False` |
+| `true_range` | `(high, low, close) → Series` | First row = H-L; subsequent rows use prev close |
+| `atr` | `(high, low, close, window=14) → Series` | Rolling mean of true range |
+| `rolling_high` | `(values, window, *, exclude_current=True) → Series` | Shift-before-roll when `exclude_current=True` |
+| `rolling_low` | `(values, window, *, exclude_current=True) → Series` | Shift-before-roll when `exclude_current=True` |
+| `breakout_above` | `(close, high, lookback) → Series[bool]` | close > rolling_high(high, lookback, exclude_current=True) |
+| `breakout_below` | `(close, low, lookback) → Series[bool]` | close < rolling_low(low, lookback, exclude_current=True) |
+
+### No-look-ahead guarantee
+
+`rolling_high` and `rolling_low` default to `exclude_current=True`:
+the series is shifted by one bar before the rolling window is applied.
+This means a spike or crash on the current bar cannot affect the reference
+level used for breakout detection at the same bar index.
+
+### Test coverage
+
+| Metric | Value |
+|--------|-------|
+| Targeted tests | 83 passed |
+| Full suite | 4292 passed |
+| Real broker calls | None |
+| Credentials read | None |
+
+### Test classes
+
+| Class | Tests | What it covers |
+|-------|-------|----------------|
+| `TestPackageExports` | 8 | All symbols exported from `src/indicators` |
+| `TestSma` | 9 | Known values; NaN before window; index; immutability; invalid window |
+| `TestEma` | 8 | Matches pandas ewm; index; immutability; invalid span |
+| `TestTrueRange` | 7 | First row; prev close; gap-up; gap-down; index; immutability |
+| `TestAtr` | 8 | Known values; NaN until filled; default window; index; immutability; invalid window |
+| `TestRollingHigh` | 9 | Include/exclude current; no-look-ahead spike; default; index; immutability; invalid window |
+| `TestRollingLow` | 9 | Include/exclude current; no-look-ahead crash; default; index; immutability; invalid window |
+| `TestBreakoutAbove` | 4 | True/false signals; current spike not counted; returns Series |
+| `TestBreakoutBelow` | 3 | True/false signals; returns Series |
+| `TestSourceScans` | 18 | No Alpaca/network/environ/execution/mutation markers in all 4 source files |
+
+### Reference
+
+- `src/indicators/` — indicators package
+- `tests/test_indicators.py` — 83 tests
+- `docs/trend_bot_architecture_refactor_plan.md` — PR 2 marked implemented
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> All indicator functions are pure, deterministic, and offline-only.
+> No strategy behavior was changed. No live or paper execution was implemented.
+> The Phase A–H safety roadmap remains unchanged and required.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone: Refactor PR 3 — Analysis / trend layer
+
+**Date:** 2026-05-27
+**Branch:** `claude/add-trend-analysis-layer`
+**Files added:** `src/analysis/trend.py`, `src/analysis/__init__.py`, `tests/test_trend_analysis.py`
+**Tests:** 106 new tests; full suite 4 398 passed
+
+### What was implemented
+
+`classify_trend(bars, *, symbol, timeframe, ...) → TrendState` — a pure,
+offline, deterministic EMA-based trend classifier.
+
+`TrendState` is a frozen dataclass with:
+- `trend`: `"bullish"` / `"bearish"` / `"neutral"` / `"unknown"` — `"neutral"` = valid computed EMA relationship that is non-directional; `"unknown"` = validation failure or insufficient data (no indicators computed)
+- `strength`: `"strong"` / `"weak"` / `"unknown"` (relative EMA spread vs 0.5% threshold)
+- `volatility_regime`: `"high"` / `"low"` / `"normal"` / `"unknown"` (ATR ratio vs rolling median)
+- `fast_ema`, `slow_ema`, `atr`: scalar floats
+- `reason_codes`: tuple of string codes
+- Safety fields: `deterministic=True`, `broker_calls_made=False`, `credentials_read=False`, `order_action_requested=False`
+
+Validation gates (in order): INVALID_SYMBOL → INVALID_TIMEFRAME → INVALID_PERIOD →
+INVALID_PERIOD_ORDER → MISSING_REQUIRED_COLUMNS → INSUFFICIENT_BARS.
+
+### Test classes
+
+| Class | Tests | What it covers |
+|-------|-------|----------------|
+| `TestTrendStateDefaults` | 9 | Frozen dataclass; safety fields; type checks |
+| `TestValidationInvalidSymbol` | 8 | Empty; lowercase; too long; spaces; None; valid dot/hyphen |
+| `TestValidationInvalidTimeframe` | 6 | Empty; unknown; uppercase; None; all valid; gate ordering |
+| `TestValidationInvalidPeriod` | 6 | Zero/negative for each param; valid minimum |
+| `TestValidationInvalidPeriodOrder` | 4 | Equal; fast > slow; valid; period checked before order |
+| `TestValidationMissingColumns` | 5 | Missing each required column; empty df; all present |
+| `TestValidationInsufficientBars` | 4 | Zero; one below min; exactly min; above min |
+| `TestBullishTrend` | 8 | Trend/code/EMA ordering/close position on rising bars |
+| `TestBearishTrend` | 6 | Trend/code/EMA ordering/close position on falling bars |
+| `TestNeutralTrend` | 5 | Flat bars → neutral; no spurious codes; EMAs populated |
+| `TestStrength` | 4 | Strong on wide spread; weak on flat; exclusivity |
+| `TestVolatilityRegime` | 5 | High/low/normal detection; single code per result; ATR positive |
+| `TestReasonCodes` | 5 | Exactly 3 codes on success; 1 on validation failure; string type |
+| `TestGateOrder` | 5 | Each gate blocks the next |
+| `TestDeterminism` | 3 | Same input → same output; different inputs → different outputs |
+| `TestInputNotMutated` | 2 | Bars DataFrame and index unchanged after call |
+| `TestSafetyFields` | 4 | All four safety fields across 5 different result states |
+| `TestSymbolAndTimeframePassthrough` | 3 | Symbol/timeframe preserved in result and blocked state |
+| `TestSourceScans` | 8 | No Alpaca/network/environ/broker-call patterns in source files |
+
+### Reference
+
+- `src/analysis/trend.py` — trend classification module
+- `src/analysis/__init__.py` — package exports
+- `tests/test_trend_analysis.py` — 106 tests
+- `docs/trend_bot_architecture_refactor_plan.md` — PR 3 marked implemented
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> All analysis functions are pure, deterministic, and offline-only.
+> No strategy behavior was changed. No live or paper execution was implemented.
+> The Phase A–H safety roadmap remains unchanged and required.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone: Refactor PR 4 — TrendFollowing Strategy
+
+**Date:** 2026-05-27
+**Branch:** `claude/add-trend-following-strategy`
+**Files added:** `src/strategy/trend_following.py`, `tests/test_trend_following_strategy.py`
+**Files updated:** `src/strategy/factory.py`, `tests/test_strategy_factory.py`
+**Tests:** 87 new (trend_following); 57 factory (12 new); full suite 4 497 passed
+
+### What was implemented
+
+`TrendFollowing(BaseStrategy)` — MVP long-only trend strategy.
+
+**Entry:** `classify_trend().trend == "bullish"` AND `close > rolling_high(prior breakout_lookback bars, exclude_current=True)`.
+
+**Exit:** `trend == "bearish"` OR `close < fast_ema`.
+
+**ATR stop:** computed as `entry_price - atr_stop_mult * atr` and included in `Signal.stop_loss` and `Signal.meta["atr_stop_price"]`. No broker call is made.
+
+**Factory:** `build_strategy("trend_following", params)` added. Existing ORB/alias routes unchanged.
+
+**Signal metadata (all signals):**
+
+| Field | Value |
+|-------|-------|
+| `strategy_name` | `"trend_following"` |
+| `deterministic` | `True` |
+| `broker_calls_made` | `False` |
+| `credentials_read` | `False` |
+| `order_action_requested` | `False` |
+| `recommendation_only` | `True` |
+
+**Reason strings (fixed, no raw values echoed):**
+
+`BUY_BULLISH_BREAKOUT` · `SELL_BEARISH_TREND` · `SELL_CLOSE_BELOW_FAST_EMA`
+
+### Test classes
+
+| File | Class | Tests | What it covers |
+|------|-------|-------|----------------|
+| `test_trend_following_strategy.py` | `TestConstructor` | 5 | Default/None/empty/explicit params; no mutation |
+| | `TestConstructorValidation` | 17 | Invalid symbol/periods/order/stop/risk/long_only; safe error messages |
+| | `TestInsufficientBars` | 4 | Zero/below/exactly/above minimum bar count |
+| | `TestBuySignal` | 12 | LONG direction; entry price; stop; all required meta fields; safety fields |
+| | `TestNoBreakout` | 3 | No breakout → no BUY; neutral/bearish → no BUY |
+| | `TestNoLookAhead` | 2 | Current-bar high spike excluded; truncated bars |
+| | `TestExitSignal` | 4 | EXIT on bearish; correct reason; safety meta; no exit on flat |
+| | `TestDeterminism` | 2 | Same input → same output; different bars → different signal |
+| | `TestInputNotMutated` | 2 | Bars not mutated; index not mutated |
+| | `TestStrategyIsBaseStrategy` | 4 | Subclass; generate_signal/reset callable; reset no-op |
+| | `TestSourceScans` | 18 | No Alpaca/network/environ/execution/mutation/ledger patterns; no hardcoded timeframe |
+| | `TestTimeframeParam` | 6 | Stored correctly; default "1h"; all valid values; invalid raises; secret not echoed; used in generate_signal |
+| | `TestEntryCutoffDoesNotBlockExits` | 8 | EXIT emitted after cutoff for bearish and close_below_fast_ema; LONG blocked after cutoff; LONG allowed before cutoff; safety meta; no mutation |
+| `test_strategy_factory.py` | `TestSupportedStrategyNames` | +1 | "trend_following" in supported names |
+| | `TestBuildStrategyTrendFollowing` | 11 | Construction; None/empty params; param passthrough; invalid params; ORB preserved |
+
+### Safety confirmations
+
+- No broker/API access — no Alpaca calls, no HTTP, no credentials, no environment variables
+- No order execution — signals are recommendation-only
+- No live/paper trading — no scheduler, no live runner
+- No position submission/cancellation/replacement/close
+- No `src/main.py` or `src/tools/` modification
+- ORB behavior unchanged — all 45 prior ORB factory tests still pass
+- No look-ahead — `rolling_high(exclude_current=True)` always excludes the current bar's high from the breakout reference level
+
+### Reference
+
+- `src/strategy/trend_following.py` — TrendFollowing strategy
+- `src/strategy/factory.py` — updated factory
+- `tests/test_trend_following_strategy.py` — 87 tests
+- `tests/test_strategy_factory.py` — 57 tests (12 new)
+- `docs/trend_bot_architecture_refactor_plan.md` — PR 4 marked implemented
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> TrendFollowing signals are recommendations only — no execution layer was touched.
+> ORB strategy behavior is unchanged.
+> No strategy is connected to live or paper trading.
+> The Phase A–H safety roadmap remains unchanged and required.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone — Refactor PR 5: add-risk-position-sizer
+
+**Date:** 2026-05-27
+**Branch:** `claude/add-risk-position-sizer`
+**Files added:** `src/risk/position_sizer.py`, `tests/test_position_sizer.py`
+**Files changed:** `src/risk/__init__.py` (circular import fix)
+**Tests:** 79 new; full suite 4 576 passed
+
+### What was implemented
+
+Pure, offline position-sizing helpers for long trades.
+
+**`calculate_shares_by_risk(equity, risk_pct, entry_price, stop_price, *, max_notional=None) → int`**
+
+Formula:
+```
+risk_amount    = equity * risk_pct / 100
+per_share_risk = entry_price - stop_price
+shares         = floor(risk_amount / per_share_risk)
+
+# with optional hard cap:
+shares = min(shares, floor(max_notional / entry_price))
+```
+
+Returns `max(0, shares)`. Sub-1 result returns 0 — trade not sized.
+
+**`calculate_notional(shares, entry_price) → float`** — dollar value of a position (`shares * entry_price`).
+
+**Validation** — all invalid inputs raise `ValueError("invalid position sizing parameters")`. Raw values are never echoed.
+All numeric inputs are checked for finiteness (NaN and ±inf rejected before any math operation).
+Fractional shares (e.g., 1.5) are rejected in `calculate_notional`; integer-like floats (e.g., 1.0) are accepted.
+
+| Parameter | Constraint |
+|-----------|------------|
+| `equity` | finite `> 0` (float) |
+| `risk_pct` | finite `> 0` (float) |
+| `entry_price` | finite `> 0` (float) |
+| `stop_price` | finite `> 0` AND `< entry_price` (float) |
+| `max_notional` | `None` OR finite `> 0` (float) |
+| `shares` (notional) | non-negative int or integer-like float |
+| `entry_price` (notional) | finite `> 0` (float) |
+
+**Internal helpers** (not part of public API):
+- `_to_finite_float(val)` — converts to float, rejects non-finite values.
+- `_to_non_negative_int(val)` — accepts int or integer-like float, rejects fractional/NaN/inf/negative.
+
+**`src/risk/__init__.py`** — removed eager `from .risk_manager import RiskManager` re-export that caused a circular import when `position_sizer` was imported in isolation. No consumer imported `from src.risk import RiskManager`; all callers used `from src.risk.risk_manager import RiskManager` directly.
+
+### Test classes
+
+| File | Class | Tests | What it covers |
+|------|-------|-------|----------------|
+| `test_position_sizer.py` | `TestCalculateSharesByRisk` | 10 | Standard case; fractional floor; zero/one share; large equity; small/high risk pct; int return; non-negative; no max_notional |
+| | `TestMaxNotional` | 6 | Caps shares; higher cap no-ops; exact match; zero shares; None ignored; fractional floor |
+| | `TestValidationEquity` | 5 | Zero/negative/None/string equity; error message safe |
+| | `TestValidationRiskPct` | 3 | Zero/negative/string risk_pct; secret not echoed |
+| | `TestValidationEntryPrice` | 2 | Zero/negative entry price |
+| | `TestValidationStopPrice` | 5 | Zero/negative/equal/above entry; string stop; secret not echoed |
+| | `TestValidationMaxNotional` | 2 | Zero/negative max_notional |
+| | `TestValidationNanInf` | 11 | NaN/inf rejected for all five numeric params; error message exact |
+| | `TestDeterminism` | 3 | Same input → same output; different inputs → different outputs; no state between calls |
+| | `TestCalculateNotional` | 8 | Standard; zero/one share; float return; negative shares; zero/negative price; string shares safe |
+| | `TestCalculateNotionalEdgeCases` | 7 | Fractional shares raises; NaN/inf shares raises; NaN/inf entry_price raises; 1.0 accepted; secret not echoed |
+| | `TestSourceScans` | 17 | No Alpaca/network/environ/execution/mutation markers; no ledger/config |
+
+### Safety confirmations
+
+- No broker/API access — no Alpaca calls, no HTTP, no credentials, no environment variables
+- No order execution — pure math helpers with no side effects
+- No live/paper trading — no scheduler, no live runner
+- No position submission/cancellation/replacement/close
+- No `src/main.py` or `src/tools/` modification
+- No look-ahead — functions are stateless and deterministic
+- NaN/inf values are rejected before any math operation — no raw OverflowError or floor(nan) leakage
+- Fractional shares (1.5) are rejected; integer-like floats (1.0) are accepted
+- `src/risk/risk_manager.py` behavior unchanged — no logic was touched
+
+### Reference
+
+- `src/risk/position_sizer.py` — position sizing helpers
+- `tests/test_position_sizer.py` — 79 tests
+- `docs/trend_bot_architecture_refactor_plan.md` — PR 5 marked implemented
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> Position sizing functions are pure math helpers — no execution layer was touched.
+> No strategy is connected to live or paper trading.
+> The Phase A–H safety roadmap remains unchanged and required.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone — Refactor PR 6: fix-backtest-metrics-annualization
+
+**Date:** 2026-05-27
+**Branch:** `claude/fix-backtest-metrics-annualization`
+**Files updated:** `src/backtest/metrics.py`, `src/backtest/engine.py`
+**Files added:** `tests/test_backtest_metrics.py`
+**Tests:** 41 new; full suite 4 617 passed
+
+### What was implemented
+
+Interval-aware Sharpe-ratio annualisation for backtest metrics, with Yahoo-compatible interval aliases.
+
+**Root cause:** `compute_metrics()` hardcoded `bars_per_year = 252 * 78` (5-minute bars).
+1h and 1d strategies silently used the wrong annualisation factor. Additionally, `BacktestEngine`
+stores `bar_interval="60m"` when Yahoo data is requested with the 60-minute string, but
+`bars_per_year_for_interval` did not accept `"60m"`, which would raise at metrics time.
+
+**Fix:**
+- `bars_per_year_for_interval(interval: str) → int` — new public helper. Returns the number
+  of bars per trading year for each supported interval. Uses US equity regular-session
+  assumptions: 252 trading days, 6.5 hours/day, 390 minutes/day.
+  For hourly intervals, only complete bars within the session are counted.
+  `"60m"` accepted as a Yahoo-compatible alias for `"1h"`.
+  Unknown interval raises `ValueError("invalid interval")`; raw value never echoed.
+- `compute_metrics(...)` gains `interval: str = "5m"` — default preserves all existing
+  callers. Sharpe ratio now uses `bars_per_year_for_interval(interval)`.
+- `BacktestEngine.run()` now passes `interval=self._bar_interval` to `compute_metrics()`.
+
+| Interval | Bars/year | Basis | Note |
+|----------|-----------|-------|------|
+| `"1m"` | 98 280 | 252 × 390 min/day | |
+| `"2m"` | 49 140 | 252 × 195 bars/day | Yahoo-supported |
+| `"5m"` | 19 656 | 252 × 78 bars/day | |
+| `"15m"` | 6 552 | 252 × 26 bars/day | |
+| `"30m"` | 3 276 | 252 × 13 bars/day | |
+| `"60m"` | 1 512 | 252 × 6 complete bars/day | Yahoo alias for `"1h"` |
+| `"1h"` | 1 512 | 252 × 6 complete bars/day | |
+| `"90m"` | 1 008 | 252 × 4 bars/day | Yahoo-supported; floor(390/90)=4 |
+| `"2h"` | 756 | 252 × 3 complete bars/day | |
+| `"4h"` | 252 | 252 × 1 complete bar/day | |
+| `"1d"` | 252 | 252 trading days | |
+
+**Unchanged metrics** — `total_return_pct`, `annualized_return_pct` (CAGR, calendar-based),
+`max_drawdown_pct`, `num_trades`, win-rate, avg win/loss, commission.
+
+### Test classes
+
+| File | Class | Tests | What it covers |
+|------|-------|-------|----------------|
+| `test_backtest_metrics.py` | `TestBarsPerYearForInterval` | 13 | All 11 intervals (incl. `"2m"`, `"60m"`, `"90m"`); invalid raises; secret not echoed |
+| | `TestComputeMetricsInterval` | 11 | Default=5m; Sharpe changes with interval; 1d uses 252 exactly; 1h uses 1512 exactly; 60m matches 1h Sharpe; total_return/max_dd/trade_count unchanged; deterministic; no mutation; empty curve |
+| | `TestSourceScans` | 17 | No Alpaca/network/environ/execution/mutation/ledger markers |
+
+### Safety confirmations
+
+- No broker/API access — no Alpaca calls, no HTTP, no credentials, no environment variables
+- No order execution — metrics are read-only computations on completed backtest data
+- No live/paper trading — no scheduler, no live runner
+- No `src/main.py`, `src/tools/`, `src/execution/`, `src/portfolio/`, `src/strategy/` changes
+- No backtest execution behaviour changed — engine loop, trade logic, and portfolio unchanged
+- No look-ahead — metrics compute on already-completed backtest output
+- Existing `test_backtest.py` metrics tests all still pass
+
+### Reference
+
+- `src/backtest/metrics.py` — updated metrics module
+- `src/backtest/engine.py` — passes `interval=self._bar_interval` to `compute_metrics`
+- `tests/test_backtest_metrics.py` — 41 tests
+- `docs/trend_bot_architecture_refactor_plan.md` — PR 6 marked implemented
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> Metrics functions are pure read-only computations — no execution layer was touched.
+> No strategy is connected to live or paper trading.
+> The Phase A–H safety roadmap remains unchanged and required.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone — Refactor PR 7: add-backtest-runner-integration
+
+**Date:** 2026-05-27
+**Branch:** `claude/add-backtest-runner-integration`
+**Files added:** `src/backtest/backtest_runner.py`, `tests/test_backtest_runner.py`
+**Tests:** 67 new; full suite 4 684 passed
+
+### What was implemented
+
+Offline backtest runner that wires strategy factory + `BacktestEngine` into a single
+callable entry point with typed, immutable configuration and result objects.
+
+**Added:**
+- `BacktestRunConfig` (frozen dataclass) — carries all inputs: `strategy_name`,
+  `strategy_params`, `symbols`, `start_date`, `end_date`, `bar_interval="5m"`,
+  `initial_capital=100_000.0`, `position_size_pct=0.95`, `stop_execution="bar_close"`.
+- `BacktestRunResult` (frozen dataclass) — carries all outputs: `metrics`, `trades`,
+  `equity_curve`, `order_intents`, echoed config fields, plus six read-only safety flags
+  (`broker_calls_made=False`, `credentials_read=False`, `live_submit_enabled=False`,
+  `order_action_requested=False`, `paper_trading_enabled=False`, `recommendation_only=True`).
+- `run_backtest(config, *, data_provider)` — validates config (raises
+  `ValueError("invalid backtest run config")` without echoing raw values); calls
+  `build_strategy()` → constructs `Portfolio` + `RiskManager` → wires `BacktestEngine` →
+  calls `engine.run()` → wraps into `BacktestRunResult`.
+  All six safety flags are hardcoded `False`/`True`; the function contains no path to
+  set them otherwise.
+- `_validate_config` rejects non-finite `initial_capital` (`math.isfinite()`); rejects
+  symbols that don't match `^[A-Z0-9.\-/]{1,10}$` (uppercase ticker regex); never echoes
+  raw values in any error message.
+
+**Not changed:** `BacktestEngine`, `compute_metrics`, `Portfolio`, `RiskManager`,
+`BaseDataProvider`, `build_strategy`, or any existing test.
+
+### Test classes
+
+| File | Class | Tests | What it covers |
+|------|-------|-------|----------------|
+| `test_backtest_runner.py` | `TestBacktestRunConfig` | 7 | Frozen; defaults; custom values stored |
+| | `TestBacktestRunResult` | 16 | Safety flags all False/True; frozen; echoed fields; metrics keys; types |
+| | `TestRunBacktestValidation` | 23 | Invalid interval; zero/negative/inf/nan capital; bad pct; bad stop_execution; empty symbols; lowercase/space/invalid symbol; secret symbol not echoed; dot/dash symbol valid; unknown strategy; bad params; raw values not echoed; valid aliases |
+| | `TestRunBacktestBehaviour` | 7 | Deterministic; empty data; capital matches; Sharpe uses interval; config not mutated; result copy independence; all safety flags |
+| | `TestSourceScans` | 14 | No Alpaca/network/environ/execution-actions/mutation/ledger markers |
+
+### Safety confirmations
+
+- No broker/API access — no Alpaca calls, no HTTP, no credentials, no environment variables
+- No order execution — `run_backtest` produces advisory output only; `order_intents` are
+  audit records, never sent to a broker
+- No live/paper trading — no scheduler, no live runner, no paper runner
+- Six safety flags are immutable in `BacktestRunResult`; no code path can set them to `True`
+- No `src/main.py`, `src/tools/`, `src/execution/broker*`, or live-gate file changes
+- No backtest execution behaviour changed — engine loop, trade logic unchanged
+
+### Reference
+
+- `src/backtest/backtest_runner.py` — runner module
+- `tests/test_backtest_runner.py` — 67 tests
+- `docs/trend_bot_architecture_refactor_plan.md` — PR 7 marked implemented
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> `BacktestRunResult.broker_calls_made` is always `False`. No execution layer was triggered.
+> No strategy is connected to live or paper trading.
+> The Phase A–H safety roadmap remains unchanged and required.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone — Refactor PR 8 Design: Main Dispatcher Slimdown Designed
+
+**Date:** 2026-05-27
+**Branch:** `claude/docs-design-main-dispatcher-slimdown`
+**Files added:** `docs/main_dispatcher_slimdown_design.md`
+**Files updated:** `docs/trend_bot_architecture_refactor_plan.md`, `docs/live_readiness_status.md`
+**Type:** Docs-only. No `src/`, `tests/`, `output/`, or `config/` changes.
+
+### What was designed
+
+Design for slimming `src/main.py` (903 lines) into a thin dispatcher that delegates
+to `backtest_runner`, `SweepRunner`, `WalkForwardRunner`, and fail-closed paper/live
+gates.
+
+**Current problem:**
+- `main.py` constructs `BacktestEngine`, `Portfolio`, and `RiskManager` directly in
+  `build_engine()`, duplicating logic now handled by `backtest_runner.py`.
+- Mode dispatch is spread across 60+ lines with no single dispatch table.
+- `engine._portfolio.positions` (private field access) is used on line 851.
+- No explicit live-mode rejection — live is currently blocked only by argparse choices.
+
+**Target (after all sub-PRs):**
+- `main.py` is a dispatcher only: parse CLI, load config, call the appropriate runner.
+- Backtest modes route through `run_backtest(BacktestRunConfig(...), data_provider=...)`.
+- `build_engine()` removed from `main.py`.
+- `--mode live` becomes an explicit `NotImplementedError` (fail-closed).
+- Paper gate logic unchanged.
+
+**Sub-PR sequence:**
+
+| Sub-PR | Goal | Scope |
+|--------|------|-------|
+| 8A | CLI regression tests for current `main.py` | Add `tests/test_main_cli.py` |
+| 8B | Route backtest modes through `backtest_runner` | Modify `src/main.py` |
+| 8C | Remove `build_engine()` from `main.py` | Modify `src/main.py` |
+| 8D | Paper/live fail-closed placeholders | Modify `src/main.py` |
+| 8E | README usage update | Modify `README.md` |
+
+### Safety confirmations
+
+- No live trading designed, approved, or implemented
+- No Alpaca SDK imported in any design path
+- No credentials read
+- No order submission
+- Paper gate logic is explicitly documented as unchanged
+- `--mode live` maps to `NotImplementedError` — not to any Alpaca or execution call
+- This PR contains zero `src/`, `tests/`, `output/`, or `config/` changes
+- Full test suite unchanged; no regression possible from a docs-only PR
+
+### Validation
+
+```bash
+git diff origin/main...HEAD -- src tests output config
+# Expected: empty
+```
+
+### Reference
+
+- `docs/main_dispatcher_slimdown_design.md` — full design document
+- `docs/trend_bot_architecture_refactor_plan.md` — PR 8 marked designed (sub-PRs 8A–8E listed)
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> This is a design document only. No code was changed.
+> No strategy is connected to live or paper trading.
+> The Phase A–H safety roadmap remains unchanged and required.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone — Refactor PR 8A: add-main-characterization-tests
+
+**Date:** 2026-05-27
+**Branch:** `claude/add-main-characterization-tests`
+**Files added:** `tests/test_main_characterization.py`
+**Files updated:** `docs/main_dispatcher_slimdown_design.md`, `docs/trend_bot_architecture_refactor_plan.md`, `docs/live_readiness_status.md`
+**Tests:** 42 new; full suite 4 726 passed
+**Type:** Test + docs. No `src/main.py`, `src/backtest/`, `config/`, or `output/` changes.
+
+### What was implemented
+
+Characterization test suite locking current `src/main.py` behaviour before the PR 8
+refactor.  No production code was changed.
+
+### Test classes
+
+| File | Class | Tests | What it covers |
+|------|-------|-------|----------------|
+| `test_main_characterization.py` | `TestMainImport` | 6 | Module has expected callables; `AlpacaBrokerAdapter` not a module-level name |
+| | `TestParseArgs` | 13 | All 4 current modes accepted; `--mode live` and `--mode paper` rejected; defaults; custom args; `--help` exits 0 |
+| | `TestCandidateBOverrides` | 4 | Hardcoded constants: `QQQ`, `09:45`, `close`, `0.50` |
+| | `TestApplyCandidateB` | 6 | All 4 overrides applied; original config not mutated; returns different object |
+| | `TestMainPaperGate` | 3 | Default `execution.mode` is `"backtest"`; `paper_trading_enabled` is `False`; `NotImplementedError` when paper enabled=False but mode=paper |
+| | `TestMainModeDispatch` | 5 | `backtest` calls `build_engine`; `candidate-b` applies overrides first; `sweep` calls `SweepRunner`; `walk-forward` calls `WalkForwardRunner`; Alpaca not touched in backtest path |
+| | `TestSourceCharacterization` | 5 | All 4 mode strings in source; `alpaca_broker` not imported at module top level |
+
+### Safety confirmations
+
+- No broker/API access — no Alpaca calls, no HTTP, no credentials, no env vars
+- Paper execution path not triggered in any test (all tests use mocked `load_config`)
+- No order submission — all dispatch tests mock `build_engine` and `ReportGenerator`
+- No `src/main.py`, `src/backtest/`, `src/strategy/`, `src/execution/broker*`, config, or output changes
+- `test_backtest_mode_does_not_touch_alpaca` explicitly asserts Alpaca is never instantiated
+
+### Reference
+
+- `tests/test_main_characterization.py` — 42 characterization tests
+- `docs/main_dispatcher_slimdown_design.md` — PR 8A marked implemented
+- `docs/trend_bot_architecture_refactor_plan.md` — sub-PR 8A ✓
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> These are characterization tests only — no production behaviour was changed.
+> No strategy is connected to live or paper trading.
+> The Phase A–H safety roadmap remains unchanged and required.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone — Refactor PR 8B: route-main-backtest-through-runner
+
+**Date:** 2026-05-27
+**PR:** route-main-backtest-through-runner
+**Branch:** claude/route-main-backtest-through-runner
+
+### What was done
+
+Routed `src/main.py` backtest and candidate-b dispatch through
+`src/backtest/backtest_runner.run_backtest()`.  `build_engine()` is no longer
+called for these modes.
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `src/backtest/backtest_runner.py` | Extended `BacktestRunConfig` with 6 new optional fields; updated `run_backtest()` to pass them to `Portfolio` and `RiskManager` |
+| `src/main.py` | Replaced `build_engine()` dispatch with `BacktestRunConfig` + `run_backtest()` |
+| `tests/test_main_characterization.py` | Updated dispatch tests to patch `run_backtest`; added `test_backtest_run_config_core_fields`; renamed two tests |
+| `tests/test_paper_trading_readiness.py` | Updated startup-log helpers to abort at `run_backtest` instead of `build_engine` |
+| `docs/main_dispatcher_slimdown_design.md` | PR 8B marked implemented |
+| `docs/live_readiness_status.md` | This milestone appended |
+| `docs/trend_bot_architecture_refactor_plan.md` | Sub-PR 8B ✓ |
+
+### New `BacktestRunConfig` fields (all optional, defaults match previous behavior)
+
+| Field | Default | Source in `AppConfig` |
+|-------|---------|-----------------------|
+| `commission_per_share` | `0.005` | `cfg.backtest.commission_per_share` |
+| `slippage_per_share` | `0.01` | `cfg.backtest.slippage_per_share` |
+| `force_exit_time` | `"15:55"` | `cfg.strategy.params.get("force_exit_time", "15:55")` |
+| `max_open_positions` | `None` | `cfg.risk.max_open_positions` |
+| `daily_loss_limit_pct` | `None` | `cfg.risk.daily_loss_limit_pct` |
+| `daily_loss_action` | `"block_new_entries"` | `cfg.risk.daily_loss_action` |
+
+### Test counts
+
+- `tests/test_main_characterization.py` — 43 tests (+1 `test_backtest_run_config_core_fields`)
+- `tests/test_backtest_runner.py` — 94 tests (+27 `TestNewFieldValidation`)
+- `tests/test_paper_trading_readiness.py` — 24 tests (unchanged count)
+- Full suite: **4 754 passed**
+
+### Safety confirmations
+
+- No broker/API access — no Alpaca calls, no HTTP, no credentials, no env vars
+- Paper execution path not triggered — `_run_paper_close` and paper gate unchanged
+- No order submission — `BacktestRunResult.broker_calls_made` always `False`
+- `engine._portfolio.positions` private-field access eliminated; replaced with `open_positions_count=0`
+- `build_engine()` remains in `main.py` (unused by dispatch; removed in PR 8C)
+- No `src/backtest/engine.py`, `src/strategy/`, `src/execution/broker*`, config, or output changes
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> No production behaviour was changed — only the internal wiring of the backtest dispatch.
+> No strategy is connected to live or paper trading.
+> The Phase A–H safety roadmap remains unchanged and required.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone — Refactor PR 8C: remove-main-build-engine
+
+**Date:** 2026-05-27
+**Branch:** `claude/remove-main-build-engine`
+**Files changed:** `src/main.py`, `tests/test_main_characterization.py`, `tests/test_backtest.py`, `tests/test_alpaca_broker_skeleton.py`, `tests/test_paper_trading_readiness.py`, and paper-path test files
+**Files updated (docs):** `docs/main_dispatcher_slimdown_design.md`, `docs/trend_bot_architecture_refactor_plan.md`, `docs/live_readiness_status.md`
+**Tests:** 4 752 passed (−2 from PR 8B: `TestBuildEngineWiring` removed)
+**Type:** Refactor + test update. No new features, no behavior change.
+
+### What was done
+
+Deleted `build_engine()` from `src/main.py` and removed all imports that were only used by it. Updated all tests that were patching `src.main.build_engine` to patch `src.backtest.backtest_runner.run_backtest` instead. `run_backtest` remains the sole dispatch path for backtest and candidate-b modes.
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `src/main.py` | `build_engine()` deleted; `Portfolio`, `RiskManager`, `OpeningRangeBreakout` top-level imports removed; `BacktestEngine` import retained for `plot_equity_curve` |
+| `tests/test_main_characterization.py` | `test_build_engine_is_callable` renamed to `test_build_engine_is_not_present` |
+| `tests/test_backtest.py` | `TestBuildEngineWiring` class and `_make_app_config` helper removed |
+| `tests/test_alpaca_broker_skeleton.py` | All `mock.patch("src.main.build_engine", ...)` calls replaced with `mock.patch("src.backtest.backtest_runner.run_backtest", ...)` |
+| `tests/test_paper_*.py` | Same `build_engine` → `run_backtest` patch replacement |
+| `tests/test_paper_trading_readiness.py` | Stale comment updated (`build_engine` → `run_backtest`) |
+
+### Test counts
+
+| File | Targeted tests |
+|------|---------------|
+| `tests/test_main_characterization.py` | 43 (unchanged count; test renamed) |
+| Full suite | **4 752 passed** |
+
+### Safety confirmations
+
+- No broker/API access — no Alpaca calls, no HTTP, no credentials, no env vars
+- Paper execution path not triggered — `_run_paper_close` and paper gate unchanged
+- No order submission — `BacktestRunResult.broker_calls_made` always `False`
+- `build_engine` symbol confirmed absent: `not hasattr(src.main, "build_engine")` ✓
+- `run_backtest` remains the sole dispatch path for backtest/candidate-b modes ✓
+- No `src/backtest/engine.py`, `src/backtest/backtest_runner.py`, `src/strategy/`, `src/execution/`, config, or output changes
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> No production behaviour was changed — only `build_engine` removed; `run_backtest` was already the dispatch path since PR 8B.
+> No strategy is connected to live or paper trading.
+> The Phase A–H safety roadmap remains unchanged and required.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone — Refactor PR 8D: clarify-main-paper-live-placeholders
+
+**Date:** 2026-05-28
+**Branch:** `claude/clarify-main-paper-live-placeholders`
+**Files changed:** `src/main.py`, `tests/test_main_characterization.py`
+**Files updated (docs):** `docs/main_dispatcher_slimdown_design.md`, `docs/trend_bot_architecture_refactor_plan.md`, `docs/live_readiness_status.md`
+**Tests:** 4 754 passed (+2 from PR 8C: two source-scan tests added)
+**Type:** Clarification + test. No behavior change. No new features.
+
+### What was done
+
+Removed the stale `TODO (Alpaca integration)` comment from `src/main.py` that implied
+live trading would be added as a simple `--mode live` flag swap. Replaced it with an
+accurate note: paper/live are not valid `--mode` options; paper is gated via config;
+live is not enabled. Updated the paper gate `NotImplementedError` message to remove the
+phrase "not yet wired". Added two source-scan regression tests.
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `src/main.py` | Stale TODO removed; paper gate message clarified |
+| `tests/test_main_characterization.py` | `test_no_stale_live_mode_todo`, `test_live_not_in_cli_choices` added to `TestSourceCharacterization` |
+
+### Test counts
+
+| File | Targeted tests |
+|------|---------------|
+| `tests/test_main_characterization.py` | 45 (+2) |
+| `tests/test_paper_trading_readiness.py` | 24 (unchanged) |
+| Full suite | **4 754 passed** |
+
+### Safety confirmations
+
+- No broker/API access — no Alpaca calls, no HTTP, no credentials, no env vars
+- Paper gate logic unchanged — `_run_paper_close` and all guards unmodified
+- Paper gate still raises `NotImplementedError` when `paper_trading_enabled=False` ✓
+- `--mode live` remains argparse-rejected (not added to `choices`) ✓
+- `run_backtest` remains the sole dispatch path for backtest/candidate-b modes ✓
+- `build_engine` remains absent from `src.main` ✓
+- No `src/backtest/`, `src/execution/`, `src/strategy/`, config, or output changes
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> No production behaviour was changed — only stale comments removed and error messages clarified.
+> Paper/live remain fail-closed: paper requires explicit config gate; live is not enabled.
+> The Phase A–H safety roadmap remains unchanged and required.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone — Refactor PR 8E: docs-update-readme-current-usage
+
+**Date:** 2026-05-28
+**Branch:** `claude/docs-update-readme-current-usage`
+**Files changed:** `README.md`
+**Files updated (docs):** `docs/main_dispatcher_slimdown_design.md`, `docs/trend_bot_architecture_refactor_plan.md`, `docs/live_readiness_status.md`
+**Tests:** not run (docs-only PR; no src/tests/config/output changes)
+**Type:** Docs-only. No code, test, config, or output changes.
+
+### What was done
+
+`README.md` fully rewritten to reflect the current state of the repository after PR
+8A–8D. The previous README was written before the main-dispatcher refactor and contained
+stale references to `build_engine()`, `python -m unittest discover`, and an incomplete
+project structure. Key updates:
+
+- Project structure updated to include `indicators/`, `analysis/`, `strategy/factory.py`,
+  `backtest/backtest_runner.py`, `experiments/`, `reporting/`, `execution/paper_*.py`,
+  `tools/live_*.py`, `risk/position_sizer.py`.
+- CLI modes section: `backtest`, `candidate-b`, `sweep`, `walk-forward` documented with
+  examples. `--mode live` and `--mode paper` explicitly documented as rejected.
+- Strategies section: ORB (legacy/benchmark) and TrendFollowing (MVP) both documented.
+  Strategy factory (`src/strategy/factory.py`) documented with accepted name strings.
+- Architecture section: dispatcher model described; `run_backtest()` is the sole backtest
+  dispatch path; `build_engine` noted as removed.
+- Tests section: `python -m pytest` commands replace stale `python -m unittest discover`.
+- Metrics section: Sharpe ratio annualisation noted as interval-aware (not hardcoded 252×78).
+- Safety table: no live trading, no paper trading by default, no credentials required,
+  no order submission in backtest, no look-ahead bias.
+- Stale Roadmap/TODOs referencing `build_engine()` removed.
+
+### Validation
+
+```bash
+git diff origin/main...HEAD -- src tests config output
+# Expected: empty (no src/tests/config/output changes)
+```
+
+### Safety confirmations
+
+- No `src/`, `tests/`, `config/`, or `output/` files changed
+- No broker/API access — no Alpaca calls, no HTTP, no credentials
+- No order submission
+- Paper/live remain fail-closed and unchanged
+- No automated trading approved or enabled
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> This is a docs-only PR — no production behaviour was changed.
+> Paper/live remain fail-closed: paper requires explicit config gate; live is not enabled.
+> The Phase A–H safety roadmap remains unchanged and required.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone — Refactor PR 9A: docs-design-tools-scripts-isolation
+
+**Date:** 2026-05-28
+**Branch:** `claude/docs-design-tools-scripts-isolation`
+**Files added:** `docs/tools_scripts_isolation_design.md`
+**Files updated:** `docs/trend_bot_architecture_refactor_plan.md`, `docs/live_readiness_status.md`
+**Tests:** not run (docs-only PR; no src/tests/config/output/scripts changes)
+**Type:** Docs-only. No code, test, config, output, or script changes.
+
+### What was designed
+
+Design document for PR 9 (`src/tools/` isolation), covering:
+
+- Full inventory of all 40 tools across four categories:
+  live safety/readiness (30), manual live/paper guard (4), paper diagnostics (6).
+- Classification: 34 tools are permanent in `src/tools/`; 6 paper diagnostics
+  are move candidates (conditional on preconditions).
+- All 40 tools have existing test coverage — no tool has zero tests.
+- Staged sub-PR plan: 9A design → 9B inventory tests → 9C scripts/ README →
+  9D conditional paper tool moves → 9E live-tool confirmation → 9F doc update.
+- Rules: no moves without passing tests; no deletions without coverage;
+  live/paper tools remain fail-closed; no broker/API/credentials.
+
+### Validation
+
+```bash
+git diff origin/main...HEAD -- src tests config output scripts
+# Expected: empty
+```
+
+### Safety confirmations
+
+- No `src/`, `tests/`, `config/`, `output/`, or `scripts/` files changed
+- No broker/API access — no Alpaca calls, no HTTP, no credentials
+- No order submission. No live or paper trading enabled or changed.
+- All live/paper tools remain in `src/tools/` and fail-closed.
+- No automated trading approved.
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> This is a design document only. No code was changed.
+> All live-readiness and paper guard tools remain in `src/tools/` and untouched.
+> The Phase A–H safety roadmap remains unchanged and required.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone — Refactor PR 9B: add-tools-inventory-tests
+
+**Date:** 2026-05-28
+**Branch:** `claude/add-tools-inventory-tests`
+**Files added:** `tests/test_tools_inventory.py`
+**Files updated:** `docs/tools_scripts_isolation_design.md`, `docs/trend_bot_architecture_refactor_plan.md`, `docs/live_readiness_status.md`
+**Tests:** 363 new tests added; full suite 5 117 passed.
+**Type:** Tests + docs. No src, config, output, or scripts changes.
+
+### What was added
+
+`tests/test_tools_inventory.py` locks the PR 9A classification of all 40 tools in `src/tools/`:
+
+- **TestToolsInventory** — asserts 30/4/6/40 counts; file existence for all 40 tools;
+  mutual exclusivity of categories; no unclassified tools on disk; no phantom tools in lists.
+- **TestToolsTestCoverage** — asserts every tool has a `tests/test_{name}.py`.
+- **TestLiveToolsHaveMain** — asserts every live safety + manual-guard tool defines `main()`.
+- **TestToolsSourceScan** — AST-based checks: no module-level Alpaca imports; no module-level
+  `os.environ` reads; no module-level order-mutation calls; no hardcoded secret literals;
+  `live_submit_enablement_gate` does not set `LIVE_SUBMIT_ENABLED = True` at top level.
+- **TestToolsImportSafety** — all 40 tools importable; no module-level
+  `from src.main import build_engine`.
+
+### Validation
+
+```bash
+python -m pytest tests/test_tools_inventory.py  # 363 passed
+python -m pytest                                  # 5 117 passed
+git diff origin/main...HEAD -- src config output scripts
+# Expected: empty (no src/config/output/scripts changes)
+```
+
+### Safety confirmations
+
+- No `src/`, `config/`, `output/`, or `scripts/` files changed
+- No broker/API access — no Alpaca calls, no HTTP, no credentials
+- No order submission. No live or paper trading enabled or changed.
+- All live/paper tools remain in `src/tools/` and fail-closed.
+- No automated trading approved.
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> This is a test/docs PR only. No tool source files were changed.
+> All live-readiness and paper guard tools remain in `src/tools/` and untouched.
+> The Phase A–H safety roadmap remains unchanged and required.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone — Refactor PR 9C: add-scripts-readme-tools-classification
+
+**Date:** 2026-05-28
+**Branch:** `claude/add-scripts-readme-tools-classification`
+**Files added:** `scripts/README.md`
+**Files updated:** `docs/tools_scripts_isolation_design.md`, `docs/trend_bot_architecture_refactor_plan.md`, `docs/live_readiness_status.md`
+**Tests:** not run (docs-only PR; no src/tests/config/output changes)
+**Type:** Docs-only. No code, test, config, or output changes.
+
+### What was added
+
+`scripts/README.md` documents the `scripts/` directory purpose and current tool classification:
+
+- **Purpose section** — explains `scripts/` vs `src/tools/` distinction.
+- **Permanent tools (30 + 4)** — full tables of live safety/readiness and manual-guard tools
+  that must stay in `src/tools/` permanently (CLI surface, operator runbooks).
+- **Conditional move candidates (6)** — paper diagnostic utilities with explicit preconditions
+  required before any move (PR 9D, conditional).
+- **Rules** — six rules governing any future additions to `scripts/`.
+- **Safety guarantees table** — documents how each guarantee is enforced.
+
+No files were moved. No tool source files were changed.
+`tests/test_tools_inventory.py` (PR 9B) continues to enforce the 30/4/6/40 classification.
+
+### Validation
+
+```bash
+git diff origin/main...HEAD -- src tests config output
+# Expected: empty (no src/tests/config/output changes)
+```
+
+### Safety confirmations
+
+- No `src/`, `tests/`, `config/`, or `output/` files changed
+- No broker/API access — no Alpaca calls, no HTTP, no credentials
+- No order submission. No live or paper trading enabled or changed.
+- All live/paper tools remain in `src/tools/` and fail-closed.
+- No automated trading approved.
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> This is a docs-only PR. No tool source files were changed.
+> All live-readiness and paper guard tools remain in `src/tools/` and untouched.
+> The Phase A–H safety roadmap remains unchanged and required.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone — Refactor PR 9E: confirm-live-tools-stay-in-src-tools
+
+**Date:** 2026-05-28
+**Branch:** `claude/confirm-live-tools-stay-in-src-tools`
+**Files updated:** `tests/test_tools_inventory.py`, `docs/tools_scripts_isolation_design.md`, `docs/trend_bot_architecture_refactor_plan.md`, `docs/live_readiness_status.md`
+**Tests:** 76 new tests added; targeted 439 passed; full suite 5 193 passed.
+**Type:** Tests + docs. No src/tools, config, or output changes.
+
+### What was added
+
+`TestPermanentToolsLocation` class in `tests/test_tools_inventory.py` (76 tests):
+
+- **counts** — asserts 34 permanent tools (30 live safety + 4 manual guard); constituent counts unchanged.
+- **`test_permanent_tool_in_src_tools[*]`** — parametrised over 34 tools: each file exists in `src/tools/`.
+- **`test_permanent_tool_not_in_scripts[*]`** — parametrised over 34 tools: no file exists in `scripts/`.
+- **`test_no_live_tool_file_in_scripts`** — no `live_*.py` present in `scripts/`.
+- **`test_no_manual_tool_file_in_scripts`** — no `manual_*.py` present in `scripts/`.
+- **`test_scripts_readme_documents_permanent_tools`** — `scripts/README.md` uses "permanent" and references `src/tools/`.
+- **`test_scripts_readme_lists_live_safety_count`** — `scripts/README.md` mentions count 30.
+- **`test_scripts_readme_lists_manual_guard_count`** — `scripts/README.md` mentions count 4.
+
+### Validation
+
+```bash
+python -m pytest tests/test_tools_inventory.py  # 439 passed
+python -m pytest                                  # 5 193 passed
+git diff origin/main...HEAD -- src/tools src/backtest src/config src/data src/execution src/experiments src/indicators src/portfolio src/reporting src/risk src/strategy src/utils config output
+# Expected: empty
+```
+
+### 34 permanent tools confirmed in `src/tools/`
+
+All 30 live safety/readiness gate tools and all 4 manual live/paper guard tools
+are confirmed present in `src/tools/` and absent from `scripts/`.
+No tool was moved in this PR.
+
+### Safety confirmations
+
+- No `src/tools/` or other `src/` files changed
+- No `config/` or `output/` files changed
+- No broker/API access — no Alpaca calls, no HTTP, no credentials
+- No order submission. No live or paper trading enabled or changed.
+- All live/paper tools remain in `src/tools/` and fail-closed.
+- No automated trading approved.
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> No tool source files were changed. No files were moved.
+> All live-readiness and paper guard tools remain in `src/tools/` and untouched.
+> The Phase A–H safety roadmap remains unchanged and required.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone — Refactor PR 9F: docs-finalize-tools-scripts-isolation
+
+**Date:** 2026-05-28
+**Branch:** `claude/docs-finalize-tools-scripts-isolation`
+**Files updated:** `docs/tools_scripts_isolation_design.md`, `scripts/README.md`, `docs/trend_bot_architecture_refactor_plan.md`, `docs/live_readiness_status.md`
+**Tests:** not run (docs-only PR; no src/tests/config/output changes)
+**Type:** Docs-only. No code, test, config, or output changes.
+
+### What was decided and documented
+
+PR 9 (tools/scripts isolation) is now complete. Final state:
+
+| Category | Count | Location | Decision |
+|----------|-------|----------|----------|
+| Live safety / readiness gate | 30 | `src/tools/` | Permanent — do not move |
+| Manual live/paper guard | 4 | `src/tools/` | Permanent — do not move |
+| Paper diagnostic utilities | 6 | `src/tools/` | Remain here; PR 9D deferred |
+| **Total** | **40** | `src/tools/` | All tested, stable, classified |
+
+**PR 9D deferred.** Moving the six paper diagnostic utilities required updating
+test import paths, CLI shims, and operator runbooks in a single atomic PR.
+The import/CLI risk outweighs the organisational benefit given the stable,
+5 193-test layout. A future PR may revisit this with all preconditions met.
+
+**`scripts/`** — created (PR 9C); documented for future non-core utilities;
+currently empty of `.py` files. `TestPermanentToolsLocation` (PR 9E) asserts
+no `live_*.py` or `manual_*.py` files are ever placed there without a dedicated PR.
+
+### Validation
+
+```bash
+git diff origin/main...HEAD -- src tests config output
+# Expected: empty
+```
+
+### Safety confirmations
+
+- No `src/`, `tests/`, `config/`, or `output/` files changed
+- No broker/API access — no Alpaca calls, no HTTP, no credentials
+- No order submission. No live or paper trading enabled or changed.
+- All 40 tools remain in `src/tools/` and fail-closed.
+- No automated trading approved.
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> This is a docs-only PR. No tool source files were changed. No files were moved.
+> All live-readiness and paper guard tools remain in `src/tools/` and untouched.
+> The Phase A–H safety roadmap remains unchanged and required.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone — PR 10A: docs-architecture-readiness-snapshot
+
+**Date:** 2026-05-28
+**Branch:** `claude/docs-architecture-readiness-snapshot`
+**Files added:** `docs/automated_trading_architecture_readiness_snapshot.md`
+**Files updated:** `docs/automated_strategy_execution_roadmap.md`, `docs/trend_bot_architecture_refactor_plan.md`, `docs/live_readiness_status.md`
+**Tests:** not run (docs-only PR; no src/tests/config/output/scripts changes)
+**Type:** Docs-only. No code, test, config, output, or script changes.
+
+### What was added / updated
+
+**`docs/automated_trading_architecture_readiness_snapshot.md`** (new):
+- Project goal statement: automated rule-based trading bot for 1h–1d execution.
+- Full implementation status table (implemented vs. not yet implemented).
+- Current CLI surface and disabled-modes table.
+- Safety status table (all guarantees and how they are enforced).
+- Test baseline: 5 193 passed; all offline.
+- Next-phase priorities: offline TrendFollowing validation, ORB comparison,
+  stable baseline before sweep/walk-forward, paper/live automation gated.
+- Architecture diagram showing dispatch path and `src/tools/` layout.
+
+**`docs/automated_strategy_execution_roadmap.md`** updated:
+- Architecture alignment note: alignment complete (PRs 1–9); references snapshot.
+- Phase B status updated from "design complete" to "implemented" with accurate details.
+
+### Validation
+
+```bash
+git diff origin/main...HEAD -- src tests config output scripts
+# Expected: empty
+```
+
+### Current architecture state (summary)
+
+| Layer | Status |
+|-------|--------|
+| Indicators, trend analysis, strategy factory | Complete |
+| TrendFollowing + ORB strategies (offline) | Complete |
+| Risk / position sizing | Complete |
+| Interval-aware metrics + backtest runner | Complete |
+| `main.py` slim dispatcher | Complete |
+| Live-readiness tools (40 tools, tested) | Complete |
+| Paper + live execution adapters (gated) | Complete |
+| Offline backtest scenarios (TrendFollowing) | **Not yet run** |
+| Paper / live automation | **Not yet implemented** |
+
+### Safety confirmations
+
+- No `src/`, `tests/`, `config/`, `output/`, or `scripts/` files changed
+- No broker/API access — no Alpaca calls, no HTTP, no credentials
+- No order submission. No live or paper trading enabled or changed.
+- All 40 tools remain in `src/tools/` and fail-closed.
+- No automated trading approved.
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> This is a docs-only PR. No source files, tests, or configs were changed.
+> The Phase A–H safety roadmap remains unchanged and required before any automation.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone — PR 10B: docs-design-trendfollowing-backtest-scenarios
+
+**Date:** 2026-05-28
+**Branch:** `claude/docs-design-trendfollowing-backtest-scenarios`
+**Files added:** `docs/trendfollowing_offline_backtest_scenarios_design.md`
+**Files updated:** `docs/automated_trading_architecture_readiness_snapshot.md`, `docs/automated_strategy_execution_roadmap.md`, `docs/live_readiness_status.md`
+**Tests:** not run (docs-only PR; no src/tests/config/output/scripts changes)
+**Type:** Docs-only. No code, test, config, output, or script changes.
+
+### What was designed
+
+`docs/trendfollowing_offline_backtest_scenarios_design.md` defines five offline
+backtest validation scenarios for the TrendFollowing strategy:
+
+| Scenario | Symbol | Interval | Strategy |
+|----------|--------|----------|----------|
+| 1 | SPY | 1d | TrendFollowing (default params) |
+| 2 | SPY | 1h | TrendFollowing (fixture data) |
+| 3 | QQQ | 1d | TrendFollowing (default params) |
+| 4 | QQQ | 1h | TrendFollowing (fixture data) |
+| 5 | SPY | 5m (intraday) | ORB — legacy benchmark comparison |
+
+Key design decisions:
+- **Characterisation, not optimisation** — no parameter sweep in these scenarios.
+- **Daily bars use multi-year history** (2020–2024); yfinance `"1d"` data available.
+- **Hourly bars require pre-committed fixtures** — Yahoo 1h retention ~60 days;
+  live fetches prohibited in CI; fixtures under `tests/fixtures/` required.
+- **No network access in tests** — all scenario runner tests must use local data.
+- **Determinism requirement** — two runs with the same config must produce
+  identical metrics.
+- **`broker_calls_made == False` asserted** in every scenario test.
+- **Positive result ≠ live trading approval** — goal is characterisation only.
+
+Next implementation PR: 10C — fixtures + `tests/test_trendfollowing_backtest_scenarios.py`.
+
+### Validation
+
+```bash
+git diff origin/main...HEAD -- src tests config output scripts
+# Expected: empty
+```
+
+### Safety confirmations
+
+- No `src/`, `tests/`, `config/`, `output/`, or `scripts/` files changed
+- No broker/API access — no Alpaca calls, no HTTP, no credentials
+- No order submission. No live or paper trading enabled or changed.
+- All 40 tools remain in `src/tools/` and fail-closed.
+- No automated trading approved.
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> **A positive backtest result does not approve live trading.**
+> This is a docs-only PR. No source files, tests, or configs were changed.
+> The Phase A–H safety roadmap remains unchanged and required before any automation.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone — PR 10C: add-trendfollowing-offline-scenario-tests
+
+**Date:** 2026-05-28
+**Branch:** `claude/add-trendfollowing-offline-scenario-tests`
+**Files added:** `tests/test_trendfollowing_offline_scenarios.py`
+**Files updated:** `docs/trendfollowing_offline_backtest_scenarios_design.md`, `docs/automated_trading_architecture_readiness_snapshot.md`, `docs/automated_strategy_execution_roadmap.md`, `docs/live_readiness_status.md`
+**Tests:** 72 new tests; targeted 72 passed; full suite 5 265 passed.
+**Type:** Tests + docs. No src, config, output, or scripts changes.
+
+### What was implemented
+
+`tests/test_trendfollowing_offline_scenarios.py` — 72 deterministic offline
+scenario tests for TrendFollowing strategy across SPY/QQQ × 1d/1h.
+
+**Approach:** In-test synthetic OHLCV fixtures (no CSV files, no yfinance, no network).
+Seeded NumPy RNG (`seed=42`) guarantees determinism. `_FakeProvider` implements
+`BaseDataProvider` and returns synthetic bars without any network calls.
+
+| Class | Tests | What it asserts |
+|-------|-------|----------------|
+| `TestScenarioBaselines` | 10 | Each scenario returns `BacktestRunResult`; echoed fields correct |
+| `TestScenarioSafetyFlags` | 24 | All 6 safety flags correct for all 4 scenarios |
+| `TestScenarioMetrics` | 18 | Required keys present, types, ranges (×4 + 2 standalone) |
+| `TestDeterminism` | 8 | Repeated runs → identical metrics and trade count (×4 scenarios) |
+| `TestIntervalAwareSharpe` | 5 | `bars_per_year` 252 vs 1512; Sharpe differs when non-zero |
+| `TestNoSideEffects` | 3 | Config immutable; no files written; intents are audit records only |
+
+### Characterisation note
+
+These scenarios are for characterisation only, not optimisation.
+**A positive backtest result does not approve live trading, paper trading,
+or any automated order execution.**
+
+### Validation
+
+```bash
+python -m pytest tests/test_trendfollowing_offline_scenarios.py  # 72 passed
+python -m pytest                                                   # 5 265 passed
+git diff origin/main...HEAD -- src/tools src/main.py src/execution src/backtest/engine.py config output scripts
+# Expected: empty (main.py, tools, execution, engine unchanged)
+```
+
+### Safety confirmations
+
+- No `src/tools/`, `src/main.py`, `src/execution/`, `config/`, `output/`, or `scripts/` files changed
+- No broker/API access — no Alpaca calls, no HTTP, no credentials, no env vars
+- No order submission. No live or paper trading enabled or changed.
+- `broker_calls_made = False` asserted in every scenario test.
+- All live/paper tools remain in `src/tools/` and fail-closed.
+- No automated trading approved.
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **A positive backtest result does not approve live trading.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> These tests characterise strategy behaviour — not certify it for deployment.
+> The Phase A–H safety roadmap remains unchanged and required.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone — PR 10D: docs-design-real-data-backtest-gate
+
+**Date:** 2026-05-28
+**Branch:** `claude/docs-design-real-data-backtest-gate`
+**Files added:** `docs/real_data_backtest_gate_design.md`
+**Files updated:** `docs/trendfollowing_offline_backtest_scenarios_design.md`, `docs/automated_strategy_execution_roadmap.md`, `docs/live_readiness_status.md`
+**Tests:** No new tests (docs-only PR). Full suite: 5 265 passed.
+**Type:** Docs-only. No src, tests, config, output, or scripts changes.
+
+### What was designed
+
+`docs/real_data_backtest_gate_design.md` — safe gate for using cached Yahoo
+historical data in offline TrendFollowing backtests.
+
+**Key decisions:**
+
+| Decision | Detail |
+|----------|--------|
+| CI default | Synthetic fixtures from PR 10C (no network) |
+| Real-data runs | `@pytest.mark.integration` tests; skipped in CI unless `--run-integration` |
+| Data source | `YahooDataProvider` + `CachedMarketDataProvider` (`data/cache/`, gitignored) |
+| Yahoo 1h retention | **730 days** — corrects PR 10B claim of "~60 days" |
+| Symbols in scope | SPY and QQQ only |
+| Intervals in scope | `1d` (multi-year) and `60m` / `1h` (~730 days) |
+| Cache format | Parquet (pyarrow) or CSV fallback; deterministic after first fetch |
+| Raw bars committed | **No** — `data/cache/` is gitignored |
+| Credentials needed | **No** — `YahooDataProvider` requires no API key |
+| Next steps | PR 10E: cache availability checker; PR 10F: integration tests |
+
+### Validation
+
+```bash
+git diff origin/main...HEAD -- src tests config output scripts
+# Expected: empty
+python -m pytest  # 5 265 passed (suite unchanged)
+```
+
+### Safety confirmations
+
+- No `src/`, `tests/`, `config/`, `output/`, or `scripts/` files changed
+- No broker/API access — no Alpaca calls, no HTTP, no credentials
+- No order submission. No live or paper trading enabled or changed.
+- All 40 tools remain in `src/tools/` and fail-closed.
+- No automated trading approved.
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> **A positive backtest result does not approve live trading.**
+> This is a docs-only PR. No source files, tests, or configs were changed.
+> The Phase A–H safety roadmap remains unchanged and required before any automation.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone: PR 10E — Cache Availability Checker
+
+**Date:** 2026-05-28
+**Branch:** `claude/add-cached-data-availability-checker`
+**Commit:** `feat: add cached data availability checker (PR 10E)`
+
+### What was implemented
+
+- `src/tools/cached_data_availability_check.py` — offline read-only tool (41st tool in
+  `src/tools/`). Scans `data/cache/` for bar files matching
+  `{symbol}_*_{interval}.(parquet|csv)` for SPY/QQQ × 1d/60m. Validates OHLCV
+  columns. Supports 60m ↔ 1h aliasing. Returns PASS or BLOCKED. No network, no
+  broker, no credentials, no order actions.
+- `tests/test_cached_data_availability_check.py` — 42 tests across 10 test classes
+  (TestMissingCacheDir, TestMissingFiles, TestValidCache, TestIntervalAliasing,
+  TestInvalidColumns, TestSafetyFlags, TestNoPricesEmitted, TestDeterminism,
+  TestOutputJson, TestSourceScan). All use `tmp_path` with synthetic CSV fixtures.
+- `tests/test_tools_inventory.py` — added `DATA_TOOLS` tuple; updated count from
+  40 to 41.
+- `.gitignore` — added `data/cache/` per design doc § 4.3.
+- `docs/real_data_backtest_gate_design.md` — PR 10E section updated from Goal to
+  Status: implemented.
+- `docs/automated_strategy_execution_roadmap.md` — Phase B updated with PR 10E entry.
+
+### Validation
+
+```bash
+git diff origin/main...HEAD -- src/main.py src/backtest src/strategy src/execution config output scripts
+# Expected: empty
+python -m pytest  # 5 315 passed
+```
+
+### Safety confirmations
+
+- No broker/API access — no Alpaca calls, no HTTP, no credentials
+- No order submission. No live or paper trading enabled or changed.
+- 41 tools in `src/tools/`; all fail-closed.
+- No automated trading approved.
+- Tool source scanned by AST: no yfinance, requests, httpx, aiohttp, urllib, alpaca,
+  os.environ, submit_order, cancel_order, replace_order imports.
+- All tests use `tmp_path` with synthetic CSV fixtures; no real cache files.
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> The Phase A–H safety roadmap remains unchanged and required before any automation.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone — PR 10F: docs-design-yahoo-fetch-gate
+
+**Date:** 2026-05-28
+**Branch:** `claude/docs-design-yahoo-fetch-gate`
+**Files added:** `docs/yahoo_fetch_gate_design.md`
+**Files updated:** `docs/real_data_backtest_gate_design.md`, `docs/automated_strategy_execution_roadmap.md`, `docs/live_readiness_status.md`
+**Tests:** No new tests (docs-only PR). Full suite: 5 315 passed.
+**Type:** Docs-only. No src, tests, config, output, scripts, or data changes.
+
+### What was designed
+
+`docs/yahoo_fetch_gate_design.md` — explicit approval gate for Yahoo/yfinance
+historical bar data fetch into `data/cache/`.
+
+**Key gate rules:**
+
+| Rule | Value |
+|------|-------|
+| Default | BLOCKED — no network without `--allow-network` flag |
+| Operator opt-in | `--allow-network` flag required; zero network calls without it |
+| Symbols | SPY and QQQ only |
+| Intervals | `1d` and `60m`/`1h` only |
+| Data source | `YahooDataProvider` only; no Alpaca, no broker API, no credentials |
+| Write target | `data/cache/` only (gitignored) |
+| Raw bars committed | **Never** |
+| Post-fetch validation | `cached_data_availability_check` must return PASS |
+| Raw prices in output | **Forbidden** — row counts and date ranges only |
+| Rate limit | ≥ 1 s between fetches; max 3 retries; exponential backoff |
+| Failure policy | Fail-closed — any failure → BLOCKED overall; no partial approval |
+| PASS meaning | Cache populated only; not strategy/paper/live approval |
+
+**Sub-PR plan:**
+- PR 10G: implement `src/tools/yahoo_fetch.py` with `--allow-network` gate (all tests mock provider; no live network in tests)
+- PR 10H: integration tests with real cached data (`@pytest.mark.integration`, skipped in CI)
+
+### Validation
+
+```bash
+git diff origin/main...HEAD -- src tests config output scripts data
+# Expected: empty
+python -m pytest  # 5 315 passed (suite unchanged)
+```
+
+### Safety confirmations
+
+- No `src/`, `tests/`, `config/`, `output/`, `scripts/`, or `data/` files changed
+- No broker/API access — no Alpaca calls, no HTTP, no credentials
+- No order submission. No live or paper trading enabled or changed.
+- All 41 tools remain in `src/tools/` and fail-closed.
+- No automated trading approved.
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **This milestone does not approve data fetch.** Data fetch requires PR 10G
+> implementation and the explicit `--allow-network` operator flag.
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> This is a docs-only PR. No source files, tests, or configs were changed.
+> The Phase A–H safety roadmap remains unchanged and required before any automation.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone — PR 10G: add-yahoo-fetch-cache-tool
+
+**Date:** 2026-05-28
+**Branch:** `claude/add-yahoo-fetch-cache-tool`
+**Files added:** `src/tools/yahoo_cache_fetch.py`, `tests/test_yahoo_cache_fetch.py`
+**Files updated:** `tests/test_tools_inventory.py`, `docs/yahoo_fetch_gate_design.md`, `docs/real_data_backtest_gate_design.md`, `docs/automated_strategy_execution_roadmap.md`, `docs/live_readiness_status.md`
+**Tests:** 43 new tests (5 366 total passed). Tool count: 41 → 42.
+**Type:** Implementation. New tool + tests. No src/main.py, src/backtest, src/strategy, src/execution, config, output, scripts, or data changes.
+
+### What was added
+
+`src/tools/yahoo_cache_fetch.py` — explicit `--allow-network` gated fetch tool for
+Yahoo/yfinance historical bar data.
+
+**Key gate rules:**
+
+| Rule | Value |
+|------|-------|
+| Default | BLOCKED — no network without `--allow-network` flag |
+| Operator opt-in | `--allow-network` flag required; zero network calls without it |
+| Symbols | SPY and QQQ (default); operator-configurable via `--symbols` |
+| Intervals | `1d` and `60m` (default); operator-configurable via `--intervals` |
+| Data source | `YahooDataProvider` only; no Alpaca, no broker API, no credentials |
+| Write target | `data/cache/` only (gitignored) |
+| Raw bars committed | **Never** |
+| Post-fetch validation | `cached_data_availability_check` must return PASS |
+| Raw prices in output | **Forbidden** — row counts and date ranges only |
+| Rate limit | ≥ 1 s between fetches; max 3 retries; exponential backoff |
+| Failure policy | Fail-closed — any failure → BLOCKED overall |
+| PASS meaning | Cache populated only; not strategy/paper/live approval |
+
+**Test breakdown (43 tests, 8 classes):**
+- `tests/test_yahoo_cache_fetch.py` — all use mocked inner provider +
+  real `CachedMarketDataProvider` writing to `tmp_path`; no live yfinance calls.
+  - `TestNoNetworkFlag` (5): blocked without flag; blocker message; network_calls_made=False; provider not called; CLI exit 1
+  - `TestWithMockedProvider` (8): PASS with mock data; rows count; inferred dates; files_written; availability check PASS; network_calls_made=True; exit code; safety flags
+  - `TestEmptyOrMissingData` (4): empty df → BLOCKED entry; overall BLOCKED; provider exception → BLOCKED; blocked entry in entries
+  - `TestPartialFailure` (4): one symbol fails → overall BLOCKED; OK entry still recorded; failed entry has no rows; files_written matches OK count
+  - `TestSafetyFlags` (5): broker/credentials/order flags always False (both blocked and pass paths)
+  - `TestNoPricesEmitted` (3): no floats in blocked output; no floats in entries; rows is int not float
+  - `TestOutputJson` (4): JSON file written; has result key; BLOCKED without flag; matches run_fetch
+  - `TestSourceScan` (10): AST scan — no yfinance/requests/httpx/aiohttp/urllib/alpaca imports; no os.environ; no submit/cancel/replace_order
+
+### Validation
+
+```bash
+git diff origin/main...HEAD -- src/main.py src/backtest src/strategy src/execution config output scripts data
+# Expected: empty
+python -m pytest  # 5 366 passed
+```
+
+### Safety confirmations
+
+- No broker/API access — no Alpaca calls, no HTTP, no credentials
+- No order submission. No live or paper trading enabled or changed.
+- 42 tools in `src/tools/`; all fail-closed.
+- No automated trading approved.
+- Tool source scanned by AST (both inventory tests and dedicated TestSourceScan):
+  no yfinance, requests, httpx, aiohttp, urllib, alpaca, os.environ, submit_order,
+  cancel_order, replace_order imports.
+- YahooDataProvider and CachedMarketDataProvider imported lazily only when
+  allow_network=True and no injectable provider given.
+- All tests use mocked inner provider + real CachedMarketDataProvider writing to
+  tmp_path; no real yfinance calls in any test.
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **This milestone does not approve data fetch** without the explicit
+> `--allow-network` operator flag at runtime.
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> The Phase A–H safety roadmap remains unchanged and required before any automation.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone — PR 10H: docs-local-yahoo-fetch-runbook
+
+**Date:** 2026-05-28
+**Branch:** `claude/docs-local-yahoo-fetch-runbook`
+**Files added:** `docs/local_yahoo_cache_fetch_runbook.md`
+**Files updated:** `docs/yahoo_fetch_gate_design.md`, `docs/real_data_backtest_gate_design.md`, `docs/automated_strategy_execution_roadmap.md`, `docs/live_readiness_status.md`
+**Tests:** No new tests (docs-only PR). Full suite: 5 366 passed.
+**Type:** Docs-only. No src, tests, config, output, scripts, or data changes.
+
+### What was documented
+
+`docs/local_yahoo_cache_fetch_runbook.md` — step-by-step operator runbook for
+populating `data/cache/` locally using `src/tools/yahoo_cache_fetch`.
+
+**Runbook sections:**
+
+| Section | Content |
+|---------|---------|
+| § 2 | Confirm tool is BLOCKED by default (no `--allow-network`) |
+| § 3 | Run fetch with explicit `--allow-network`; expected output fields |
+| § 4 | Verify cache with `cached_data_availability_check` |
+| § 5 | If fetch fails: blockers table and per-symbol retry commands |
+| § 6 | Subsequent runs — cache hit behaviour (no network) |
+| § 7 | Optional inspect/clear commands |
+| § 8 | What PASS means and does not mean |
+| § 9 | Safety summary table |
+| § 10 | Next steps: `@pytest.mark.integration` tests (PR 10I) |
+
+**Sub-PR renaming:** Old "PR 10H" (integration tests) is now PR 10I to
+accommodate this runbook PR.
+
+### Validation
+
+```bash
+git diff origin/main...HEAD -- src tests config output scripts data
+# Expected: empty
+python -m pytest  # 5 366 passed (suite unchanged)
+```
+
+### Safety confirmations
+
+- No `src/`, `tests/`, `config/`, `output/`, `scripts/`, or `data/` files changed
+- No broker/API access — no Alpaca calls, no HTTP, no credentials
+- No order submission. No live or paper trading enabled or changed.
+- All 42 tools remain in `src/tools/` and fail-closed.
+- No automated trading approved.
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> **PASS from the runbook means cache populated only.**
+> This is a docs-only PR. No source files, tests, or configs were changed.
+> The Phase A–H safety roadmap remains unchanged and required before any automation.
+
+---
+
+## Milestone — PR 10I: add-cached-real-data-backtest-checker
+
+**Commit:** `feat: add cached real-data backtest checker (PR 10I)`
+
+**Branch:** `claude/add-cached-real-data-backtest-checker`
+
+### Summary
+
+Added `src/tools/cached_real_data_backtest_check.py` — offline TrendFollowing
+characterization tool using locally cached bar data. Reads from `data/cache/`
+only. No network. No credentials. No trading.
+
+### What was added
+
+- `src/tools/cached_real_data_backtest_check.py` — 43rd tool in `src/tools/`;
+  offline characterization tool; calls `cached_data_availability_check` first
+  (fail-fast if cache missing); loads cached OHLCV files directly from disk
+  (parquet or csv); runs `run_backtest()` with `trend_following` strategy for
+  SPY/QQQ × 1d/60m; reports metric summaries per scenario (no raw OHLCV values);
+  returns PASS if all scenarios complete; BLOCKED if cache missing or load fails;
+  60m ↔ 1h aliasing supported; `--output` writes JSON report.
+- `tests/test_cached_real_data_backtest_check.py` — 53 tests across 10 test
+  classes: `TestMissingCache`, `TestValidCache`, `TestInvalidColumns`,
+  `TestDeterminism`, `TestIntervalAliasing`, `TestSafetyFlags`,
+  `TestNoPricesEmitted`, `TestOutputJson`, `TestSourceScan` (AST-based
+  forbidden-import checks), `TestTrendParams` (verifies correct param names
+  `fast_ema_period`/`slow_ema_period` passed to backtest). All tests use
+  `tmp_path` + synthetic CSV fixtures; no real cache files; no network in any test.
+- `tests/test_tools_inventory.py` — `DATA_TOOLS` updated with
+  `cached_real_data_backtest_check`; count updated from 42 to 43.
+
+### CLI
+
+```bash
+python -m src.tools.cached_real_data_backtest_check
+python -m src.tools.cached_real_data_backtest_check --cache-dir data/cache --symbols SPY QQQ --intervals 1d 60m
+python -m src.tools.cached_real_data_backtest_check --output result.json
+```
+
+Exit 0 on PASS; exit 1 on BLOCKED.
+
+### Key design decisions
+
+- `_LoadedFileProvider` wraps a pre-loaded DataFrame as a `BaseDataProvider`;
+  never makes any network calls; all `fetch_bars()` parameters ignored.
+- `run_check()` calls `check_cache()` first — if BLOCKED, returns immediately
+  with `scenarios_run=0` and empty `scenarios` list (fail-fast).
+- `_trend_params` is injectable for tests to override default parameters.
+  Default `_TREND_PARAMS`: `fast_ema_period=10, slow_ema_period=50, atr_period=14,
+  atr_stop_mult=2.0, volatility_lookback=50, breakout_lookback=5`
+  (warm-up = max(50, 63, 6) = 63 bars).
+- Scenario output contains only: `symbol`, `interval`, `rows`, `status`,
+  `total_return_pct`, `annualized_return_pct`, `max_drawdown_pct`,
+  `sharpe_ratio`, `num_trades`. No raw OHLCV values.
+- `scenarios_run` counts only scenarios with `status == "OK"`.
+
+### Validation
+
+```bash
+git diff origin/main...HEAD -- src/main.py src/backtest src/strategy src/execution config output scripts data
+# Expected: empty
+python -m pytest  # 5 427 passed (5 366 baseline + 53 tool tests + 8 inventory)
+```
+
+### Safety confirmations
+
+- No broker/API access — no Alpaca calls, no HTTP, no yfinance, no credentials
+- No `os.environ` or `os.getenv` anywhere in tool source
+- No `submit_order`, `cancel_order`, `replace_order` in tool source
+- No raw OHLCV values in output dict or JSON report
+- `broker_calls_made=False`, `credentials_read=False`, `network_calls_made=False`,
+  `order_action_requested=False` in all results
+- `BacktestRunResult` safety flags confirmed (`recommendation_only=True`,
+  `broker_calls_made=False`, `live_submit_enabled=False`)
+- All 43 tools remain in `src/tools/` and fail-closed
+- No automated trading approved
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> **PASS means characterization ran only — not strategy validation, paper trading, or live trading.**
+> The Phase A–H safety roadmap remains unchanged and required before any automation.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone — PR 10J: docs-snapshot-real-data-backtest-results
+
+**Date:** 2026-05-28
+**Branch:** `claude/docs-snapshot-real-data-backtest-results`
+**Files added:** `docs/first_cached_real_data_backtest_results_snapshot.md`
+**Files updated:** `docs/real_data_backtest_gate_design.md`, `docs/automated_strategy_execution_roadmap.md`, `docs/live_readiness_status.md`
+**Tests:** No new tests (docs-only PR). Full suite: 5 427 passed.
+**Type:** Docs-only. No src, tests, config, output, scripts, or data changes.
+
+### What was documented
+
+`docs/first_cached_real_data_backtest_results_snapshot.md` — records the first
+operator-run results from the complete real-data pipeline.
+
+**Three-step pipeline results:**
+
+| Step | Tool | Result |
+|------|------|--------|
+| 1 | `yahoo_cache_fetch --allow-network` | PASS — 4 files written, network=True |
+| 2 | `cached_data_availability_check` | PASS — network=False |
+| 3 | `cached_real_data_backtest_check` | PASS — 4 scenarios, network=False |
+
+**Scenario metrics (SPY/QQQ × 1d/60m):**
+
+| Scenario | Rows | Total return % | Annualized % | Max drawdown % | Sharpe | Trades |
+|----------|------|---------------|-------------|---------------|--------|--------|
+| SPY 1d   | 1610 | −1.7641 | −0.2777 | −1.7641 | −163.3505 | 280 |
+| SPY 60m  | 3341 | −0.6967 | −0.3641 | −4.6668 | −1.6661  | 197 |
+| QQQ 1d   | 1610 | −1.9938 | −0.3141 | −1.9938 | −134.9166 | 266 |
+| QQQ 60m  | 3341 | +0.3374 | +0.1759 | −7.2882 | −1.1458  | 195 |
+
+**Interpretation:** Pipeline is working. Strategy performance is not acceptable
+under current params. Daily Sharpe values (−134 to −163) indicate a likely
+Sharpe calculation or annualisation bug. QQQ 60m positive total return (+0.34%)
+does not approve trading. All safety flags remain False.
+
+**Diagnostic plan:**
+- PR 10K: inspect Sharpe calculation for daily scenarios
+- PR 10L: add trade summary diagnostics (avg holding, entry/exit reasons, exposure, turnover)
+- PR 10M: compare default params (`fast_ema_period=10` in checker vs `20` in strategy defaults)
+
+### Validation
+
+```bash
+git diff origin/main...HEAD -- src tests config output scripts data
+# Expected: empty
+# pytest not run for docs-only PR (suite baseline: 5 427 passed)
+```
+
+### Safety confirmations
+
+- No `src/`, `tests/`, `config/`, `output/`, `scripts/`, or `data/` files changed
+- No broker/API access — no Alpaca calls, no HTTP, no credentials
+- No order submission. No live or paper trading enabled or changed.
+- All 43 tools remain in `src/tools/` and fail-closed.
+- No automated trading approved.
+- `data/cache/` gitignored; no bar files committed.
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> **QQQ 60m positive return does not approve paper or live trading.**
+> **The strategy requires diagnostic work before further evaluation.**
+> The Phase A–H safety roadmap remains unchanged and required before any automation.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone — PR 10K: add-backtest-metrics-diagnostics
+
+**Date:** 2026-05-28
+**Branch:** `claude/add-backtest-metrics-diagnostics`
+**Files added:** `src/backtest/metrics_diagnostics.py`, `tests/test_backtest_metrics_diagnostics.py`
+**Files updated:** `docs/first_cached_real_data_backtest_results_snapshot.md`, `docs/real_data_backtest_gate_design.md`, `docs/automated_strategy_execution_roadmap.md`, `docs/live_readiness_status.md`
+**Tests:** 60 new tests (9 classes). Full suite: 5 487 passed.
+**Type:** Feature. No strategy/engine/execution/broker changes. No network in tests.
+
+### What was added
+
+`src/backtest/metrics_diagnostics.py` — offline Sharpe diagnostic helper.
+Recomputes Sharpe using the same formula as `compute_metrics()` and returns
+diagnostic flags explaining extreme or suspicious values.
+
+**Core function:**
+```python
+diagnose_sharpe(equity_curve, interval, *, risk_free_rate=0.05,
+                low_variance_threshold=1e-6) -> dict
+```
+
+**Key diagnostic outputs:**
+
+| Field | Purpose |
+|-------|---------|
+| `result` | `PASS` or `BLOCKED` |
+| `bars_per_year` | annualisation constant used |
+| `equity_points` | count of equity rows |
+| `return_points` | count of computed bar returns |
+| `mean_period_return` | mean of bar-level percent returns |
+| `std_period_return` | std of bar-level returns (ddof=1) |
+| `annualized_volatility` | `std × sqrt(bars_per_year)` |
+| `sharpe_ratio_recomputed` | recomputed Sharpe; `None` if std=0 |
+| `zero_std_detected` | `True` → BLOCKED; Sharpe undefined |
+| `low_variance_warning` | `True` → PASS but Sharpe may be inflated |
+| `finite_values_only` | `False` → BLOCKED (NaN/inf in input) |
+
+**BLOCKED conditions:** invalid interval, NaN/inf in equity, fewer than 2
+points, missing equity column, zero std (prevents misleading Sharpe output).
+
+**`tests/test_backtest_metrics_diagnostics.py`** — 60 tests across 9 classes:
+
+| Class | Tests |
+|-------|-------|
+| `TestInvalidInputs` | 10 — invalid interval, NaN, inf, -inf, single point, empty, missing column |
+| `TestFlatCurve` | 6 — zero std → BLOCKED, sharpe=None, counts correct |
+| `TestNormalCurve` | 9 — PASS, finite Sharpe, std>0, DataFrame/Series equivalent |
+| `TestLowVariance` | 5 — near-flat → PASS + warning; custom threshold |
+| `TestIntervalLookup` | 5 — 1d→252, 60m→1512, 1h→1512, 5m correct, interval in output |
+| `TestSafetyFlags` | 7 — all 4 flags False in PASS, BLOCKED, invalid interval |
+| `TestNoPricesEmitted` | 5 — no OHLCV/equity keys, scalar types |
+| `TestDeterminism` | 3 — identical results on repeated calls |
+| `TestSourceScan` | 10 — AST scans for yfinance, requests, httpx, aiohttp, urllib, alpaca, os.environ, submit/cancel/replace_order |
+
+### What this diagnoses
+
+The extreme daily Sharpe values from PR 10J (SPY 1d: −163.35, QQQ 1d: −134.92)
+are consistent with near-zero std of daily bar returns. When most bars have no
+equity change (strategy is flat/between positions), `std(returns)` approaches
+zero, causing the Sharpe numerator to dominate. The diagnostic tool detects this
+via `zero_std_detected` and `low_variance_warning` flags, and returns BLOCKED
+rather than a misleading extreme value.
+
+### What this does NOT do
+
+- Does not change `compute_metrics()` or `metrics.py`
+- Does not change the backtest engine, strategy, or execution layer
+- Does not fix the extreme Sharpe (that fix belongs in a separate sub-PR with
+  operator review of the actual equity curves from the real-data run)
+- Does not approve paper or live trading
+- Does not change any gate status
+
+### Validation
+
+```bash
+git diff origin/main...HEAD -- src/main.py src/backtest/engine.py src/strategy src/execution config output scripts data
+# Expected: empty (metrics_diagnostics.py is a new pure-helper module)
+python -m pytest tests/test_backtest_metrics_diagnostics.py  # 60 passed
+python -m pytest                                              # 5 487 passed
+```
+
+### Safety confirmations
+
+- No broker/API access — no Alpaca calls, no HTTP, no credentials
+- No order submission. No live or paper trading enabled or changed.
+- Strategy, engine, execution layer unchanged.
+- Tool source scanned by AST: no yfinance, requests, httpx, aiohttp, urllib,
+  alpaca, os.environ, submit_order, cancel_order, replace_order.
+- All inputs are synthetic in-test arrays; no real market data in any test.
+- No automated trading approved.
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> **Diagnostics do not constitute strategy validation or trading approval.**
+> The Phase A–H safety roadmap remains unchanged and required before any automation.
+> Nothing in this repository is financial advice.
 

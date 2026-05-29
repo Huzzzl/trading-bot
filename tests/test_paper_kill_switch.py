@@ -153,13 +153,6 @@ def _run_buy(cfg, tmp_path):
     from src.execution.alpaca_broker import AlpacaBrokerAdapter
     import src.main
 
-    fake_engine = mock.MagicMock()
-    fake_engine.run.return_value = {
-        "order_intents": [_make_buy_intent()],
-        "metrics": {}, "trades": [], "equity_curve": [],
-    }
-    fake_engine._portfolio.positions = {}
-
     mock_submit = mock.MagicMock(return_value=_make_buy_result())
     mock_cancel = mock.MagicMock()
 
@@ -172,13 +165,17 @@ def _run_buy(cfg, tmp_path):
                            return_value=mock.MagicMock()), \
          mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
          mock.patch.object(AlpacaBrokerAdapter, "cancel_order", mock_cancel), \
-         mock.patch("src.main.build_engine", return_value=fake_engine), \
+         mock.patch("src.backtest.backtest_runner.run_backtest") as mock_run_backtest, \
          mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
                     _pass_recon_generate), \
          mock.patch("src.execution.paper_ledger.assert_client_order_id_unused"), \
          mock.patch("src.execution.paper_ledger.append_ledger_row"), \
          mock.patch("src.main.load_config", return_value=cfg), \
          mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+        mock_run_backtest.return_value.order_intents = [_make_buy_intent()]
+        mock_run_backtest.return_value.metrics = {}
+        mock_run_backtest.return_value.trades = []
+        mock_run_backtest.return_value.equity_curve = []
         src.main.main()
 
     return mock_submit, mock_cancel
@@ -223,12 +220,6 @@ class TestBuySubmitKillSwitch:
         from src.execution.alpaca_broker import AlpacaBrokerAdapter
         import src.main
 
-        fake_engine = mock.MagicMock()
-        fake_engine.run.return_value = {
-            "order_intents": [_make_buy_intent()],
-            "metrics": {}, "trades": [], "equity_curve": [],
-        }
-        fake_engine._portfolio.positions = {}
         mock_submit = mock.MagicMock()
 
         with mock.patch.object(pd.Timestamp, "now", return_value=_FIXED_TS), \
@@ -239,11 +230,15 @@ class TestBuySubmitKillSwitch:
              mock.patch.object(AlpacaBrokerAdapter, "_get_client",
                                return_value=mock.MagicMock()), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
-             mock.patch("src.main.build_engine", return_value=fake_engine), \
+             mock.patch("src.backtest.backtest_runner.run_backtest") as mock_run_backtest, \
              mock.patch("src.execution.paper_ledger.assert_client_order_id_unused"), \
              mock.patch("src.execution.paper_ledger.append_ledger_row"), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            mock_run_backtest.return_value.order_intents = [_make_buy_intent()]
+            mock_run_backtest.return_value.metrics = {}
+            mock_run_backtest.return_value.trades = []
+            mock_run_backtest.return_value.equity_curve = []
             with pytest.raises(RuntimeError, match="paper kill switch enabled"):
                 src.main.main()
         mock_submit.assert_not_called()
@@ -269,12 +264,6 @@ class TestBuySubmitKillSwitch:
         from src.execution.alpaca_broker import AlpacaBrokerAdapter
         import src.main
 
-        fake_engine = mock.MagicMock()
-        fake_engine.run.return_value = {
-            "order_intents": [_make_buy_intent()],
-            "metrics": {}, "trades": [], "equity_curve": [],
-        }
-        fake_engine._portfolio.positions = {}
         mock_submit = mock.MagicMock()
 
         with mock.patch.object(pd.Timestamp, "now", return_value=_FIXED_TS), \
@@ -285,13 +274,17 @@ class TestBuySubmitKillSwitch:
              mock.patch.object(AlpacaBrokerAdapter, "_get_client",
                                return_value=mock.MagicMock()), \
              mock.patch.object(AlpacaBrokerAdapter, "submit_order", mock_submit), \
-             mock.patch("src.main.build_engine", return_value=fake_engine), \
+             mock.patch("src.backtest.backtest_runner.run_backtest") as mock_run_backtest, \
              mock.patch("src.reporting.report_generator.ReportGenerator.generate_all",
                         _pass_recon_generate), \
              mock.patch("src.execution.paper_ledger.assert_client_order_id_unused"), \
              mock.patch("src.execution.paper_ledger.append_ledger_row"), \
              mock.patch("src.main.load_config", return_value=cfg), \
              mock.patch("sys.argv", ["prog", "--output-dir", str(tmp_path)]):
+            mock_run_backtest.return_value.order_intents = [_make_buy_intent()]
+            mock_run_backtest.return_value.metrics = {}
+            mock_run_backtest.return_value.trades = []
+            mock_run_backtest.return_value.equity_curve = []
             src.main.main()  # must not raise
 
         mock_submit.assert_not_called()

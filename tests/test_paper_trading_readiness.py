@@ -111,7 +111,7 @@ class TestStartupLogs:
     def _capture_startup_logs(self, mode: str = "backtest", dry_run: bool = False) -> list[str]:
         """
         Run main() up to and including the startup log block, then abort
-        by raising inside build_engine so we never need real bar data.
+        by raising inside run_backtest so we never need real bar data.
         """
         cfg = _make_minimal_config(mode=mode, dry_run=dry_run)
 
@@ -130,7 +130,7 @@ class TestStartupLogs:
         try:
             with mock.patch("src.main.load_config", return_value=cfg), \
                  mock.patch("sys.argv", ["prog"]), \
-                 mock.patch("src.main.build_engine", side_effect=SystemExit(0)):
+                 mock.patch("src.backtest.backtest_runner.run_backtest", side_effect=SystemExit(0)):
                 try:
                     from src.main import main as _main
                     _main()
@@ -215,7 +215,7 @@ class TestDryRunWarning:
         try:
             with mock.patch("src.main.load_config", return_value=cfg), \
                  mock.patch("sys.argv", ["prog"]), \
-                 mock.patch("src.main.build_engine", side_effect=SystemExit(0)):
+                 mock.patch("src.backtest.backtest_runner.run_backtest", side_effect=SystemExit(0)):
                 try:
                     from src.main import main as _main
                     _main()
