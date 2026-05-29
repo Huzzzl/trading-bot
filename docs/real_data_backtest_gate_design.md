@@ -337,6 +337,18 @@ Exit 0 on PASS; exit 1 on BLOCKED. Prints human-readable summary; JSON only with
 
 **Not in scope:** Live data fetch in CI, broker calls, credentials, trading, raw OHLCV values in output.
 
+### PR 10J — First real-data backtest results snapshot (this document)
+
+**Status: complete — `docs/first_cached_real_data_backtest_results_snapshot.md`**
+
+Docs-only. Records the first operator-run results from the full three-step
+real-data pipeline (yahoo_cache_fetch → cached_data_availability_check →
+cached_real_data_backtest_check). All four scenarios (SPY/QQQ × 1d/60m)
+returned PASS. Captures raw metric values, interpretation, and follow-up
+diagnostic plan (PR 10K: Sharpe diagnostic; PR 10L: trade summary; PR 10M:
+default params comparison). No strategy/paper/live approval.
+No `src/`, `tests/`, `config/`, `output/`, `scripts/`, or `data/` changes.
+
 ---
 
 ## 10. Validation for This Docs PR

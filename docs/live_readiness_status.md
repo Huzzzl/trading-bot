@@ -2,7 +2,7 @@
 
 Current operational status of the live-readiness gate baseline.
 Last updated: 2026-05-28. Full pre-submit pipeline complete through PR #98.
-Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. PR 10E cache checker (42 tests, 41 tools). PR 10F Yahoo fetch gate design. PR 10G Yahoo fetch tool (43 tests, 42 tools). PR 10H local fetch runbook. PR 10I cached real-data backtest checker (53 tests, 43 tools). fix: correct TrendFollowing param names (fast_ema_period/slow_ema_period). Test baseline: 5 427 passed.
+Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. PR 10E cache checker (42 tests, 41 tools). PR 10F Yahoo fetch gate design. PR 10G Yahoo fetch tool (43 tests, 42 tools). PR 10H local fetch runbook. PR 10I cached real-data backtest checker (53 tests, 43 tools). PR 10J first real-data results snapshot (docs-only). Diagnostics pending: PR 10K (Sharpe), PR 10L (trade summary), PR 10M (params). Test baseline: 5 427 passed.
 
 ---
 
@@ -4709,5 +4709,75 @@ python -m pytest  # 5 427 passed (5 366 baseline + 53 tool tests + 8 inventory)
 > **This milestone does not approve any individual trade.**
 > **No Alpaca endpoint was contacted. No credentials were read.**
 > **PASS means characterization ran only — not strategy validation, paper trading, or live trading.**
+> The Phase A–H safety roadmap remains unchanged and required before any automation.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone — PR 10J: docs-snapshot-real-data-backtest-results
+
+**Date:** 2026-05-28
+**Branch:** `claude/docs-snapshot-real-data-backtest-results`
+**Files added:** `docs/first_cached_real_data_backtest_results_snapshot.md`
+**Files updated:** `docs/real_data_backtest_gate_design.md`, `docs/automated_strategy_execution_roadmap.md`, `docs/live_readiness_status.md`
+**Tests:** No new tests (docs-only PR). Full suite: 5 427 passed.
+**Type:** Docs-only. No src, tests, config, output, scripts, or data changes.
+
+### What was documented
+
+`docs/first_cached_real_data_backtest_results_snapshot.md` — records the first
+operator-run results from the complete real-data pipeline.
+
+**Three-step pipeline results:**
+
+| Step | Tool | Result |
+|------|------|--------|
+| 1 | `yahoo_cache_fetch --allow-network` | PASS — 4 files written, network=True |
+| 2 | `cached_data_availability_check` | PASS — network=False |
+| 3 | `cached_real_data_backtest_check` | PASS — 4 scenarios, network=False |
+
+**Scenario metrics (SPY/QQQ × 1d/60m):**
+
+| Scenario | Rows | Total return % | Annualized % | Max drawdown % | Sharpe | Trades |
+|----------|------|---------------|-------------|---------------|--------|--------|
+| SPY 1d   | 1610 | −1.7641 | −0.2777 | −1.7641 | −163.3505 | 280 |
+| SPY 60m  | 3341 | −0.6967 | −0.3641 | −4.6668 | −1.6661  | 197 |
+| QQQ 1d   | 1610 | −1.9938 | −0.3141 | −1.9938 | −134.9166 | 266 |
+| QQQ 60m  | 3341 | +0.3374 | +0.1759 | −7.2882 | −1.1458  | 195 |
+
+**Interpretation:** Pipeline is working. Strategy performance is not acceptable
+under current params. Daily Sharpe values (−134 to −163) indicate a likely
+Sharpe calculation or annualisation bug. QQQ 60m positive total return (+0.34%)
+does not approve trading. All safety flags remain False.
+
+**Diagnostic plan:**
+- PR 10K: inspect Sharpe calculation for daily scenarios
+- PR 10L: add trade summary diagnostics (avg holding, entry/exit reasons, exposure, turnover)
+- PR 10M: compare default params (`fast_ema_period=10` in checker vs `20` in strategy defaults)
+
+### Validation
+
+```bash
+git diff origin/main...HEAD -- src tests config output scripts data
+# Expected: empty
+# pytest not run for docs-only PR (suite baseline: 5 427 passed)
+```
+
+### Safety confirmations
+
+- No `src/`, `tests/`, `config/`, `output/`, `scripts/`, or `data/` files changed
+- No broker/API access — no Alpaca calls, no HTTP, no credentials
+- No order submission. No live or paper trading enabled or changed.
+- All 43 tools remain in `src/tools/` and fail-closed.
+- No automated trading approved.
+- `data/cache/` gitignored; no bar files committed.
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> **QQQ 60m positive return does not approve paper or live trading.**
+> **The strategy requires diagnostic work before further evaluation.**
 > The Phase A–H safety roadmap remains unchanged and required before any automation.
 > Nothing in this repository is financial advice.
