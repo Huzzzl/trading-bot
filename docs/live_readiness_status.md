@@ -2,7 +2,7 @@
 
 Current operational status of the live-readiness gate baseline.
 Last updated: 2026-05-28. Full pre-submit pipeline complete through PR #98.
-Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. PR 10E cache checker (42 tests, 41 tools). PR 10F Yahoo fetch gate design. PR 10G Yahoo fetch tool (43 tests, 42 tools). PR 10H local fetch runbook. PR 10I cached real-data backtest checker (53 tests, 43 tools). PR 10J first real-data results snapshot (docs-only). Diagnostics pending: PR 10K (Sharpe), PR 10L (trade summary), PR 10M (params). Test baseline: 5 427 passed.
+Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. PR 10E cache checker (42 tests, 41 tools). PR 10F Yahoo fetch gate design. PR 10G Yahoo fetch tool (43 tests, 42 tools). PR 10H local fetch runbook. PR 10I cached real-data backtest checker (53 tests, 43 tools). PR 10J first real-data results snapshot (docs-only). PR 10K backtest metrics diagnostics (60 tests). Test baseline: 5 487 passed.
 
 ---
 
@@ -4779,5 +4779,107 @@ git diff origin/main...HEAD -- src tests config output scripts data
 > **No Alpaca endpoint was contacted. No credentials were read.**
 > **QQQ 60m positive return does not approve paper or live trading.**
 > **The strategy requires diagnostic work before further evaluation.**
+> The Phase A–H safety roadmap remains unchanged and required before any automation.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone — PR 10K: add-backtest-metrics-diagnostics
+
+**Date:** 2026-05-28
+**Branch:** `claude/add-backtest-metrics-diagnostics`
+**Files added:** `src/backtest/metrics_diagnostics.py`, `tests/test_backtest_metrics_diagnostics.py`
+**Files updated:** `docs/first_cached_real_data_backtest_results_snapshot.md`, `docs/real_data_backtest_gate_design.md`, `docs/automated_strategy_execution_roadmap.md`, `docs/live_readiness_status.md`
+**Tests:** 60 new tests (9 classes). Full suite: 5 487 passed.
+**Type:** Feature. No strategy/engine/execution/broker changes. No network in tests.
+
+### What was added
+
+`src/backtest/metrics_diagnostics.py` — offline Sharpe diagnostic helper.
+Recomputes Sharpe using the same formula as `compute_metrics()` and returns
+diagnostic flags explaining extreme or suspicious values.
+
+**Core function:**
+```python
+diagnose_sharpe(equity_curve, interval, *, risk_free_rate=0.05,
+                low_variance_threshold=1e-6) -> dict
+```
+
+**Key diagnostic outputs:**
+
+| Field | Purpose |
+|-------|---------|
+| `result` | `PASS` or `BLOCKED` |
+| `bars_per_year` | annualisation constant used |
+| `equity_points` | count of equity rows |
+| `return_points` | count of computed bar returns |
+| `mean_period_return` | mean of bar-level percent returns |
+| `std_period_return` | std of bar-level returns (ddof=1) |
+| `annualized_volatility` | `std × sqrt(bars_per_year)` |
+| `sharpe_ratio_recomputed` | recomputed Sharpe; `None` if std=0 |
+| `zero_std_detected` | `True` → BLOCKED; Sharpe undefined |
+| `low_variance_warning` | `True` → PASS but Sharpe may be inflated |
+| `finite_values_only` | `False` → BLOCKED (NaN/inf in input) |
+
+**BLOCKED conditions:** invalid interval, NaN/inf in equity, fewer than 2
+points, missing equity column, zero std (prevents misleading Sharpe output).
+
+**`tests/test_backtest_metrics_diagnostics.py`** — 60 tests across 9 classes:
+
+| Class | Tests |
+|-------|-------|
+| `TestInvalidInputs` | 10 — invalid interval, NaN, inf, -inf, single point, empty, missing column |
+| `TestFlatCurve` | 6 — zero std → BLOCKED, sharpe=None, counts correct |
+| `TestNormalCurve` | 9 — PASS, finite Sharpe, std>0, DataFrame/Series equivalent |
+| `TestLowVariance` | 5 — near-flat → PASS + warning; custom threshold |
+| `TestIntervalLookup` | 5 — 1d→252, 60m→1512, 1h→1512, 5m correct, interval in output |
+| `TestSafetyFlags` | 7 — all 4 flags False in PASS, BLOCKED, invalid interval |
+| `TestNoPricesEmitted` | 5 — no OHLCV/equity keys, scalar types |
+| `TestDeterminism` | 3 — identical results on repeated calls |
+| `TestSourceScan` | 10 — AST scans for yfinance, requests, httpx, aiohttp, urllib, alpaca, os.environ, submit/cancel/replace_order |
+
+### What this diagnoses
+
+The extreme daily Sharpe values from PR 10J (SPY 1d: −163.35, QQQ 1d: −134.92)
+are consistent with near-zero std of daily bar returns. When most bars have no
+equity change (strategy is flat/between positions), `std(returns)` approaches
+zero, causing the Sharpe numerator to dominate. The diagnostic tool detects this
+via `zero_std_detected` and `low_variance_warning` flags, and returns BLOCKED
+rather than a misleading extreme value.
+
+### What this does NOT do
+
+- Does not change `compute_metrics()` or `metrics.py`
+- Does not change the backtest engine, strategy, or execution layer
+- Does not fix the extreme Sharpe (that fix belongs in a separate sub-PR with
+  operator review of the actual equity curves from the real-data run)
+- Does not approve paper or live trading
+- Does not change any gate status
+
+### Validation
+
+```bash
+git diff origin/main...HEAD -- src/main.py src/backtest/engine.py src/strategy src/execution config output scripts data
+# Expected: empty (metrics_diagnostics.py is a new pure-helper module)
+python -m pytest tests/test_backtest_metrics_diagnostics.py  # 60 passed
+python -m pytest                                              # 5 487 passed
+```
+
+### Safety confirmations
+
+- No broker/API access — no Alpaca calls, no HTTP, no credentials
+- No order submission. No live or paper trading enabled or changed.
+- Strategy, engine, execution layer unchanged.
+- Tool source scanned by AST: no yfinance, requests, httpx, aiohttp, urllib,
+  alpaca, os.environ, submit_order, cancel_order, replace_order.
+- All inputs are synthetic in-test arrays; no real market data in any test.
+- No automated trading approved.
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> **Diagnostics do not constitute strategy validation or trading approval.**
 > The Phase A–H safety roadmap remains unchanged and required before any automation.
 > Nothing in this repository is financial advice.

@@ -160,19 +160,27 @@ until diagnostics are complete.
 
 ### PR 10K — Sharpe calculation diagnostic (daily scenarios)
 
-**Problem:** Daily Sharpe ratios are in the range −134 to −163. This is
-implausible for any real backtest, even a losing one. Likely causes:
+**Status: implemented — `src/backtest/metrics_diagnostics.py`**
 
-| Hypothesis | How to check |
-|-----------|-------------|
-| Annualisation denominator wrong for 1d interval | Inspect `bars_per_year_for_interval("1d")` and how it enters Sharpe formula |
-| Excess return uses wrong risk-free rate | Check `metrics.py` risk-free rate assumption |
-| Returns distribution has near-zero variance but many small negative returns | Inspect distribution of per-bar returns for 1d scenarios |
-| `max_drawdown_pct` equals `total_return_pct` for 1d (SPY: −1.76 vs −1.76, QQQ: −1.99 vs −1.99) | Suggests equity curve never recovered — strategy went straight down; not a calculation bug but a signal quality bug |
+Added offline `diagnose_sharpe(equity_curve, interval)` helper
+(`src/backtest/metrics_diagnostics.py`). Recomputes Sharpe using the same
+formula as `compute_metrics()` and returns diagnostic flags:
 
-**Scope:** Read-only diagnostic. Inspect `src/backtest/metrics.py` and emit
-diagnostic output for 1d scenario returns. No `src/` changes until the
-diagnosis is confirmed. If a bug is found, fix in a separate sub-PR.
+| Flag | Meaning |
+|------|---------|
+| `zero_std_detected` | std of bar returns is 0 → BLOCKED (prevents misleading Sharpe) |
+| `low_variance_warning` | std non-zero but < 1e-6 → PASS but Sharpe may be inflated |
+| `finite_values_only` | False → BLOCKED (NaN/inf in equity) |
+| `sharpe_ratio_recomputed` | Recomputed value (or `None` if zero std) |
+| `annualized_volatility` | `std × sqrt(bars_per_year)` |
+
+Extreme daily Sharpe values (−134 to −163) are consistent with near-zero
+std of daily bar returns — when the strategy is flat most bars, equity
+changes little, std approaches zero, and the ratio explodes.
+The diagnostic tool detects this condition and returns BLOCKED instead
+of a misleading extreme value.
+
+60 tests across 9 test classes. No strategy or engine changes.
 
 **Not in scope:** Paper trading, live trading, parameter changes, new strategies.
 
