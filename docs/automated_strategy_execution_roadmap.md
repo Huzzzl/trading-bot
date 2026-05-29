@@ -195,6 +195,32 @@ offline characterization tool; reads from data/cache/ only; no network; runs
 run_backtest() with trend_following for SPY/QQQ × 1d/60m; reports metric
 summaries (no raw prices); BLOCKED if cache missing; PASS means characterization
 ran only; count 42 → 43 tools.
+First real-data results snapshot: PR 10J (`docs/first_cached_real_data_backtest_results_snapshot.md`) —
+docs-only; records first operator-run pipeline results (yahoo_cache_fetch PASS,
+4 files written; cached_data_availability_check PASS; cached_real_data_backtest_check
+PASS, 4 scenarios); captures scenario metrics (SPY/QQQ × 1d/60m); interpretation
+(pipeline working; strategy performance not acceptable; QQQ 60m +0.34% total return
+does not approve trading); diagnostic plan: PR 10K (Sharpe calculation), PR 10L
+(trade summary diagnostics), PR 10M (default params comparison); no paper/live
+approval; no src/tests/config/output/scripts/data changes.
+
+### Phase B diagnostics (pending)
+
+**PR 10K — Sharpe calculation diagnostic (daily scenarios)**
+Investigate extreme daily Sharpe values (SPY 1d: −163.35, QQQ 1d: −134.92).
+Inspect `src/backtest/metrics.py` annualisation and risk-free rate assumptions.
+Read-only diagnostic first; fix in separate sub-PR if bug found.
+
+**PR 10L — Trade summary diagnostics**
+Add avg holding period, entry/exit reason breakdown, exposure %, win rate by
+exit reason to `BacktestRunResult.metrics`. High turnover (280 trades / 1610
+daily bars for SPY 1d) suggests whipsawing at current params.
+
+**PR 10M — Default params comparison**
+Document and resolve checker `fast_ema_period=10` vs strategy default
+`fast_ema_period=20`. Align or justify the non-default value.
+
+No parameter optimisation or paper/live progression until diagnostics complete.
 
 ### Phase C — Paper trading execution
 
