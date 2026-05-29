@@ -34,6 +34,12 @@ from src.backtest.metrics import bars_per_year_for_interval
 # Thresholds
 # ---------------------------------------------------------------------------
 
+# std values at or below this are treated as effectively zero.
+# Machine-epsilon floating-point noise (e.g. 2.7e-20) from np.diff on a
+# perfectly flat equity curve can produce a non-zero but meaningless std;
+# 1e-14 is well above that noise floor and well below any real variance.
+_ZERO_STD_THRESHOLD: float = 1e-14
+
 # std of period returns below this triggers low_variance_warning
 _LOW_VARIANCE_THRESHOLD: float = 1e-6
 
@@ -201,8 +207,10 @@ def diagnose_sharpe(
     std_period_return = std_excess
     annualized_volatility = float(std_excess * math.sqrt(bpy))
 
-    # 6. Detect zero / near-zero std
-    zero_std_detected = (std_excess == 0.0) or not math.isfinite(std_excess)
+    # 6. Detect zero / near-zero std.
+    # Use a small threshold rather than exact equality: np.diff on a perfectly
+    # flat array can produce floating-point noise (~2.7e-20) rather than 0.0.
+    zero_std_detected = (std_excess <= _ZERO_STD_THRESHOLD) or not math.isfinite(std_excess)
     low_variance_warning = (
         not zero_std_detected
         and std_excess < low_variance_threshold
