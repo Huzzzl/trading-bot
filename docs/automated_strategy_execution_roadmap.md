@@ -230,6 +230,11 @@ addition to the legacy per-bar std check. SPY/QQQ 1d cases (ann_vol ≈ 0.0003) 
 correctly show `low_variance_warning=True`. 5 new tests (`TestAnnualizedVolThreshold`).
 No strategy/engine/metrics changes.
 
+**PR 10O — Calibrated diagnostics rerun snapshot — implemented**
+`docs/calibrated_sharpe_diagnostics_real_data_snapshot.md`: docs-only. Confirms
+PR 10N calibration: SPY/QQQ 1d `low_variance_warning=True`, 60m scenarios
+`low_variance_warning=False`. No src/tests changes.
+
 No parameter optimisation or paper/live progression until diagnostics complete.
 
 ### Phase C — Paper trading execution

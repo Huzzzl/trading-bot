@@ -345,7 +345,7 @@ Docs-only. Records the first operator-run results from the full three-step
 real-data pipeline (yahoo_cache_fetch → cached_data_availability_check →
 cached_real_data_backtest_check). All four scenarios (SPY/QQQ × 1d/60m)
 returned PASS. Captures raw metric values, interpretation, and follow-up
-diagnostic plan (PR 10K: Sharpe diagnostic implemented; PR 10L: Sharpe diagnostics integrated into cached checker implemented; PR 10N: annualized-vol warning threshold calibrated; PR 10M:
+diagnostic plan (PR 10K: Sharpe diagnostic implemented; PR 10L: Sharpe diagnostics integrated into cached checker implemented; PR 10N: annualized-vol warning threshold calibrated; PR 10O: calibrated-diagnostics rerun snapshot; PR 10M:
 default params comparison). No strategy/paper/live approval.
 No `src/`, `tests/`, `config/`, `output/`, `scripts/`, or `data/` changes.
 
@@ -393,6 +393,13 @@ No `src/`, `tests/`, `config/`, `output/`, `scripts/`, or `data/` changes.
   72 total. `cached_real_data_backtest_check.py` unchanged.
 
 **Not in scope:** `metrics.py` changes, strategy changes, paper/live trading.
+
+### PR 10O — Calibrated diagnostics rerun snapshot
+
+**Status: implemented — `docs/calibrated_sharpe_diagnostics_real_data_snapshot.md`**
+
+Docs-only. Records operator rerun confirming PR 10N calibration: SPY/QQQ 1d
+`low_variance_warning=True`, SPY/QQQ 60m `low_variance_warning=False`. No src changes.
 
 ---
 
