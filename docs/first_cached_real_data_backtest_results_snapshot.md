@@ -243,6 +243,18 @@ No strategy, engine, `metrics.py`, or `cached_real_data_backtest_check.py` chang
 
 **Not in scope:** Parameter tuning, paper trading, live trading.
 
+### PR 10O — Calibrated diagnostics rerun snapshot (docs-only)
+
+**Status: implemented — `docs/calibrated_sharpe_diagnostics_real_data_snapshot.md`**
+
+Operator rerun of `cached_real_data_backtest_check` after PR 10N confirmed the
+calibration works: SPY/QQQ 1d now show `low_variance_warning=True`; SPY/QQQ 60m
+remain `low_variance_warning=False`. Performance metrics are unchanged from § 2
+(same cache files, same parameters). No code changes.
+See `docs/calibrated_sharpe_diagnostics_real_data_snapshot.md` for full details.
+
+**Not in scope:** Parameter tuning, paper trading, live trading.
+
 ### PR 10M — Default params comparison
 
 **Problem:** `cached_real_data_backtest_check.py` uses `fast_ema_period=10,

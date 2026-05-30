@@ -2,7 +2,7 @@
 
 Current operational status of the live-readiness gate baseline.
 Last updated: 2026-05-28. Full pre-submit pipeline complete through PR #98.
-Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. PR 10E cache checker (42 tests, 41 tools). PR 10F Yahoo fetch gate design. PR 10G Yahoo fetch tool (43 tests, 42 tools). PR 10H local fetch runbook. PR 10I cached real-data backtest checker (53 tests, 43 tools). PR 10J first real-data results snapshot (docs-only). PR 10K backtest metrics diagnostics (67 tests). PR 10L Sharpe diagnostics in cached checker (61 tests). PR 10N calibrate Sharpe diagnostic low-vol threshold (72 tests). Test baseline: 5 507 passed.
+Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. PR 10E cache checker (42 tests, 41 tools). PR 10F Yahoo fetch gate design. PR 10G Yahoo fetch tool (43 tests, 42 tools). PR 10H local fetch runbook. PR 10I cached real-data backtest checker (53 tests, 43 tools). PR 10J first real-data results snapshot (docs-only). PR 10K backtest metrics diagnostics (67 tests). PR 10L Sharpe diagnostics in cached checker (61 tests). PR 10N calibrate Sharpe diagnostic low-vol threshold (72 tests). PR 10O calibrated-diagnostics rerun snapshot (docs-only). Test baseline: 5 507 passed.
 
 ---
 
@@ -4755,6 +4755,7 @@ does not approve trading. All safety flags remain False.
 - PR 10L: integrate diagnose_sharpe() into cached_real_data_backtest_check output — implemented
 - PR 10M: compare default params (`fast_ema_period=10` in checker vs `20` in strategy defaults)
 - PR 10N: calibrate diagnose_sharpe() low-vol threshold so SPY/QQQ daily tiny-vol cases warn — implemented
+- PR 10O: docs snapshot of calibrated rerun — daily cases now warn, 60m unaffected — implemented
 
 ### Validation
 
@@ -5052,6 +5053,55 @@ python -m pytest                                                # 5 507 passed
 - Strategy, engine, execution layer, `metrics.py`, `cached_real_data_backtest_check.py` unchanged.
 - All test inputs are deterministic synthetic series (fixed seeds). No real market data.
 - No automated trading approved.
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> **Diagnostics do not constitute strategy validation or trading approval.**
+> The Phase A–H safety roadmap remains unchanged and required before any automation.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone — PR 10O: docs-snapshot-calibrated-sharpe-diagnostics
+
+**Date:** 2026-05-30
+**Branch:** `claude/hopeful-cray-56Jfr`
+**Files added:** `docs/calibrated_sharpe_diagnostics_real_data_snapshot.md`
+**Files updated:** `docs/first_cached_real_data_backtest_results_snapshot.md`, `docs/real_data_backtest_gate_design.md`, `docs/automated_strategy_execution_roadmap.md`, `docs/live_readiness_status.md`
+**Type:** Docs-only. No `src/`, `tests/`, `config/`, `output/`, `scripts/`, or `data/` changes.
+
+### What this records
+
+Operator rerun of `cached_real_data_backtest_check` on 2026-05-30 after
+PR 10N calibration, using the same cache files from the PR 10J run.
+
+**Overall:** PASS, 4 scenarios, all safety flags False.
+
+**Per-scenario Sharpe diagnostics:**
+
+| Scenario | Sharpe | Ann_vol | `low_variance_warning` | `sharpe_diagnostic_result` |
+|----------|--------|---------|----------------------|--------------------------|
+| SPY 1d   | −163.3505 | 0.000323 | **true** | PASS |
+| SPY 60m  | −1.6661   | 0.031610 | false | PASS |
+| QQQ 1d   | −134.9166 | 0.000394 | **true** | PASS |
+| QQQ 60m  | −1.1458   | 0.041554 | false | PASS |
+
+**PR 10N calibration confirmed:** daily extreme Sharpe values now correctly show
+`low_variance_warning=True`; hourly scenarios (plausible 3–4% annualized vol)
+remain `low_variance_warning=False`. No gate status changes. No strategy approval.
+
+### Validation
+
+```bash
+git diff origin/main...HEAD -- src tests config output scripts data
+# Expected: empty
+```
+
+No `src/`, `tests/`, `config/`, `output/`, `scripts/`, or `data/` files changed.
+`pytest` not run for docs-only PRs.
 
 ### Warning
 
