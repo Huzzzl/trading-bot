@@ -2,7 +2,7 @@
 
 Current operational status of the live-readiness gate baseline.
 Last updated: 2026-05-28. Full pre-submit pipeline complete through PR #98.
-Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. PR 10E cache checker (42 tests, 41 tools). PR 10F Yahoo fetch gate design. PR 10G Yahoo fetch tool (43 tests, 42 tools). PR 10H local fetch runbook. PR 10I cached real-data backtest checker (53 tests, 43 tools). PR 10J first real-data results snapshot (docs-only). PR 10K backtest metrics diagnostics (67 tests). PR 10L Sharpe diagnostics in cached checker (61 tests). PR 10N calibrate Sharpe diagnostic low-vol threshold (72 tests). PR 10O calibrated-diagnostics rerun snapshot (docs-only). PR 10M TrendFollowing default param comparison (29 tests). Test baseline: 5 536 passed.
+Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. PR 10E cache checker (42 tests, 41 tools). PR 10F Yahoo fetch gate design. PR 10G Yahoo fetch tool (43 tests, 42 tools). PR 10H local fetch runbook. PR 10I cached real-data backtest checker (53 tests, 43 tools). PR 10J first real-data results snapshot (docs-only). PR 10K backtest metrics diagnostics (67 tests). PR 10L Sharpe diagnostics in cached checker (61 tests). PR 10N calibrate Sharpe diagnostic low-vol threshold (72 tests). PR 10O calibrated-diagnostics rerun snapshot (docs-only). PR 10M TrendFollowing default param comparison (29 tests). PR 10P trade summary diagnostics design (docs-only). PR 10Q Trade schema characterization tests (60 tests). Test baseline: 5 596 passed.
 
 ---
 
@@ -5172,6 +5172,65 @@ No `src/`, `tests/`, `config/`, `output/`, `scripts/`, or `data/` files changed.
 > **This milestone does not approve any individual trade.**
 > **No Alpaca endpoint was contacted. No credentials were read.**
 > **Diagnostics do not constitute strategy validation or trading approval.**
+> The Phase A–H safety roadmap remains unchanged and required before any automation.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone — PR 10P: docs-design-trade-summary-diagnostics
+
+**Date:** 2026-05-30
+**Branch:** `claude/hopeful-cray-56Jfr`
+**Files added:** `docs/trade_summary_diagnostics_design.md`
+**Files updated:** `docs/first_cached_real_data_backtest_results_snapshot.md`, `docs/real_data_backtest_gate_design.md`, `docs/automated_strategy_execution_roadmap.md`, `docs/live_readiness_status.md`
+**Type:** Docs-only. No `src/`, `tests/`, `config/`, `output/`, `scripts/`, or `data/` changes.
+
+### What this designs
+
+Trade-level aggregate diagnostic fields for TrendFollowing real-data runs,
+motivated by the high trade counts in the PR 10J results:
+
+| Scenario | Bars  | Trades | Trades / 100 bars |
+|----------|-------|--------|------------------|
+| SPY 1d   | 1 610 | 280    | 17.4 |
+| QQQ 1d   | 1 610 | 266    | 16.5 |
+| SPY 60m  | 3 341 | 197    | 5.9  |
+| QQQ 60m  | 3 341 | 195    | 5.8  |
+
+Designed diagnostics: `trade_count`, `trades_per_100_bars`, `avg_holding_bars`,
+`median/min/max_holding_bars`, `exposure_pct`, `entry/exit_count`,
+`unmatched_entries/exits`, `win_rate_pct`, `avg_trade_return_pct`,
+`avg_win_pct`, `avg_loss_pct`, `profit_factor`, `exit_reason_counts`.
+
+Documents the full `Trade` schema and known `exit_reason` values (`stop_loss`,
+`force_exit`, `session_end`, `end_of_backtest`, `daily_loss_limit`). Notes
+that strategy EXIT signals are currently not acted on by the engine.
+
+### Implementation plan (pending)
+
+| PR | Scope |
+|----|-------|
+| PR 10Q | Trade schema characterization tests |
+| PR 10R | `trade_summary_diagnostics()` helper (`src/backtest/trade_diagnostics.py`) |
+| PR 10S | Integrate aggregate trade diagnostics into `cached_real_data_backtest_check` |
+| PR 10T | Operator rerun snapshot with trade summary diagnostics |
+
+### Validation
+
+```bash
+git diff origin/main...HEAD -- src tests config output scripts data
+# Expected: empty
+```
+
+No `src/`, `tests/`, `config/`, `output/`, `scripts/`, or `data/` files changed.
+`pytest` not run for docs-only PRs.
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> **This design does not constitute parameter optimization or trading approval.**
 > The Phase A–H safety roadmap remains unchanged and required before any automation.
 > Nothing in this repository is financial advice.
 

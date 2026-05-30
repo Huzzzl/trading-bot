@@ -238,6 +238,26 @@ No strategy/engine/metrics changes.
 PR 10N calibration: SPY/QQQ 1d `low_variance_warning=True`, 60m scenarios
 `low_variance_warning=False`. No src/tests changes.
 
+**PR 10P — Trade summary diagnostics design — implemented**
+`docs/trade_summary_diagnostics_design.md`: docs-only. Defines aggregate trade
+diagnostic fields (`trade_count`, `trades_per_100_bars`, `avg_holding_bars`,
+`median/min/max_holding_bars`, `exposure_pct`, `entry/exit_count`,
+`unmatched_entries/exits`, `win_rate`, `avg_trade_return`, `avg_win/loss`,
+`profit_factor`, `exit_reason_counts`). Documents `Trade` schema and known
+`exit_reason` values. Notes strategy EXIT signals not currently acted on by
+engine. Safety constraints for pure/offline helper. Implementation: PR 10Q
+(schema tests), PR 10R (helper), PR 10S (checker integration), PR 10T (snapshot).
+
+**PR 10Q — Trade schema characterization tests — implemented**
+`tests/test_backtest_trade_schema.py`: 60 tests across 5 classes lock in the
+`Trade` schema (symbol, entry_time, exit_time, entry_price, exit_price, shares,
+commission, direction, exit_reason, pnl, meta), the pnl computation in
+`__post_init__`, the exclusion of meta from `to_dict()`, the 5-value exit_reason
+allowlist (`stop_loss`, `force_exit`, `session_end`, `end_of_backtest`,
+`daily_loss_limit`), `BacktestRunResult.trades` as list[Trade], and all safety
+flags. Source scan confirms no forbidden imports in trade.py / backtest_runner.py.
+No strategy, engine, metrics.py, or cached checker changes.
+
 No parameter optimisation or paper/live progression until diagnostics complete.
 
 ### Phase C — Paper trading execution

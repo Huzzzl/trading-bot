@@ -276,6 +276,47 @@ in the current behavior.
 
 **Not in scope:** Parameter optimisation, paper trading, live trading.
 
+### PR 10P — Trade summary diagnostics design
+
+**Status: implemented — `docs/trade_summary_diagnostics_design.md`**
+
+Docs-only design document. Problem: the first real-data run showed high
+trade counts (280 SPY 1d, 266 QQQ 1d, 197 SPY 60m, 195 QQQ 60m) suggesting
+possible whipsawing or stop-loss cycling. Design defines aggregate diagnostic
+fields (`trade_count`, `trades_per_100_bars`, `avg_holding_bars`,
+`median_holding_bars`, `min/max_holding_bars`, `exposure_pct`, `entry_count`,
+`exit_count`, `unmatched_entries/exits`, `win_rate`, `avg_trade_return`,
+`avg_win`, `avg_loss`, `profit_factor`, `exit_reason_counts`), documents
+the existing `Trade` schema and known `exit_reason` values, notes that
+strategy EXIT signals are currently not acted on by the engine (exits only
+via `stop_loss`/`force_exit`/`session_end`/`end_of_backtest`), and specifies
+safety constraints for the diagnostic helper. Implementation plan: PR 10Q
+(trade schema characterization tests), PR 10R (`trade_summary_diagnostics`
+helper), PR 10S (integrate into checker), PR 10T (rerun snapshot). No
+parameter optimization or paper/live approval.
+
+**Not in scope:** Parameter optimisation, paper trading, live trading.
+
+### PR 10Q — Trade schema characterization tests
+
+**Status: implemented — `tests/test_backtest_trade_schema.py`**
+
+Characterizes `Trade` fields and `BacktestRunResult.trades` schema using a
+synthetic fixture (fast_ema_period=5, slow_ema_period=20, n=100 daily bars,
+seed=42 → 13 closed LONG trades with exit_reason='session_end'). Locks in:
+field names and types (symbol, entry_time, exit_time, entry_price, exit_price,
+shares, commission, direction, exit_reason, pnl, meta), that pnl is computed
+in `__post_init__` (not an init parameter), that meta is excluded from
+`to_dict()`, and that all 5 known exit_reason values are in the documented
+allowlist (`stop_loss`, `force_exit`, `session_end`, `end_of_backtest`,
+`daily_loss_limit`). Source scan confirms no forbidden imports in trade.py or
+backtest_runner.py. All safety flags remain False.
+
+60 tests across 5 classes. No strategy, engine, metrics.py, or cached checker
+changes. No parameter optimization or paper/live approval.
+
+**Not in scope:** Parameter optimisation, paper trading, live trading.
+
 ---
 
 ## 5. What These Results Do and Do Not Mean

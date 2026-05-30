@@ -346,7 +346,8 @@ real-data pipeline (yahoo_cache_fetch → cached_data_availability_check →
 cached_real_data_backtest_check). All four scenarios (SPY/QQQ × 1d/60m)
 returned PASS. Captures raw metric values, interpretation, and follow-up
 diagnostic plan (PR 10K: Sharpe diagnostic implemented; PR 10L: Sharpe diagnostics integrated into cached checker implemented; PR 10N: annualized-vol warning threshold calibrated; PR 10O: calibrated-diagnostics rerun snapshot; PR 10M:
-default params comparison). No strategy/paper/live approval.
+default params comparison; PR 10P: trade summary diagnostics design; PR 10Q:
+trade schema characterization tests). No strategy/paper/live approval.
 No `src/`, `tests/`, `config/`, `output/`, `scripts/`, or `data/` changes.
 
 ### PR 10K — Backtest metrics diagnostics
@@ -418,6 +419,41 @@ accepted by `TrendFollowing()` without error.
 
 No parameter optimization performed. No `cached_real_data_backtest_check.py`,
 `metrics.py`, strategy, engine, or execution changes.
+
+**Not in scope:** Parameter optimisation, paper trading, live trading.
+
+### PR 10P — Trade summary diagnostics design
+
+**Status: implemented — `docs/trade_summary_diagnostics_design.md`**
+
+Docs-only design for trade-level aggregate diagnostics. Defines the diagnostic
+fields to be computed from `BacktestRunResult.trades`, documents the full
+`Trade` schema (`symbol`, `entry_time`, `exit_time`, `entry_price`,
+`exit_price`, `shares`, `commission`, `direction`, `exit_reason`, `pnl`,
+`meta`) and known `exit_reason` values (`stop_loss`, `force_exit`,
+`session_end`, `end_of_backtest`, `daily_loss_limit`). Notes that strategy
+EXIT signals are currently not acted on by the engine. Specifies safety
+constraints for the pure/offline `trade_summary_diagnostics()` helper.
+Implementation plan: PR 10Q (schema tests), PR 10R (helper), PR 10S
+(checker integration), PR 10T (snapshot).
+
+**Not in scope:** Parameter optimisation, paper trading, live trading.
+
+### PR 10Q — Trade schema characterization tests
+
+**Status: implemented — `tests/test_backtest_trade_schema.py`**
+
+60 tests across 5 classes (`TestTradeSchema`, `TestToDictKeys`,
+`TestExitReasonValues`, `TestBacktestRunResultTradesField`,
+`TestSafetySourceScan`). Locks in `Trade` field names and types, pnl computed
+in `__post_init__` (not an init param), meta excluded from `to_dict()`, the
+5-value `exit_reason` allowlist, and all `BacktestRunResult` safety flags.
+Synthetic fixture: fast_ema_period=5, slow_ema_period=20, n=100 daily bars,
+seed=42 → 13 closed LONG trades with exit_reason='session_end'. Source scan
+confirms no forbidden imports in trade.py and backtest_runner.py.
+
+No strategy, engine, `metrics.py`, `metrics_diagnostics.py`, or
+`cached_real_data_backtest_check.py` changes.
 
 **Not in scope:** Parameter optimisation, paper trading, live trading.
 
