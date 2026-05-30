@@ -2,7 +2,7 @@
 
 Current operational status of the live-readiness gate baseline.
 Last updated: 2026-05-28. Full pre-submit pipeline complete through PR #98.
-Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. PR 10E cache checker (42 tests, 41 tools). PR 10F Yahoo fetch gate design. PR 10G Yahoo fetch tool (43 tests, 42 tools). PR 10H local fetch runbook. PR 10I cached real-data backtest checker (53 tests, 43 tools). PR 10J first real-data results snapshot (docs-only). PR 10K backtest metrics diagnostics (67 tests). PR 10L Sharpe diagnostics in cached checker (61 tests). PR 10N calibrate Sharpe diagnostic low-vol threshold (72 tests). PR 10O calibrated-diagnostics rerun snapshot (docs-only). Test baseline: 5 507 passed.
+Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. PR 10E cache checker (42 tests, 41 tools). PR 10F Yahoo fetch gate design. PR 10G Yahoo fetch tool (43 tests, 42 tools). PR 10H local fetch runbook. PR 10I cached real-data backtest checker (53 tests, 43 tools). PR 10J first real-data results snapshot (docs-only). PR 10K backtest metrics diagnostics (67 tests). PR 10L Sharpe diagnostics in cached checker (61 tests). PR 10N calibrate Sharpe diagnostic low-vol threshold (72 tests). PR 10O calibrated-diagnostics rerun snapshot (docs-only). PR 10M TrendFollowing default param comparison (29 tests). Test baseline: 5 536 passed.
 
 ---
 
@@ -5060,6 +5060,69 @@ python -m pytest                                                # 5 507 passed
 > **This milestone does not approve any individual trade.**
 > **No Alpaca endpoint was contacted. No credentials were read.**
 > **Diagnostics do not constitute strategy validation or trading approval.**
+> The Phase A–H safety roadmap remains unchanged and required before any automation.
+> Nothing in this repository is financial advice.
+
+---
+
+## Milestone — PR 10M: add-trendfollowing-default-param-comparison
+
+**Date:** 2026-05-30
+**Branch:** `claude/hopeful-cray-56Jfr`
+**Files added:** `tests/test_trendfollowing_param_comparison.py`
+**Files updated:** `docs/first_cached_real_data_backtest_results_snapshot.md`, `docs/real_data_backtest_gate_design.md`, `docs/automated_strategy_execution_roadmap.md`, `docs/live_readiness_status.md`
+**Type:** Tests + docs. No strategy, engine, metrics, checker, execution, broker, or config changes.
+
+### What this records
+
+Characterization and lock-in of the param divergence between `TrendFollowing`
+strategy defaults and `cached_real_data_backtest_check._TREND_PARAMS`.
+
+**Finding:** The checker uses `fast_ema_period=10` (intentional — shorter EMA
+period for broader signal characterization during offline backtest runs);
+the TrendFollowing strategy default remains `fast_ema_period=20`. All other
+params are shared: `slow_ema_period=50, atr_period=14, atr_stop_mult=2.0,
+volatility_lookback=50, breakout_lookback=5`.
+
+The checker uses the correct key names (`fast_ema_period`, `slow_ema_period`),
+not the obsolete `ema_fast`/`ema_slow` keys. Both param sets are accepted by
+`TrendFollowing()` without error.
+
+**No decision to optimize parameters or change either value.**
+A future PR may evaluate parameter policy; this PR only compares and locks
+in the current behavior.
+
+### 29 targeted tests across 5 classes
+
+| Class | Tests | What it verifies |
+|-------|-------|-----------------|
+| `TestStrategyDefaultParams` | 4 | `TrendFollowing()` uses `fast_ema_period=20` by default |
+| `TestCheckerParams` | 6 | `_TREND_PARAMS` has `fast_ema_period=10`; no obsolete keys |
+| `TestSharedDefaults` | 5 | Other 5 params match between checker and strategy defaults |
+| `TestParamDivergence` | 3 | Divergence is intentional and locked (10 vs 20) |
+| `TestSyntheticComparison` | 11 | Both param sets run cleanly; safety flags; determinism |
+
+### Test run
+
+```
+29 targeted tests: 29 passed
+Full suite: 5 536 passed
+```
+
+### Safety invariants confirmed
+
+- No broker/API access — no Alpaca calls, no HTTP, no credentials
+- No order submission. No live or paper trading enabled or changed.
+- Strategy, engine, execution layer, `metrics.py`, `cached_real_data_backtest_check.py` unchanged.
+- All test inputs are deterministic synthetic series (fixed seeds). No real market data.
+- No automated trading approved. No parameter optimization performed.
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> **Param comparison does not constitute parameter optimization or trading approval.**
 > The Phase A–H safety roadmap remains unchanged and required before any automation.
 > Nothing in this repository is financial advice.
 

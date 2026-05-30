@@ -257,15 +257,22 @@ See `docs/calibrated_sharpe_diagnostics_real_data_snapshot.md` for full details.
 
 ### PR 10M — Default params comparison
 
-**Problem:** `cached_real_data_backtest_check.py` uses `fast_ema_period=10,
-slow_ema_period=50` but the TrendFollowing strategy default is
-`fast_ema_period=20, slow_ema_period=50`. The checker uses a non-default
-fast period. This needs to be documented as intentional (aggressive signal
-sensitivity) or aligned to strategy defaults.
+**Status: implemented — `tests/test_trendfollowing_param_comparison.py`**
 
-**Scope:** Document the param choice rationale and optionally align
-`_TREND_PARAMS` in the checker to the strategy defaults.
-No live or paper code changes.
+The checker `_TREND_PARAMS` uses `fast_ema_period=10` intentionally for broader
+signal characterization during offline backtest runs; the TrendFollowing strategy
+default (`TrendFollowing()` with no args) is `fast_ema_period=20`. All other
+params match: `slow_ema_period=50, atr_period=14, atr_stop_mult=2.0,
+volatility_lookback=50, breakout_lookback=5`. The checker uses the correct key
+names (`fast_ema_period`, `slow_ema_period`) — no obsolete `ema_fast`/`ema_slow`
+keys. Both param sets are accepted by `TrendFollowing()` without error.
+
+29 tests across 5 classes (`TestStrategyDefaultParams`, `TestCheckerParams`,
+`TestSharedDefaults`, `TestParamDivergence`, `TestSyntheticComparison`).
+No strategy, engine, `metrics.py`, `cached_real_data_backtest_check.py`,
+execution, broker, or config changes. No parameter optimization performed.
+A future PR may evaluate parameter policy; this PR only compares and locks
+in the current behavior.
 
 **Not in scope:** Parameter optimisation, paper trading, live trading.
 
