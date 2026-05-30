@@ -421,6 +421,23 @@ No parameter optimization performed. No `cached_real_data_backtest_check.py`,
 
 **Not in scope:** Parameter optimisation, paper trading, live trading.
 
+### PR 10P — Trade summary diagnostics design
+
+**Status: implemented — `docs/trade_summary_diagnostics_design.md`**
+
+Docs-only design for trade-level aggregate diagnostics. Defines the diagnostic
+fields to be computed from `BacktestRunResult.trades`, documents the full
+`Trade` schema (`symbol`, `entry_time`, `exit_time`, `entry_price`,
+`exit_price`, `shares`, `commission`, `direction`, `exit_reason`, `pnl`,
+`meta`) and known `exit_reason` values (`stop_loss`, `force_exit`,
+`session_end`, `end_of_backtest`, `daily_loss_limit`). Notes that strategy
+EXIT signals are currently not acted on by the engine. Specifies safety
+constraints for the pure/offline `trade_summary_diagnostics()` helper.
+Implementation plan: PR 10Q (schema tests), PR 10R (helper), PR 10S
+(checker integration), PR 10T (snapshot).
+
+**Not in scope:** Parameter optimisation, paper trading, live trading.
+
 ---
 
 ## 10. Validation for This Docs PR

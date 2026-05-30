@@ -238,6 +238,16 @@ No strategy/engine/metrics changes.
 PR 10N calibration: SPY/QQQ 1d `low_variance_warning=True`, 60m scenarios
 `low_variance_warning=False`. No src/tests changes.
 
+**PR 10P — Trade summary diagnostics design — implemented**
+`docs/trade_summary_diagnostics_design.md`: docs-only. Defines aggregate trade
+diagnostic fields (`trade_count`, `trades_per_100_bars`, `avg_holding_bars`,
+`median/min/max_holding_bars`, `exposure_pct`, `entry/exit_count`,
+`unmatched_entries/exits`, `win_rate`, `avg_trade_return`, `avg_win/loss`,
+`profit_factor`, `exit_reason_counts`). Documents `Trade` schema and known
+`exit_reason` values. Notes strategy EXIT signals not currently acted on by
+engine. Safety constraints for pure/offline helper. Implementation: PR 10Q
+(schema tests), PR 10R (helper), PR 10S (checker integration), PR 10T (snapshot).
+
 No parameter optimisation or paper/live progression until diagnostics complete.
 
 ### Phase C — Paper trading execution
