@@ -117,18 +117,30 @@ def trade_summary_diagnostics(
     if not trades:
         return {"result": "PASS", "blocker": None, **_empty, **_SAFETY}
 
+    def _blocked_return(reason: str) -> dict[str, Any]:
+        """Return a BLOCKED result dict with a safe fixed reason string."""
+        return {
+            "result": "BLOCKED",
+            "blocker": reason,
+            **{k: None for k in _empty},
+            **_SAFETY,
+        }
+
+    # Non-finite numeric fields
     for t in trades:
         for field in _NUMERIC_FIELDS:
             val = float(getattr(t, field))
             if not math.isfinite(val):
-                _blocked: dict[str, Any] = {k: None for k in _empty}
-                _blocked["exit_reason_counts"] = None
-                return {
-                    "result": "BLOCKED",
-                    "blocker": f"non-finite value in trade.{field}",
-                    **_blocked,
-                    **_SAFETY,
-                }
+                return _blocked_return(f"non-finite value in trade.{field}")
+
+    # Structural validity (messages contain no raw trade values)
+    for t in trades:
+        if t.entry_price <= 0.0:
+            return _blocked_return("entry_price must be positive")
+        if t.shares <= 0.0:
+            return _blocked_return("shares must be positive")
+        if t.exit_time < t.entry_time:
+            return _blocked_return("exit_time before entry_time")
 
     n = len(trades)
 

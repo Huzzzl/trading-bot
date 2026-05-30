@@ -325,9 +325,11 @@ changes. No parameter optimization or paper/live approval.
 19 aggregate fields plus 4 safety flags. Pure offline; no raw prices in
 output. Holding-period fields in approximate hours (0.0 for same-bar trades).
 `exposure_pct` = conservative lower bound (1 bar/trade). `profit_factor=None`
-when no strictly-losing trades. BLOCKED on non-finite numeric field.
+when no strictly-losing trades. BLOCKED on non-finite numeric field,
+`entry_price ≤ 0`, `shares ≤ 0`, or `exit_time < entry_time`.
+Same-bar trades valid (holding = 0.0). Blocker strings contain no raw values.
 
-70 tests across 10 test classes. No strategy, engine, metrics.py,
+78 tests across 10+ test classes. No strategy, engine, metrics.py,
 metrics_diagnostics.py, or cached_real_data_backtest_check.py changes.
 Checker integration is PR 10S (pending).
 

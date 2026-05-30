@@ -266,7 +266,9 @@ exposure_pct, entry/exit_count, unmatched_entries/exits, win_rate_pct,
 avg_trade_return_pct, avg_win/loss_pct, profit_factor, exit_reason_counts)
 plus 4 safety flags. BLOCKED on non-finite numeric values; PASS with zeros on
 empty list. Holding-period in approximate hours; exposure = conservative lower
-bound. 70 tests across 10+ classes. No strategy/engine/metrics/checker changes.
+bound. BLOCKED on non-finite numeric field, `entry_price ≤ 0`, `shares ≤ 0`,
+or `exit_time < entry_time`; same-bar trades valid; blocker strings contain
+no raw values. 78 tests across 10+ classes. No strategy/engine/metrics/checker changes.
 
 No parameter optimisation or paper/live progression until diagnostics complete.
 

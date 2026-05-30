@@ -466,7 +466,9 @@ fields plus 4 safety flags. Pure offline. BLOCKED on non-finite numeric
 values; PASS with zeros on empty list. Holding-period fields in approximate
 hours (`(exit_time - entry_time).total_seconds() / 3600`; 0.0 for same-bar
 trades). `exposure_pct` = conservative lower bound (1 bar/trade). No raw
-prices in output. 70 tests across 10+ classes.
+prices in output. BLOCKED on non-finite numeric field, `entry_price ≤ 0`,
+`shares ≤ 0`, or `exit_time < entry_time`; same-bar trades valid; blocker
+strings contain no raw values. 78 tests across 10+ classes.
 
 No strategy, engine, `metrics.py`, `metrics_diagnostics.py`, or
 `cached_real_data_backtest_check.py` changes.

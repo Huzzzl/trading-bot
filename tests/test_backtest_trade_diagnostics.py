@@ -418,6 +418,59 @@ class TestBlockedOnInvalidTrades:
     def test_valid_trade_not_blocked(self) -> None:
         assert _diag([_win()])["result"] == "PASS"
 
+    def test_blocked_shares_zero(self) -> None:
+        t = self._bad_trade({"shares": 0.0})
+        assert _diag([t])["result"] == "BLOCKED"
+
+    def test_blocked_shares_negative(self) -> None:
+        t = self._bad_trade({"shares": -1.0})
+        assert _diag([t])["result"] == "BLOCKED"
+
+    def test_blocked_entry_price_zero(self) -> None:
+        t = self._bad_trade({"entry_price": 0.0})
+        assert _diag([t])["result"] == "BLOCKED"
+
+    def test_blocked_entry_price_negative(self) -> None:
+        t = self._bad_trade({"entry_price": -5.0})
+        assert _diag([t])["result"] == "BLOCKED"
+
+    def test_blocked_exit_time_before_entry_time(self) -> None:
+        t = Trade(
+            symbol="TEST",
+            entry_time=_T1,   # later
+            exit_time=_T0,    # earlier — invalid
+            entry_price=100.0,
+            exit_price=102.0,
+            shares=10.0,
+            commission=0.1,
+            direction="LONG",
+            exit_reason="session_end",
+        )
+        assert _diag([t])["result"] == "BLOCKED"
+
+    def test_same_bar_trade_still_valid(self) -> None:
+        """exit_time == entry_time is valid; holding = 0.0, not BLOCKED."""
+        t = _win(entry_time=_T0, exit_time=_T0)
+        r = _diag([t])
+        assert r["result"] == "PASS"
+        assert r["avg_holding_bars"] == pytest.approx(0.0)
+
+    def test_blocker_message_contains_no_raw_price(self) -> None:
+        """Blocker for entry_price=-5 must not echo '-5' or '5.0'."""
+        t = self._bad_trade({"entry_price": -5.0})
+        r = _diag([t])
+        assert r["result"] == "BLOCKED"
+        assert "-5" not in r["blocker"]
+        assert "5.0" not in r["blocker"]
+
+    def test_blocker_message_contains_no_raw_shares(self) -> None:
+        """Blocker for shares=0 must not echo '0' as a raw value."""
+        t = self._bad_trade({"shares": 0.0})
+        r = _diag([t])
+        assert r["result"] == "BLOCKED"
+        # message should describe the issue generically, not echo the value
+        assert r["blocker"] == "shares must be positive"
+
 
 # ---------------------------------------------------------------------------
 # TestSafetyFlags — all four safety flags False in all code paths

@@ -206,9 +206,12 @@ same-bar trades (entry_time == exit_time) this is 0.0. `exposure_pct` is a
 conservative lower bound: each trade counted as 1 bar (`trade_count /
 total_bars × 100`). `profit_factor = None` when no strictly-losing trades
 (denominator would be 0). Empty `trades` → PASS with zeroes and Nones.
-Non-finite numeric field → BLOCKED.
+Non-finite numeric field → BLOCKED. `entry_price ≤ 0` → BLOCKED.
+`shares ≤ 0` → BLOCKED. `exit_time < entry_time` → BLOCKED.
+Same-bar trades (`exit_time == entry_time`) are valid: holding = 0.0.
+All blocker strings are safe fixed descriptions; no raw trade values echoed.
 
-70 tests across 10 classes (`TestEmptyTrades`, `TestSingleWinningTrade`,
+78 tests across 10+ classes (`TestEmptyTrades`, `TestSingleWinningTrade`,
 `TestSingleLosingTrade`, `TestMixedTrades`, `TestProfitFactor`,
 `TestExitReasonCounts`, `TestTotalBarsParameter`, `TestBlockedOnInvalidTrades`,
 `TestSafetyFlags`, `TestDeterminism`, `TestNoRawDataInOutput`,
