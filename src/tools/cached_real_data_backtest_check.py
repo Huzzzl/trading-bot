@@ -43,6 +43,7 @@ import pandas as pd
 
 from src.backtest.backtest_runner import BacktestRunConfig, run_backtest
 from src.backtest.metrics_diagnostics import diagnose_sharpe
+from src.backtest.trade_diagnostics import trade_summary_diagnostics
 from src.data.base import BaseDataProvider
 from src.tools.cached_data_availability_check import check_cache
 
@@ -326,6 +327,51 @@ def run_check(
             scenario["low_variance_warning"] = bool(diag["low_variance_warning"])
             scenario["annualized_volatility"] = diag["annualized_volatility"]
             scenario["return_points"] = int(diag["return_points"]) if diag.get("return_points") is not None else 0
+
+            # Trade diagnostics — does not affect scenario status or overall result.
+            # Diagnostic BLOCKED means trade statistics are unreliable; it never
+            # causes the scenario itself to be BLOCKED.
+            try:
+                tdiag = trade_summary_diagnostics(result_bt.trades, total_bars=len(df))
+            except Exception:
+                tdiag = {
+                    "result": "BLOCKED",
+                    "blocker": "trade diagnostics raised an exception",
+                    "trades_per_100_bars": None,
+                    "avg_holding_bars": None,
+                    "median_holding_bars": None,
+                    "min_holding_bars": None,
+                    "max_holding_bars": None,
+                    "exposure_pct": None,
+                    "entry_count": None,
+                    "exit_count": None,
+                    "unmatched_entries": None,
+                    "unmatched_exits": None,
+                    "win_rate_pct": None,
+                    "avg_trade_return_pct": None,
+                    "avg_win_pct": None,
+                    "avg_loss_pct": None,
+                    "profit_factor": None,
+                    "exit_reason_counts": None,
+                }
+            scenario["trade_diagnostic_result"] = str(tdiag.get("result", "BLOCKED"))
+            scenario["trade_diagnostic_blocker"] = tdiag.get("blocker")
+            scenario["trades_per_100_bars"] = tdiag.get("trades_per_100_bars")
+            scenario["avg_holding_bars"] = tdiag.get("avg_holding_bars")
+            scenario["median_holding_bars"] = tdiag.get("median_holding_bars")
+            scenario["min_holding_bars"] = tdiag.get("min_holding_bars")
+            scenario["max_holding_bars"] = tdiag.get("max_holding_bars")
+            scenario["exposure_pct"] = tdiag.get("exposure_pct")
+            scenario["entry_count"] = tdiag.get("entry_count")
+            scenario["exit_count"] = tdiag.get("exit_count")
+            scenario["unmatched_entries"] = tdiag.get("unmatched_entries")
+            scenario["unmatched_exits"] = tdiag.get("unmatched_exits")
+            scenario["win_rate_pct"] = tdiag.get("win_rate_pct")
+            scenario["avg_trade_return_pct"] = tdiag.get("avg_trade_return_pct")
+            scenario["avg_win_pct"] = tdiag.get("avg_win_pct")
+            scenario["avg_loss_pct"] = tdiag.get("avg_loss_pct")
+            scenario["profit_factor"] = tdiag.get("profit_factor")
+            scenario["exit_reason_counts"] = tdiag.get("exit_reason_counts")
 
             scenarios.append(scenario)
 

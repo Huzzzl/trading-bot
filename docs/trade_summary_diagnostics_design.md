@@ -216,16 +216,26 @@ All blocker strings are safe fixed descriptions; no raw trade values echoed.
 `TestExitReasonCounts`, `TestTotalBarsParameter`, `TestBlockedOnInvalidTrades`,
 `TestSafetyFlags`, `TestDeterminism`, `TestNoRawDataInOutput`,
 `TestHoldingPeriod`, `TestSafetySourceScan`). No strategy/engine/metrics
-changes. No checker integration yet (PR 10S).
+changes.
 
 ### PR 10S — Integrate trade diagnostics into `cached_real_data_backtest_check`
 
-**Scope:** `src/tools/cached_real_data_backtest_check.py`
+**Status: implemented — `src/tools/cached_real_data_backtest_check.py`**
 
-After each successful `run_backtest()`, call
-`trade_summary_diagnostics(result_bt.trades, df.index, interval)` and append
-the aggregate fields to the scenario dict. No raw trade records in output.
-Diagnostic failure must not block scenario status.
+After each successful `run_backtest()`, calls
+`trade_summary_diagnostics(result_bt.trades, total_bars=len(df))` and appends
+18 per-scenario fields: `trade_diagnostic_result`, `trade_diagnostic_blocker`,
+`trades_per_100_bars`, `avg/median/min/max_holding_bars`, `exposure_pct`,
+`entry_count`, `exit_count`, `unmatched_entries/exits`, `win_rate_pct`,
+`avg_trade_return_pct`, `avg_win/loss_pct`, `profit_factor`,
+`exit_reason_counts`. Diagnostic BLOCKED never blocks scenario status or overall
+result. Exception → safe fallback BLOCKED dict with Nones; scenario unaffected.
+No raw prices or individual trade records in output. `_ALLOWED_SCENARIO_KEYS`
+updated; `test_each_scenario_has_required_keys` updated.
+
+25 new tests across 8 classes (86 total in checker test file). No strategy,
+engine, `metrics.py`, `metrics_diagnostics.py`, or `trade_diagnostics.py`
+changes.
 
 ### PR 10T — Operator rerun snapshot with trade summary diagnostics
 

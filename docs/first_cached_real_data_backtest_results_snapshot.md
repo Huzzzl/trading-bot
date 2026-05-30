@@ -330,8 +330,26 @@ when no strictly-losing trades. BLOCKED on non-finite numeric field,
 Same-bar trades valid (holding = 0.0). Blocker strings contain no raw values.
 
 78 tests across 10+ test classes. No strategy, engine, metrics.py,
-metrics_diagnostics.py, or cached_real_data_backtest_check.py changes.
-Checker integration is PR 10S (pending).
+or metrics_diagnostics.py changes.
+
+**Not in scope:** Parameter optimisation, paper trading, live trading.
+
+### PR 10S — Trade diagnostics in `cached_real_data_backtest_check`
+
+**Status: implemented — `src/tools/cached_real_data_backtest_check.py`**
+
+After each successful `run_backtest()`, calls
+`trade_summary_diagnostics(result_bt.trades, total_bars=len(df))` and appends
+18 per-scenario diagnostic fields: `trade_diagnostic_result`,
+`trade_diagnostic_blocker`, `trades_per_100_bars`, `avg/median/min/max_holding_bars`,
+`exposure_pct`, `entry_count`, `exit_count`, `unmatched_entries/exits`,
+`win_rate_pct`, `avg_trade_return_pct`, `avg_win/loss_pct`, `profit_factor`,
+`exit_reason_counts`. Diagnostic BLOCKED never blocks scenario status. Exception
+in `trade_summary_diagnostics` → safe fallback dict with BLOCKED and Nones;
+scenario status unaffected. No raw prices or trade records in output.
+
+25 new tests across 8 classes (86 total in test file). No strategy, engine,
+`metrics.py`, or `metrics_diagnostics.py` changes.
 
 **Not in scope:** Parameter optimisation, paper trading, live trading.
 
