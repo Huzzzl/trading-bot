@@ -219,9 +219,12 @@ calls `diagnose_sharpe()` and adds 5 per-scenario diagnostic fields
 `annualized_volatility`, `return_points`). Diagnostic BLOCKED does not block
 the scenario. 8 new tests (`TestSharpeDiagnostics`). No strategy/engine/metrics changes.
 
-**PR 10M — Default params comparison**
-Document and resolve checker `fast_ema_period=10` vs strategy default
-`fast_ema_period=20`. Align or justify the non-default value.
+**PR 10M — Default params comparison — implemented**
+`tests/test_trendfollowing_param_comparison.py`: 29 tests lock in the divergence
+between checker `fast_ema_period=10` (intentional — shorter EMA for broader signal
+characterization) and strategy default `fast_ema_period=20`. All other params match.
+Checker uses correct key names; no obsolete `ema_fast`/`ema_slow` keys. Both param
+sets accepted without error. No parameter optimization. No code behavior changes.
 
 **PR 10N — Calibrate Sharpe diagnostic low-vol threshold — implemented**
 `src/backtest/metrics_diagnostics.py`: added `_LOW_ANNUALIZED_VOL_THRESHOLD = 0.001`

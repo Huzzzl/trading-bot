@@ -401,6 +401,26 @@ No `src/`, `tests/`, `config/`, `output/`, `scripts/`, or `data/` changes.
 Docs-only. Records operator rerun confirming PR 10N calibration: SPY/QQQ 1d
 `low_variance_warning=True`, SPY/QQQ 60m `low_variance_warning=False`. No src changes.
 
+### PR 10M — Default params comparison
+
+**Status: implemented — `tests/test_trendfollowing_param_comparison.py`**
+
+**What was added:**
+- `tests/test_trendfollowing_param_comparison.py` — 29 characterization tests
+  across 5 classes locking in the param divergence between the checker and the
+  strategy defaults.
+
+**Finding:** The checker uses `fast_ema_period=10` intentionally for broader signal
+characterization; `TrendFollowing()` with no args defaults to `fast_ema_period=20`.
+All other params are shared. Checker uses correct key names (`fast_ema_period`,
+`slow_ema_period`); no obsolete `ema_fast`/`ema_slow` keys present. Both param sets
+accepted by `TrendFollowing()` without error.
+
+No parameter optimization performed. No `cached_real_data_backtest_check.py`,
+`metrics.py`, strategy, engine, or execution changes.
+
+**Not in scope:** Parameter optimisation, paper trading, live trading.
+
 ---
 
 ## 10. Validation for This Docs PR
