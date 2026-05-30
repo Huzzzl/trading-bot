@@ -457,6 +457,22 @@ No strategy, engine, `metrics.py`, `metrics_diagnostics.py`, or
 
 **Not in scope:** Parameter optimisation, paper trading, live trading.
 
+### PR 10R — `trade_summary_diagnostics` helper
+
+**Status: implemented — `src/backtest/trade_diagnostics.py`**
+
+`trade_summary_diagnostics(trades, *, total_bars=None)` returns 19 aggregate
+fields plus 4 safety flags. Pure offline. BLOCKED on non-finite numeric
+values; PASS with zeros on empty list. Holding-period fields in approximate
+hours (`(exit_time - entry_time).total_seconds() / 3600`; 0.0 for same-bar
+trades). `exposure_pct` = conservative lower bound (1 bar/trade). No raw
+prices in output. 70 tests across 10+ classes.
+
+No strategy, engine, `metrics.py`, `metrics_diagnostics.py`, or
+`cached_real_data_backtest_check.py` changes.
+
+**Not in scope:** Parameter optimisation, paper trading, live trading.
+
 ---
 
 ## 10. Validation for This Docs PR

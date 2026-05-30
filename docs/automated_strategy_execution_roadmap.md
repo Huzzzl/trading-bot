@@ -258,6 +258,16 @@ allowlist (`stop_loss`, `force_exit`, `session_end`, `end_of_backtest`,
 flags. Source scan confirms no forbidden imports in trade.py / backtest_runner.py.
 No strategy, engine, metrics.py, or cached checker changes.
 
+**PR 10R — `trade_summary_diagnostics` helper — implemented**
+`src/backtest/trade_diagnostics.py`: pure offline `trade_summary_diagnostics(
+trades, *, total_bars=None)` returning 19 aggregate fields (result, blocker,
+trade_count, trades_per_100_bars, avg/median/min/max_holding_bars,
+exposure_pct, entry/exit_count, unmatched_entries/exits, win_rate_pct,
+avg_trade_return_pct, avg_win/loss_pct, profit_factor, exit_reason_counts)
+plus 4 safety flags. BLOCKED on non-finite numeric values; PASS with zeros on
+empty list. Holding-period in approximate hours; exposure = conservative lower
+bound. 70 tests across 10+ classes. No strategy/engine/metrics/checker changes.
+
 No parameter optimisation or paper/live progression until diagnostics complete.
 
 ### Phase C — Paper trading execution

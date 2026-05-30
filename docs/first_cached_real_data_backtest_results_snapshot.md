@@ -317,6 +317,22 @@ changes. No parameter optimization or paper/live approval.
 
 **Not in scope:** Parameter optimisation, paper trading, live trading.
 
+### PR 10R — `trade_summary_diagnostics` helper
+
+**Status: implemented — `src/backtest/trade_diagnostics.py`**
+
+`trade_summary_diagnostics(trades, *, total_bars=None) -> dict` returns all
+19 aggregate fields plus 4 safety flags. Pure offline; no raw prices in
+output. Holding-period fields in approximate hours (0.0 for same-bar trades).
+`exposure_pct` = conservative lower bound (1 bar/trade). `profit_factor=None`
+when no strictly-losing trades. BLOCKED on non-finite numeric field.
+
+70 tests across 10 test classes. No strategy, engine, metrics.py,
+metrics_diagnostics.py, or cached_real_data_backtest_check.py changes.
+Checker integration is PR 10S (pending).
+
+**Not in scope:** Parameter optimisation, paper trading, live trading.
+
 ---
 
 ## 5. What These Results Do and Do Not Mean

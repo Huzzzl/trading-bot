@@ -193,11 +193,27 @@ No `src/` changes. No strategy, engine, metrics.py, or cached checker changes.
 
 ### PR 10R — `trade_summary_diagnostics` helper
 
-**Scope:** `src/backtest/trade_diagnostics.py`
+**Status: implemented — `src/backtest/trade_diagnostics.py`**
 
-Add `trade_summary_diagnostics(trades, bars_index, interval)` returning a
-`dict[str, Any]` with the fields defined in § 3. Pure offline function.
-No strategy/engine/metrics changes.
+`trade_summary_diagnostics(trades, *, total_bars=None) -> dict[str, Any]`
+returns all 19 aggregate fields defined in § 3 plus 4 safety flags. Pure
+offline function: no network, no broker, no credentials, no raw prices in
+output.
+
+Holding-period fields (`avg/median/min/max_holding_bars`) are expressed in
+approximate hours (`(exit_time − entry_time).total_seconds() / 3600`); for
+same-bar trades (entry_time == exit_time) this is 0.0. `exposure_pct` is a
+conservative lower bound: each trade counted as 1 bar (`trade_count /
+total_bars × 100`). `profit_factor = None` when no strictly-losing trades
+(denominator would be 0). Empty `trades` → PASS with zeroes and Nones.
+Non-finite numeric field → BLOCKED.
+
+70 tests across 10 classes (`TestEmptyTrades`, `TestSingleWinningTrade`,
+`TestSingleLosingTrade`, `TestMixedTrades`, `TestProfitFactor`,
+`TestExitReasonCounts`, `TestTotalBarsParameter`, `TestBlockedOnInvalidTrades`,
+`TestSafetyFlags`, `TestDeterminism`, `TestNoRawDataInOutput`,
+`TestHoldingPeriod`, `TestSafetySourceScan`). No strategy/engine/metrics
+changes. No checker integration yet (PR 10S).
 
 ### PR 10S — Integrate trade diagnostics into `cached_real_data_backtest_check`
 
