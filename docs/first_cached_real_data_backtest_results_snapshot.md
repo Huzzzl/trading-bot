@@ -297,6 +297,26 @@ parameter optimization or paper/live approval.
 
 **Not in scope:** Parameter optimisation, paper trading, live trading.
 
+### PR 10Q — Trade schema characterization tests
+
+**Status: implemented — `tests/test_backtest_trade_schema.py`**
+
+Characterizes `Trade` fields and `BacktestRunResult.trades` schema using a
+synthetic fixture (fast_ema_period=5, slow_ema_period=20, n=100 daily bars,
+seed=42 → 13 closed LONG trades with exit_reason='session_end'). Locks in:
+field names and types (symbol, entry_time, exit_time, entry_price, exit_price,
+shares, commission, direction, exit_reason, pnl, meta), that pnl is computed
+in `__post_init__` (not an init parameter), that meta is excluded from
+`to_dict()`, and that all 5 known exit_reason values are in the documented
+allowlist (`stop_loss`, `force_exit`, `session_end`, `end_of_backtest`,
+`daily_loss_limit`). Source scan confirms no forbidden imports in trade.py or
+backtest_runner.py. All safety flags remain False.
+
+60 tests across 5 classes. No strategy, engine, metrics.py, or cached checker
+changes. No parameter optimization or paper/live approval.
+
+**Not in scope:** Parameter optimisation, paper trading, live trading.
+
 ---
 
 ## 5. What These Results Do and Do Not Mean

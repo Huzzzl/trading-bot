@@ -176,18 +176,20 @@ all of the following:
 
 ### PR 10Q — Trade schema characterization tests
 
-**Scope:** `tests/test_trade_schema_characterization.py`
+**Status: implemented — `tests/test_backtest_trade_schema.py`**
 
-Inspect `Trade` fields and `BacktestRunResult.trades` schema using existing
-synthetic fixtures. Lock in known field names, types, and exit_reason values.
-No new `src/` files.
+Inspect `Trade` fields and `BacktestRunResult.trades` schema using a synthetic
+fixture (fast_ema_period=5, slow_ema_period=20, atr_period=5, seed=42, n=100
+daily bars → 13 closed LONG trades with exit_reason='session_end').
 
-Test categories:
-- `TestTradeSchema` — field names, types, required presence
-- `TestExitReasonValues` — known exit_reason strings from a synthetic run
-- `TestTradeMatchedPairs` — entry_count == exit_count for completed backtests
-- `TestNoRawPricesInOutput` — trade.to_dict() keys do not leak raw prices to
-  any test assertion
+60 tests across 5 classes:
+- `TestTradeSchema` — field names, types, pnl formula, meta default_factory
+- `TestToDictKeys` — to_dict() exact key set; meta excluded; pnl matches attribute
+- `TestExitReasonValues` — allowlist of 5 exit_reason strings; fixture produces session_end
+- `TestBacktestRunResultTradesField` — trades is list[Trade]; all safety flags; determinism
+- `TestSafetySourceScan` — source scan of trade.py and backtest_runner.py; no forbidden imports
+
+No `src/` changes. No strategy, engine, metrics.py, or cached checker changes.
 
 ### PR 10R — `trade_summary_diagnostics` helper
 

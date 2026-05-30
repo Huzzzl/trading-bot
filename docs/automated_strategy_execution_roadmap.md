@@ -248,6 +248,16 @@ diagnostic fields (`trade_count`, `trades_per_100_bars`, `avg_holding_bars`,
 engine. Safety constraints for pure/offline helper. Implementation: PR 10Q
 (schema tests), PR 10R (helper), PR 10S (checker integration), PR 10T (snapshot).
 
+**PR 10Q — Trade schema characterization tests — implemented**
+`tests/test_backtest_trade_schema.py`: 60 tests across 5 classes lock in the
+`Trade` schema (symbol, entry_time, exit_time, entry_price, exit_price, shares,
+commission, direction, exit_reason, pnl, meta), the pnl computation in
+`__post_init__`, the exclusion of meta from `to_dict()`, the 5-value exit_reason
+allowlist (`stop_loss`, `force_exit`, `session_end`, `end_of_backtest`,
+`daily_loss_limit`), `BacktestRunResult.trades` as list[Trade], and all safety
+flags. Source scan confirms no forbidden imports in trade.py / backtest_runner.py.
+No strategy, engine, metrics.py, or cached checker changes.
+
 No parameter optimisation or paper/live progression until diagnostics complete.
 
 ### Phase C — Paper trading execution
