@@ -250,6 +250,16 @@ plausible holding periods (median 5–6 h, stop_loss exits present). No gate
 status changes. Next diagnostic plan: PR 10U (daily-bar session_end policy
 design), PR 10V (characterization tests), PR 10W (policy decision + fix).
 
+### PR 10U — Daily-bar session-end handling policy design
+
+**Status: implemented — `docs/daily_bar_session_end_policy_design.md`**
+
+Docs-only. Covers four candidate policies and recommends Phase 1 (Policy C:
+block `bar_interval=1d` + `force_exit_time` as invalid config) then Phase 2
+(Policy A: disable `session_end`/`force_exit` checks in engine for daily bars).
+Documents acceptance criteria, safety implications, and next PR chain
+(PR 10V → 10W → 10X).
+
 ---
 
 ## 6. What This Design Does and Does Not Authorise

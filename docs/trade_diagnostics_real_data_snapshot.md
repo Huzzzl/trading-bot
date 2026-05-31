@@ -232,19 +232,17 @@ a policy decision made before any further evaluation of 1d backtest results.
 
 ### PR 10U — Daily-bar session-end handling policy design
 
-**Scope:** `docs/daily_bar_session_end_policy.md` (new, docs-only)
+**Status: implemented — `docs/daily_bar_session_end_policy_design.md`**
 
-Design document defining the options for how the backtest engine should handle
-positions opened on daily bars:
+Design document covering four candidate policies (A: disable intraday
+session_end/force_exit for daily bars; B: next-bar semantics; C: block daily
+backtests when force_exit_time is configured; D: annotate results as invalid).
+Recommended policy: Phase 1 — Policy C block guard (block 1d + force_exit_time
+as invalid config); Phase 2 — Policy A disable (skip session_end/force_exit
+checks for daily bars in engine). Acceptance criteria, next PRs, and safety
+implications documented.
 
-1. **Current behavior (status quo):** `session_end` closes the position at the
-   next bar's open, recording `exit_time == entry_time` for midnight timestamps.
-2. **Session-close semantics:** treat daily bars as closing at 16:00 Eastern;
-   positions held past 15:55 exit via `force_exit` rather than `session_end`.
-3. **Disable intraday session_end for daily bars:** skip the `session_end` check
-   when the bar interval is `1d`, allowing positions to carry across sessions.
-
-No behavior change in this PR. Policy selected in PR 10W after characterization.
+No behavior change in this docs PR.
 
 ### PR 10V — Daily-bar and force_exit/session_end characterization tests
 
@@ -255,12 +253,21 @@ Characterizes how the backtest engine processes daily bars: confirms
 midnight daily timestamps (since `00:00 < 15:55`), and locks in current
 behavior before any change.
 
-### PR 10W — Policy decision and daily-bar fix (if applicable)
+### PR 10W — Implement chosen policy (block guard + disable)
 
-**Scope:** TBD after PR 10V results reviewed.
+**Scope:** `src/backtest/`, `src/tools/cached_real_data_backtest_check.py`,
+`tests/` (new and updated)
 
-May modify `src/backtest/engine.py` or `src/backtest/risk_manager.py` to
-implement the selected policy. Requires its own PR with tests and a rerun snapshot.
+Phase 1: add validation guard blocking `bar_interval=1d` with `force_exit_time`
+set. Phase 2: disable `session_end`/`force_exit` checks in engine for daily bars.
+Requires its own PR with tests confirming 60m behavior preserved.
+
+### PR 10X — Rerun snapshot after PR 10W
+
+**Scope:** `docs/daily_bar_policy_rerun_snapshot.md` (new, docs-only)
+
+Operator rerun of `cached_real_data_backtest_check` after PR 10W confirms
+daily 1d results are either valid or clearly BLOCKED. No metrics until then.
 
 ---
 

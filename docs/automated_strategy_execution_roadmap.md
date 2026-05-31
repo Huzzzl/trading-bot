@@ -293,6 +293,16 @@ and extreme Sharpe on daily scenarios. 60m scenarios have plausible structure
 gate status changes. Next: PR 10U (daily-bar session_end policy design),
 PR 10V (characterization tests), PR 10W (policy decision + fix).
 
+**PR 10U — daily-bar session_end policy design — implemented**
+`docs/daily_bar_session_end_policy_design.md`: docs-only. Four candidate policies
+evaluated (A: disable intraday logic for daily bars; B: next-bar semantics;
+C: block 1d + force_exit_time as invalid config; D: annotate results invalid).
+Recommended: Phase 1 — Policy C block guard in `run_backtest()` or config
+validation (no engine change, fail-closed, operator forced to choose); Phase 2 —
+Policy A disable `session_end`/`force_exit` checks in engine for daily bars.
+Acceptance criteria, safety implications, and PR chain (10V → 10W → 10X)
+documented.
+
 No parameter optimisation or paper/live progression until diagnostics complete.
 
 ### Phase C — Paper trading execution

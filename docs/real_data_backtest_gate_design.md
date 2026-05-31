@@ -509,6 +509,18 @@ session_end policy review.
 
 **Not in scope:** Parameter optimisation, paper trading, live trading.
 
+### PR 10U — Daily-bar session-end handling policy design
+
+**Status: implemented — `docs/daily_bar_session_end_policy_design.md`**
+
+Docs-only. Defines four candidate policies (A: disable intraday logic for daily
+bars; B: next-bar semantics; C: block 1d + force_exit_time; D: annotate
+invalid). Recommended: Phase 1 — Policy C block guard; Phase 2 — Policy A
+engine disable. Documents acceptance criteria, PR chain (10V → 10W → 10X), and
+safety implications. No `src/` changes.
+
+**Not in scope:** Parameter optimisation, paper trading, live trading.
+
 ---
 
 ## 10. Validation for This Docs PR
