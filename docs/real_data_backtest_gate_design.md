@@ -521,6 +521,20 @@ safety implications. No `src/` changes.
 
 **Not in scope:** Parameter optimisation, paper trading, live trading.
 
+### PR 10V — Daily-bar session_end / force_exit characterization tests
+
+**Status: implemented — `tests/test_daily_bar_session_end_behavior.py`**
+
+Characterization tests (62 tests, 10 classes) locking in current daily-bar
+session_end / force_exit behavior before any policy change (PR 10W).
+Covers: daily bar midnight timestamps; force_exit never fires (`"00:00" <
+"15:55"` string comparison); session_end dominates daily trades; same-bar exit
+artifact (`entry_time == exit_time`, `holding = 0.0`); 60m intraday timestamps;
+60m session_end only at day boundaries; 60m non-zero holding; 1d vs 60m
+structural contrast; safety flags; source scan. No `src/` changes.
+
+**Not in scope:** Parameter optimisation, paper trading, live trading.
+
 ---
 
 ## 10. Validation for This Docs PR

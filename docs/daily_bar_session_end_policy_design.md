@@ -296,7 +296,7 @@ All of the following must hold after PR 10W merges:
 
 | PR | Scope | Status |
 |----|-------|--------|
-| PR 10V | Characterization tests for current daily-bar session_end behavior | Pending |
+| PR 10V | Characterization tests for current daily-bar session_end behavior | **Implemented** |
 | PR 10W | Implement chosen policy (Phase 1: block guard; Phase 2: disable) | Pending |
 | PR 10X | Rerun `cached_real_data_backtest_check` after PR 10W; record snapshot | Pending |
 
