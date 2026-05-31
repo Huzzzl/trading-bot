@@ -239,12 +239,16 @@ changes.
 
 ### PR 10T — Operator rerun snapshot with trade summary diagnostics
 
-**Scope:** `docs/trade_summary_diagnostics_real_data_snapshot.md` (new)
+**Status: implemented — `docs/trade_diagnostics_real_data_snapshot.md`**
 
-Docs-only. Record operator rerun after PR 10S is on `main`, capturing the
-per-scenario trade diagnostics. Includes exit_reason breakdown confirming
-whether `stop_loss` or `force_exit` dominates, and whether holding periods
-suggest whipsawing.
+Docs-only. Operator rerun of `cached_real_data_backtest_check` after PR 10S
+confirmed the trade diagnostics integration works end-to-end. All four scenarios
+returned `trade_diagnostic_result=PASS`. Key findings: daily 1d scenarios are
+dominated by same-bar `session_end` exits (`avg_holding_bars=0.0`), which
+explains the 0% win rate and extreme Sharpe values. 60m scenarios have
+plausible holding periods (median 5–6 h, stop_loss exits present). No gate
+status changes. Next diagnostic plan: PR 10U (daily-bar session_end policy
+design), PR 10V (characterization tests), PR 10W (policy decision + fix).
 
 ---
 

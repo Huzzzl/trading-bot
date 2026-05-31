@@ -281,6 +281,18 @@ total_bars=len(df))` and appends 18 fields per scenario (`trade_diagnostic_resul
 Exception → safe fallback BLOCKED with Nones. No raw prices/trade records in output.
 25 new tests (86 total in checker test file). No strategy/engine/metrics changes.
 
+**PR 10T — trade diagnostics real-data snapshot — implemented**
+`docs/trade_diagnostics_real_data_snapshot.md`: docs-only. Operator rerun of
+`cached_real_data_backtest_check` confirmed PR 10S integration works end-to-end.
+All 4 scenarios returned `trade_diagnostic_result=PASS`. Key finding: daily 1d
+scenarios show `avg_holding_bars=0.0` with 279/280 (SPY) and 265/266 (QQQ)
+`session_end` exits — same-bar exit artifact from daily bar timestamps at
+midnight, which precede the 15:55 force-exit guard. This explains 0% win rate
+and extreme Sharpe on daily scenarios. 60m scenarios have plausible structure
+(median hold 5–6 h, stop_loss exits present, profit_factor ≈ 0.97–1.01). No
+gate status changes. Next: PR 10U (daily-bar session_end policy design),
+PR 10V (characterization tests), PR 10W (policy decision + fix).
+
 No parameter optimisation or paper/live progression until diagnostics complete.
 
 ### Phase C — Paper trading execution

@@ -353,6 +353,21 @@ scenario status unaffected. No raw prices or trade records in output.
 
 **Not in scope:** Parameter optimisation, paper trading, live trading.
 
+### PR 10T — Trade diagnostics real-data snapshot
+
+**Status: implemented — `docs/trade_diagnostics_real_data_snapshot.md`**
+
+Docs-only. Operator rerun of `cached_real_data_backtest_check` after PR 10S
+confirmed the integration works end-to-end: all four scenarios returned
+`trade_diagnostic_result=PASS`. Key finding: daily 1d scenarios are dominated
+by same-bar `session_end` exits (`avg_holding_bars=0.0` for both SPY 1d and
+QQQ 1d), explaining the 0% win rate and extreme negative Sharpe. 60m scenarios
+have plausible structure (median hold 5–6 h, stop_loss exits present). No gate
+status changes. Next: PR 10U/10V/10W to diagnose and resolve daily-bar
+session_end handling.
+
+**Not in scope:** Parameter optimisation, paper trading, live trading.
+
 ---
 
 ## 5. What These Results Do and Do Not Mean

@@ -494,6 +494,21 @@ changes.
 
 **Not in scope:** Parameter optimisation, paper trading, live trading.
 
+### PR 10T — Trade diagnostics real-data snapshot
+
+**Status: implemented — `docs/trade_diagnostics_real_data_snapshot.md`**
+
+Docs-only. Operator rerun of `cached_real_data_backtest_check` after PR 10S.
+All 4 scenarios returned `trade_diagnostic_result=PASS`. Key finding: daily 1d
+scenarios show `avg_holding_bars=0.0` with ≥ 99% `session_end` exits — a
+same-bar exit artifact from daily bar timestamps at midnight (`00:00 < 15:55`
+force-exit guard). This explains 0% win rate and extreme Sharpe in 1d scenarios.
+60m scenarios have plausible structure (median hold 5–6 h, stop_loss exits
+present). No gate status changes. Next: PR 10U/10V/10W for daily-bar
+session_end policy review.
+
+**Not in scope:** Parameter optimisation, paper trading, live trading.
+
 ---
 
 ## 10. Validation for This Docs PR
