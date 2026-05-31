@@ -193,20 +193,49 @@ No `src/` changes. No strategy, engine, metrics.py, or cached checker changes.
 
 ### PR 10R — `trade_summary_diagnostics` helper
 
-**Scope:** `src/backtest/trade_diagnostics.py`
+**Status: implemented — `src/backtest/trade_diagnostics.py`**
 
-Add `trade_summary_diagnostics(trades, bars_index, interval)` returning a
-`dict[str, Any]` with the fields defined in § 3. Pure offline function.
-No strategy/engine/metrics changes.
+`trade_summary_diagnostics(trades, *, total_bars=None) -> dict[str, Any]`
+returns all 19 aggregate fields defined in § 3 plus 4 safety flags. Pure
+offline function: no network, no broker, no credentials, no raw prices in
+output.
+
+Holding-period fields (`avg/median/min/max_holding_bars`) are expressed in
+approximate hours (`(exit_time − entry_time).total_seconds() / 3600`); for
+same-bar trades (entry_time == exit_time) this is 0.0. `exposure_pct` is a
+conservative lower bound: each trade counted as 1 bar (`trade_count /
+total_bars × 100`). `profit_factor = None` when no strictly-losing trades
+(denominator would be 0). Empty `trades` → PASS with zeroes and Nones.
+Non-finite numeric field → BLOCKED. `entry_price ≤ 0` → BLOCKED.
+`shares ≤ 0` → BLOCKED. `exit_time < entry_time` → BLOCKED.
+Same-bar trades (`exit_time == entry_time`) are valid: holding = 0.0.
+All blocker strings are safe fixed descriptions; no raw trade values echoed.
+
+78 tests across 10+ classes (`TestEmptyTrades`, `TestSingleWinningTrade`,
+`TestSingleLosingTrade`, `TestMixedTrades`, `TestProfitFactor`,
+`TestExitReasonCounts`, `TestTotalBarsParameter`, `TestBlockedOnInvalidTrades`,
+`TestSafetyFlags`, `TestDeterminism`, `TestNoRawDataInOutput`,
+`TestHoldingPeriod`, `TestSafetySourceScan`). No strategy/engine/metrics
+changes.
 
 ### PR 10S — Integrate trade diagnostics into `cached_real_data_backtest_check`
 
-**Scope:** `src/tools/cached_real_data_backtest_check.py`
+**Status: implemented — `src/tools/cached_real_data_backtest_check.py`**
 
-After each successful `run_backtest()`, call
-`trade_summary_diagnostics(result_bt.trades, df.index, interval)` and append
-the aggregate fields to the scenario dict. No raw trade records in output.
-Diagnostic failure must not block scenario status.
+After each successful `run_backtest()`, calls
+`trade_summary_diagnostics(result_bt.trades, total_bars=len(df))` and appends
+18 per-scenario fields: `trade_diagnostic_result`, `trade_diagnostic_blocker`,
+`trades_per_100_bars`, `avg/median/min/max_holding_bars`, `exposure_pct`,
+`entry_count`, `exit_count`, `unmatched_entries/exits`, `win_rate_pct`,
+`avg_trade_return_pct`, `avg_win/loss_pct`, `profit_factor`,
+`exit_reason_counts`. Diagnostic BLOCKED never blocks scenario status or overall
+result. Exception → safe fallback BLOCKED dict with Nones; scenario unaffected.
+No raw prices or individual trade records in output. `_ALLOWED_SCENARIO_KEYS`
+updated; `test_each_scenario_has_required_keys` updated.
+
+25 new tests across 8 classes (86 total in checker test file). No strategy,
+engine, `metrics.py`, `metrics_diagnostics.py`, or `trade_diagnostics.py`
+changes.
 
 ### PR 10T — Operator rerun snapshot with trade summary diagnostics
 

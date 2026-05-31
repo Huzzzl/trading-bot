@@ -258,6 +258,29 @@ allowlist (`stop_loss`, `force_exit`, `session_end`, `end_of_backtest`,
 flags. Source scan confirms no forbidden imports in trade.py / backtest_runner.py.
 No strategy, engine, metrics.py, or cached checker changes.
 
+**PR 10R — `trade_summary_diagnostics` helper — implemented**
+`src/backtest/trade_diagnostics.py`: pure offline `trade_summary_diagnostics(
+trades, *, total_bars=None)` returning 19 aggregate fields (result, blocker,
+trade_count, trades_per_100_bars, avg/median/min/max_holding_bars,
+exposure_pct, entry/exit_count, unmatched_entries/exits, win_rate_pct,
+avg_trade_return_pct, avg_win/loss_pct, profit_factor, exit_reason_counts)
+plus 4 safety flags. BLOCKED on non-finite numeric values; PASS with zeros on
+empty list. Holding-period in approximate hours; exposure = conservative lower
+bound. BLOCKED on non-finite numeric field, `entry_price ≤ 0`, `shares ≤ 0`,
+or `exit_time < entry_time`; same-bar trades valid; blocker strings contain
+no raw values. 78 tests across 10+ classes. No strategy/engine/metrics/checker changes.
+
+**PR 10S — trade diagnostics in cached checker — implemented**
+`src/tools/cached_real_data_backtest_check.py`: after each successful
+`run_backtest()`, calls `trade_summary_diagnostics(result_bt.trades,
+total_bars=len(df))` and appends 18 fields per scenario (`trade_diagnostic_result`,
+`trade_diagnostic_blocker`, `trades_per_100_bars`, `avg/median/min/max_holding_bars`,
+`exposure_pct`, `entry/exit_count`, `unmatched_entries/exits`, `win_rate_pct`,
+`avg_trade_return_pct`, `avg_win/loss_pct`, `profit_factor`,
+`exit_reason_counts`). Diagnostic BLOCKED never blocks scenario or overall result.
+Exception → safe fallback BLOCKED with Nones. No raw prices/trade records in output.
+25 new tests (86 total in checker test file). No strategy/engine/metrics changes.
+
 No parameter optimisation or paper/live progression until diagnostics complete.
 
 ### Phase C — Paper trading execution

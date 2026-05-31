@@ -53,6 +53,25 @@ _ALLOWED_SCENARIO_KEYS = frozenset({
     "low_variance_warning",
     "annualized_volatility",
     "return_points",
+    # Trade diagnostic fields (PR 10S)
+    "trade_diagnostic_result",
+    "trade_diagnostic_blocker",
+    "trades_per_100_bars",
+    "avg_holding_bars",
+    "median_holding_bars",
+    "min_holding_bars",
+    "max_holding_bars",
+    "exposure_pct",
+    "entry_count",
+    "exit_count",
+    "unmatched_entries",
+    "unmatched_exits",
+    "win_rate_pct",
+    "avg_trade_return_pct",
+    "avg_win_pct",
+    "avg_loss_pct",
+    "profit_factor",
+    "exit_reason_counts",
 })
 
 _FORBIDDEN_OHLCV_KEYS = frozenset({"open", "high", "low", "close", "volume"})
@@ -175,6 +194,12 @@ class TestValidCache:
             "max_drawdown_pct", "sharpe_ratio", "num_trades",
             "sharpe_diagnostic_result", "zero_std_detected",
             "low_variance_warning", "annualized_volatility", "return_points",
+            "trade_diagnostic_result", "trade_diagnostic_blocker",
+            "trades_per_100_bars", "avg_holding_bars", "median_holding_bars",
+            "min_holding_bars", "max_holding_bars", "exposure_pct",
+            "entry_count", "exit_count", "unmatched_entries", "unmatched_exits",
+            "win_rate_pct", "avg_trade_return_pct", "avg_win_pct", "avg_loss_pct",
+            "profit_factor", "exit_reason_counts",
         }
         for s in result["scenarios"]:
             assert required_keys.issubset(s.keys()), f"Missing keys in scenario: {s}"
@@ -743,4 +768,338 @@ class TestSharpeDiagnostics:
                     val = s[key]
                     assert not isinstance(val, (list, pd.DataFrame, pd.Series)), (
                         f"Scenario field {key!r} contains a sequence/DataFrame: {type(val)}"
+                    )
+
+
+# ---------------------------------------------------------------------------
+# Trade diagnostic helpers
+# ---------------------------------------------------------------------------
+
+_TRADE_DIAGNOSTIC_KEYS = frozenset({
+    "trade_diagnostic_result",
+    "trade_diagnostic_blocker",
+    "trades_per_100_bars",
+    "avg_holding_bars",
+    "median_holding_bars",
+    "min_holding_bars",
+    "max_holding_bars",
+    "exposure_pct",
+    "entry_count",
+    "exit_count",
+    "unmatched_entries",
+    "unmatched_exits",
+    "win_rate_pct",
+    "avg_trade_return_pct",
+    "avg_win_pct",
+    "avg_loss_pct",
+    "profit_factor",
+    "exit_reason_counts",
+})
+
+
+# ---------------------------------------------------------------------------
+# TestTradeDiagnosticsPresent — all 18 fields in every OK scenario (PR 10S)
+# ---------------------------------------------------------------------------
+
+
+class TestTradeDiagnosticsPresent:
+    """All 18 trade diagnostic fields are present in every OK scenario."""
+
+    def test_all_trade_diagnostic_fields_in_ok_scenario(self, tmp_path: pathlib.Path) -> None:
+        _write_all_four_fixtures(tmp_path)
+        result = run_check(cache_dir=tmp_path)
+        assert result["result"] == "PASS"
+        for s in result["scenarios"]:
+            if s["status"] == "OK":
+                missing = _TRADE_DIAGNOSTIC_KEYS - set(s.keys())
+                assert not missing, (
+                    f"Missing trade diagnostic keys in {s['symbol']}/{s['interval']}: {missing}"
+                )
+
+    def test_trade_diagnostic_result_present(self, tmp_path: pathlib.Path) -> None:
+        _write_fixture(tmp_path, "SPY", "1d", n=80)
+        result = run_check(cache_dir=tmp_path, symbols=["SPY"], intervals=["1d"])
+        s = result["scenarios"][0]
+        assert "trade_diagnostic_result" in s
+
+    def test_trade_diagnostic_blocker_present(self, tmp_path: pathlib.Path) -> None:
+        _write_fixture(tmp_path, "SPY", "1d", n=80)
+        result = run_check(cache_dir=tmp_path, symbols=["SPY"], intervals=["1d"])
+        s = result["scenarios"][0]
+        assert "trade_diagnostic_blocker" in s
+
+
+# ---------------------------------------------------------------------------
+# TestTradeDiagnosticResult — value constraints on numeric fields (PR 10S)
+# ---------------------------------------------------------------------------
+
+
+class TestTradeDiagnosticResult:
+    """Value constraints on trade diagnostic fields."""
+
+    def test_trade_diagnostic_result_is_pass_or_blocked(self, tmp_path: pathlib.Path) -> None:
+        _write_all_four_fixtures(tmp_path)
+        result = run_check(cache_dir=tmp_path)
+        for s in result["scenarios"]:
+            if s["status"] == "OK":
+                assert s["trade_diagnostic_result"] in ("PASS", "BLOCKED"), (
+                    f"Unexpected trade_diagnostic_result: {s['trade_diagnostic_result']}"
+                )
+
+    def test_trades_per_100_bars_nonnegative_when_not_none(self, tmp_path: pathlib.Path) -> None:
+        _write_all_four_fixtures(tmp_path)
+        result = run_check(cache_dir=tmp_path)
+        for s in result["scenarios"]:
+            if s["status"] == "OK" and s["trades_per_100_bars"] is not None:
+                assert s["trades_per_100_bars"] >= 0.0
+
+    def test_entry_count_nonnegative_when_not_none(self, tmp_path: pathlib.Path) -> None:
+        _write_all_four_fixtures(tmp_path)
+        result = run_check(cache_dir=tmp_path)
+        for s in result["scenarios"]:
+            if s["status"] == "OK" and s["entry_count"] is not None:
+                assert s["entry_count"] >= 0
+
+    def test_exit_count_nonnegative_when_not_none(self, tmp_path: pathlib.Path) -> None:
+        _write_all_four_fixtures(tmp_path)
+        result = run_check(cache_dir=tmp_path)
+        for s in result["scenarios"]:
+            if s["status"] == "OK" and s["exit_count"] is not None:
+                assert s["exit_count"] >= 0
+
+    def test_exposure_pct_in_range_when_not_none(self, tmp_path: pathlib.Path) -> None:
+        _write_all_four_fixtures(tmp_path)
+        result = run_check(cache_dir=tmp_path)
+        for s in result["scenarios"]:
+            if s["status"] == "OK" and s["exposure_pct"] is not None:
+                assert 0.0 <= s["exposure_pct"] <= 100.0
+
+
+# ---------------------------------------------------------------------------
+# TestTradeDiagnosticBlockedDoesNotBlockScenario (PR 10S)
+# ---------------------------------------------------------------------------
+
+
+class TestTradeDiagnosticBlockedDoesNotBlockScenario:
+    """BLOCKED trade diagnostic never blocks scenario or overall result."""
+
+    def test_blocked_diag_does_not_block_scenario(self, tmp_path: pathlib.Path) -> None:
+        _write_fixture(tmp_path, "SPY", "1d", n=80)
+        blocked_tdiag = {
+            "result": "BLOCKED",
+            "blocker": "synthetic block for test",
+            "trades_per_100_bars": None,
+            "avg_holding_bars": None,
+            "median_holding_bars": None,
+            "min_holding_bars": None,
+            "max_holding_bars": None,
+            "exposure_pct": None,
+            "entry_count": None,
+            "exit_count": None,
+            "unmatched_entries": None,
+            "unmatched_exits": None,
+            "win_rate_pct": None,
+            "avg_trade_return_pct": None,
+            "avg_win_pct": None,
+            "avg_loss_pct": None,
+            "profit_factor": None,
+            "exit_reason_counts": None,
+        }
+        with patch(
+            "src.tools.cached_real_data_backtest_check.trade_summary_diagnostics",
+            return_value=blocked_tdiag,
+        ):
+            result = run_check(cache_dir=tmp_path, symbols=["SPY"], intervals=["1d"])
+        s = result["scenarios"][0]
+        assert s["status"] == "OK"
+        assert s["trade_diagnostic_result"] == "BLOCKED"
+
+    def test_blocked_diag_does_not_block_overall_result(self, tmp_path: pathlib.Path) -> None:
+        _write_fixture(tmp_path, "SPY", "1d", n=80)
+        blocked_tdiag = {
+            "result": "BLOCKED",
+            "blocker": "synthetic block for test",
+            **{k: None for k in _TRADE_DIAGNOSTIC_KEYS - {"trade_diagnostic_result", "trade_diagnostic_blocker"}},
+        }
+        with patch(
+            "src.tools.cached_real_data_backtest_check.trade_summary_diagnostics",
+            return_value=blocked_tdiag,
+        ):
+            result = run_check(cache_dir=tmp_path, symbols=["SPY"], intervals=["1d"])
+        assert result["result"] == "PASS"
+
+
+# ---------------------------------------------------------------------------
+# TestTradeDiagnosticExceptionSafety (PR 10S)
+# ---------------------------------------------------------------------------
+
+
+class TestTradeDiagnosticExceptionSafety:
+    """Exception in trade_summary_diagnostics does not crash scenario."""
+
+    def test_exception_scenario_still_ok(self, tmp_path: pathlib.Path) -> None:
+        _write_fixture(tmp_path, "SPY", "1d", n=80)
+        with patch(
+            "src.tools.cached_real_data_backtest_check.trade_summary_diagnostics",
+            side_effect=RuntimeError("synthetic exception"),
+        ):
+            result = run_check(cache_dir=tmp_path, symbols=["SPY"], intervals=["1d"])
+        s = result["scenarios"][0]
+        assert s["status"] == "OK"
+
+    def test_exception_all_trade_fields_present(self, tmp_path: pathlib.Path) -> None:
+        _write_fixture(tmp_path, "SPY", "1d", n=80)
+        with patch(
+            "src.tools.cached_real_data_backtest_check.trade_summary_diagnostics",
+            side_effect=RuntimeError("synthetic exception"),
+        ):
+            result = run_check(cache_dir=tmp_path, symbols=["SPY"], intervals=["1d"])
+        s = result["scenarios"][0]
+        missing = _TRADE_DIAGNOSTIC_KEYS - set(s.keys())
+        assert not missing, f"Missing keys after exception: {missing}"
+
+    def test_exception_trade_diagnostic_result_is_blocked(self, tmp_path: pathlib.Path) -> None:
+        _write_fixture(tmp_path, "SPY", "1d", n=80)
+        with patch(
+            "src.tools.cached_real_data_backtest_check.trade_summary_diagnostics",
+            side_effect=RuntimeError("synthetic exception"),
+        ):
+            result = run_check(cache_dir=tmp_path, symbols=["SPY"], intervals=["1d"])
+        s = result["scenarios"][0]
+        assert s["trade_diagnostic_result"] == "BLOCKED"
+
+
+# ---------------------------------------------------------------------------
+# TestTradeDiagnosticFieldTypes (PR 10S)
+# ---------------------------------------------------------------------------
+
+
+class TestTradeDiagnosticFieldTypes:
+    """Field type constraints for trade diagnostic fields."""
+
+    def test_trade_diagnostic_result_is_str(self, tmp_path: pathlib.Path) -> None:
+        _write_all_four_fixtures(tmp_path)
+        result = run_check(cache_dir=tmp_path)
+        for s in result["scenarios"]:
+            if s["status"] == "OK":
+                assert isinstance(s["trade_diagnostic_result"], str)
+
+    def test_exit_reason_counts_is_dict_or_none(self, tmp_path: pathlib.Path) -> None:
+        _write_all_four_fixtures(tmp_path)
+        result = run_check(cache_dir=tmp_path)
+        for s in result["scenarios"]:
+            if s["status"] == "OK":
+                val = s["exit_reason_counts"]
+                assert val is None or isinstance(val, dict), (
+                    f"exit_reason_counts should be dict or None, got {type(val)}"
+                )
+
+    def test_win_rate_in_range_when_not_none(self, tmp_path: pathlib.Path) -> None:
+        _write_all_four_fixtures(tmp_path)
+        result = run_check(cache_dir=tmp_path)
+        for s in result["scenarios"]:
+            if s["status"] == "OK" and s["win_rate_pct"] is not None:
+                assert 0.0 <= s["win_rate_pct"] <= 100.0, (
+                    f"win_rate_pct out of range: {s['win_rate_pct']}"
+                )
+
+
+# ---------------------------------------------------------------------------
+# TestTradeDiagnosticNoRawPrices (PR 10S)
+# ---------------------------------------------------------------------------
+
+
+class TestTradeDiagnosticNoRawPrices:
+    """Trade diagnostic fields must not expose raw prices or individual trade records."""
+
+    def test_no_entry_price_in_scenario(self, tmp_path: pathlib.Path) -> None:
+        _write_all_four_fixtures(tmp_path)
+        result = run_check(cache_dir=tmp_path)
+        for s in result["scenarios"]:
+            assert "entry_price" not in s
+
+    def test_no_exit_price_in_scenario(self, tmp_path: pathlib.Path) -> None:
+        _write_all_four_fixtures(tmp_path)
+        result = run_check(cache_dir=tmp_path)
+        for s in result["scenarios"]:
+            assert "exit_price" not in s
+
+    def test_no_raw_trade_records_in_output(self, tmp_path: pathlib.Path) -> None:
+        _write_all_four_fixtures(tmp_path)
+        result = run_check(cache_dir=tmp_path)
+        assert "trades" not in result
+        for s in result["scenarios"]:
+            assert "trades" not in s
+
+
+# ---------------------------------------------------------------------------
+# TestTradeDiagnosticEmptyTrades — flat fixture → no trades (PR 10S)
+# ---------------------------------------------------------------------------
+
+
+class TestTradeDiagnosticEmptyTrades:
+    """Flat OHLCV produces no trades; diagnostic reports PASS with zero counts."""
+
+    def test_flat_fixture_trade_diagnostic_pass(self, tmp_path: pathlib.Path) -> None:
+        _write_flat_fixture(tmp_path, "SPY", "1d", n=80)
+        result = run_check(cache_dir=tmp_path, symbols=["SPY"], intervals=["1d"])
+        assert result["result"] == "PASS"
+        s = result["scenarios"][0]
+        assert s["status"] == "OK"
+        assert s["trade_diagnostic_result"] == "PASS"
+
+    def test_flat_fixture_entry_count_zero(self, tmp_path: pathlib.Path) -> None:
+        _write_flat_fixture(tmp_path, "SPY", "1d", n=80)
+        result = run_check(cache_dir=tmp_path, symbols=["SPY"], intervals=["1d"])
+        s = result["scenarios"][0]
+        assert s["entry_count"] == 0
+
+    def test_flat_fixture_exit_reason_counts_empty(self, tmp_path: pathlib.Path) -> None:
+        _write_flat_fixture(tmp_path, "SPY", "1d", n=80)
+        result = run_check(cache_dir=tmp_path, symbols=["SPY"], intervals=["1d"])
+        s = result["scenarios"][0]
+        assert s["exit_reason_counts"] == {}
+
+
+# ---------------------------------------------------------------------------
+# TestTradeDiagnosticExitReasonCounts (PR 10S)
+# ---------------------------------------------------------------------------
+
+_KNOWN_EXIT_REASONS = frozenset({
+    "stop_loss", "force_exit", "session_end", "end_of_backtest", "daily_loss_limit",
+})
+
+
+class TestTradeDiagnosticExitReasonCounts:
+    """exit_reason_counts is a dict with known reason keys and positive int values."""
+
+    def test_exit_reason_counts_is_dict_when_trades_exist(self, tmp_path: pathlib.Path) -> None:
+        _write_all_four_fixtures(tmp_path)
+        result = run_check(cache_dir=tmp_path)
+        for s in result["scenarios"]:
+            if s["status"] == "OK" and s["trade_diagnostic_result"] == "PASS":
+                val = s["exit_reason_counts"]
+                assert isinstance(val, dict), f"exit_reason_counts should be dict: {type(val)}"
+
+    def test_exit_reason_counts_values_are_positive_ints(self, tmp_path: pathlib.Path) -> None:
+        _write_all_four_fixtures(tmp_path)
+        result = run_check(cache_dir=tmp_path)
+        for s in result["scenarios"]:
+            if s["status"] == "OK" and s["trade_diagnostic_result"] == "PASS":
+                counts = s["exit_reason_counts"]
+                if counts:
+                    for reason, count in counts.items():
+                        assert isinstance(count, int) and count >= 1, (
+                            f"exit_reason_counts[{reason!r}] = {count!r} is not a positive int"
+                        )
+
+    def test_exit_reason_sum_equals_entry_count(self, tmp_path: pathlib.Path) -> None:
+        _write_all_four_fixtures(tmp_path)
+        result = run_check(cache_dir=tmp_path)
+        for s in result["scenarios"]:
+            if s["status"] == "OK" and s["trade_diagnostic_result"] == "PASS":
+                counts = s["exit_reason_counts"]
+                if counts and s["entry_count"] is not None:
+                    assert sum(counts.values()) == s["entry_count"], (
+                        f"exit_reason sum {sum(counts.values())} != entry_count {s['entry_count']}"
                     )

@@ -457,6 +457,43 @@ No strategy, engine, `metrics.py`, `metrics_diagnostics.py`, or
 
 **Not in scope:** Parameter optimisation, paper trading, live trading.
 
+### PR 10R — `trade_summary_diagnostics` helper
+
+**Status: implemented — `src/backtest/trade_diagnostics.py`**
+
+`trade_summary_diagnostics(trades, *, total_bars=None)` returns 19 aggregate
+fields plus 4 safety flags. Pure offline. BLOCKED on non-finite numeric
+values; PASS with zeros on empty list. Holding-period fields in approximate
+hours (`(exit_time - entry_time).total_seconds() / 3600`; 0.0 for same-bar
+trades). `exposure_pct` = conservative lower bound (1 bar/trade). No raw
+prices in output. BLOCKED on non-finite numeric field, `entry_price ≤ 0`,
+`shares ≤ 0`, or `exit_time < entry_time`; same-bar trades valid; blocker
+strings contain no raw values. 78 tests across 10+ classes.
+
+No strategy, engine, `metrics.py`, or `metrics_diagnostics.py` changes.
+
+**Not in scope:** Parameter optimisation, paper trading, live trading.
+
+### PR 10S — Trade diagnostics in `cached_real_data_backtest_check`
+
+**Status: implemented — `src/tools/cached_real_data_backtest_check.py`**
+
+After each successful `run_backtest()`, calls
+`trade_summary_diagnostics(result_bt.trades, total_bars=len(df))` and appends
+18 per-scenario fields: `trade_diagnostic_result`, `trade_diagnostic_blocker`,
+`trades_per_100_bars`, `avg/median/min/max_holding_bars`, `exposure_pct`,
+`entry_count`, `exit_count`, `unmatched_entries/exits`, `win_rate_pct`,
+`avg_trade_return_pct`, `avg_win/loss_pct`, `profit_factor`,
+`exit_reason_counts`. Diagnostic BLOCKED never blocks scenario or overall result.
+Exception → safe fallback BLOCKED dict with Nones; scenario status unaffected.
+No raw prices or individual trade records in output.
+
+25 new tests across 8 classes (86 total in checker test file). No strategy,
+engine, `metrics.py`, `metrics_diagnostics.py`, or `trade_diagnostics.py`
+changes.
+
+**Not in scope:** Parameter optimisation, paper trading, live trading.
+
 ---
 
 ## 10. Validation for This Docs PR
