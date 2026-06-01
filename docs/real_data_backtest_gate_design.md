@@ -583,6 +583,19 @@ PR chain (10Z, 11A, 11B). No `src/` changes.
 
 **Not in scope:** Parameter optimisation, paper trading, live trading.
 
+### PR 10Z — 60m-only cached checker runbook
+
+**Status: implemented — `docs/real_data_60m_only_cached_checker_runbook.md`**
+
+Docs-only. Step-by-step operator runbook for running `cached_real_data_backtest_check`
+restricted to 60m intervals. Covers: pre-check availability, checker command,
+expected `result=PASS`, fields to inspect, bash and PowerShell print commands
+for overall status / scenario metrics / Sharpe diagnostics / trade diagnostics,
+interpretation rules, failure handling table, and known baseline values from
+PR 10T/10X. No `src/` changes.
+
+**Not in scope:** Parameter optimisation, paper trading, live trading.
+
 ---
 
 ## 10. Validation for This Docs PR

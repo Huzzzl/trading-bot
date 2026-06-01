@@ -174,7 +174,7 @@ scope).
 | PR | Scope | Status |
 |----|-------|--------|
 | PR 10Y | This design — 60m-only evaluation scope | **This PR** |
-| PR 10Z | 60m-only checker command wrapper or docs runbook, if needed | Pending |
+| PR 10Z | 60m-only checker command wrapper or docs runbook, if needed | **Implemented** |
 | PR 11A | 60m metrics threshold design (statistical gates, not trading) | Pending |
 | PR 11B | 60m out-of-sample / walk-forward design | Pending |
 | Phase 2 | Policy A: disable `session_end`/`force_exit` for daily bars in `BacktestEngine` | Pending (separate track) |

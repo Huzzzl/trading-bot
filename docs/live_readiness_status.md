@@ -2,7 +2,7 @@
 
 Current operational status of the live-readiness gate baseline.
 Last updated: 2026-06-01. Full pre-submit pipeline complete through PR #98.
-Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. PR 10E cache checker (42 tests, 41 tools). PR 10F Yahoo fetch gate design. PR 10G Yahoo fetch tool (43 tests, 42 tools). PR 10H local fetch runbook. PR 10I cached real-data backtest checker (53 tests, 43 tools). PR 10J first real-data results snapshot (docs-only). PR 10K backtest metrics diagnostics (67 tests). PR 10L Sharpe diagnostics in cached checker (61 tests). PR 10N calibrate Sharpe diagnostic low-vol threshold (72 tests). PR 10O calibrated-diagnostics rerun snapshot (docs-only). PR 10M TrendFollowing default param comparison (29 tests). PR 10P trade summary diagnostics design (docs-only). PR 10Q Trade schema characterization tests (60 tests). PR 10R trade_summary_diagnostics helper (78 tests). PR 10S trade diagnostics in cached checker (86 tests). PR 10T trade diagnostics real-data snapshot (docs-only). PR 10U daily-bar session_end policy design (docs-only). PR 10V daily-bar session_end characterization tests (62 tests). PR 10W Phase 1 daily-bar guard (5 780 tests). PR 10X post-Phase-1 snapshot (docs-only). PR 10Y 60m-only evaluation scope design (docs-only). Test baseline: 5 780 passed.
+Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. PR 10E cache checker (42 tests, 41 tools). PR 10F Yahoo fetch gate design. PR 10G Yahoo fetch tool (43 tests, 42 tools). PR 10H local fetch runbook. PR 10I cached real-data backtest checker (53 tests, 43 tools). PR 10J first real-data results snapshot (docs-only). PR 10K backtest metrics diagnostics (67 tests). PR 10L Sharpe diagnostics in cached checker (61 tests). PR 10N calibrate Sharpe diagnostic low-vol threshold (72 tests). PR 10O calibrated-diagnostics rerun snapshot (docs-only). PR 10M TrendFollowing default param comparison (29 tests). PR 10P trade summary diagnostics design (docs-only). PR 10Q Trade schema characterization tests (60 tests). PR 10R trade_summary_diagnostics helper (78 tests). PR 10S trade diagnostics in cached checker (86 tests). PR 10T trade diagnostics real-data snapshot (docs-only). PR 10U daily-bar session_end policy design (docs-only). PR 10V daily-bar session_end characterization tests (62 tests). PR 10W Phase 1 daily-bar guard (5 780 tests). PR 10X post-Phase-1 snapshot (docs-only). PR 10Y 60m-only evaluation scope design (docs-only). PR 10Z 60m-only cached checker runbook (docs-only). Test baseline: 5 780 passed.
 
 ---
 
@@ -5275,6 +5275,44 @@ Operator rerun confirms Phase 1 works as intended:
 - Phase 2 / Policy A (disable `session_end`/`force_exit` for daily bars in
   `BacktestEngine`) is pending a future PR.
 - No parameter optimisation. No paper trading approval. No live trading approval.
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> **Nothing in this repository is financial advice.**
+
+---
+
+## Milestone: PR 10Z — 60m-Only Cached Checker Runbook — Implemented
+
+**PR:** 10Z (docs-only)
+**File added:** `docs/real_data_60m_only_cached_checker_runbook.md`
+**Test baseline unchanged:** 5 780 passed
+
+### What was added
+
+Step-by-step operator runbook for running `cached_real_data_backtest_check`
+restricted to `--intervals 60m`. Key sections:
+
+1. **Pre-check**: `cached_data_availability_check --intervals 60m` — confirm
+   cache files exist before running the backtest checker
+2. **Checker command**: `cached_real_data_backtest_check --intervals 60m
+   --output output/cached_real_data_backtest_check_60m_only.json`
+3. **Expected result**: `result=PASS`, `scenarios_run=2`, all safety flags `False`
+4. **Inspect commands**: bash and PowerShell one-liners to print overall status,
+   per-scenario metrics, Sharpe diagnostics, and trade diagnostics
+5. **Interpretation rules**: PASS ≠ trading approval; metrics are backtest-only;
+   daily 1d deferred; no parameter optimization
+6. **Failure handling table**: missing cache, BLOCKED scenario, safety flag
+   true, accidentally staged files
+7. **Baseline reference**: known values from PR 10T/10X for determinism check
+
+### What is NOT approved
+
+- No parameter optimisation. No paper trading approval. No live trading approval.
+- 60m PASS means diagnostics ran; not a strategy or performance approval.
 
 ### Warning
 
