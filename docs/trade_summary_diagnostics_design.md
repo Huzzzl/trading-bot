@@ -270,7 +270,7 @@ updated to `str | None`; `None` bypasses the guard via sentinel `"23:59"` but
 does NOT fix session_end behavior — daily 1d metrics remain not valid for
 strategy performance until Phase 2 / Policy A. Checker unchanged; its 1d
 scenarios (still using `force_exit_time="15:55"`) return `BLOCKED`.
-All 5 779 tests pass.
+All 5 780 tests pass.
 
 ---
 

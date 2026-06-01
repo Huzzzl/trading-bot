@@ -272,7 +272,7 @@ remain not valid for strategy performance until Phase 2 / Policy A.
 `cached_real_data_backtest_check.py` unchanged; its 1d scenarios (still using
 `force_exit_time="15:55"`) return `BLOCKED`. Three additional test files updated
 because their synthetic 1d configs used `force_exit_time="15:55"`.
-All 5 779 tests pass.
+All 5 780 tests pass.
 
 Phase 2 (deferred): disable `session_end`/`force_exit` checks in engine for daily
 bars. Requires its own PR with tests confirming 60m behavior preserved.

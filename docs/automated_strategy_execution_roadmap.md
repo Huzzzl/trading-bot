@@ -327,7 +327,7 @@ return `BLOCKED`. Also updated: `test_backtest_trade_schema.py`,
 (each had a synthetic 1d config with `force_exit_time="15:55"`; changed to `None`).
 14 new guard tests in `test_backtest_runner.py`, 6 in
 `test_daily_bar_session_end_behavior.py` (including one confirming artifact remains).
-All 5 779 tests pass. Phase 2 (Policy A engine disable) deferred to a later PR.
+All 5 780 tests pass. Phase 2 (Policy A engine disable) deferred to a later PR.
 
 No parameter optimisation or paper/live progression until diagnostics complete.
 

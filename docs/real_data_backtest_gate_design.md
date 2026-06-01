@@ -553,7 +553,7 @@ Three additional test files updated because their synthetic 1d configs used
 `force_exit_time="15:55"`; changed to `None` to satisfy the new guard.
 14 guard tests in `test_backtest_runner.py`, 6 in
 `test_daily_bar_session_end_behavior.py` (including a test confirming the
-session_end artifact persists with `force_exit_time=None`). All 5 779 tests pass.
+session_end artifact persists with `force_exit_time=None`). All 5 780 tests pass.
 Phase 2 (Policy A engine disable) deferred to a later PR.
 
 **Not in scope:** Parameter optimisation, paper trading, live trading.
