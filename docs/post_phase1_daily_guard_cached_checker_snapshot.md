@@ -184,7 +184,10 @@ scenarios are now `BLOCKED` instead of `OK` with degenerate output.
 |----|-------|--------|
 | PR 10W | Phase 1 Policy C block guard | **Implemented** |
 | PR 10X | This snapshot — post-Phase-1 checker rerun | **Implemented** |
-| Phase 2 | Policy A: disable session_end / force_exit for daily bars in engine | Pending |
+| PR 10Y | 60m-only evaluation scope design | **Implemented** |
+| PR 10Z | 60m-only checker command wrapper or docs runbook | Pending |
+| PR 11A | 60m metrics threshold design | Pending |
+| Phase 2 | Policy A: disable session_end / force_exit for daily bars in engine | Pending (separate track) |
 
 ---
 

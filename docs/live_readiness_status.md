@@ -2,7 +2,7 @@
 
 Current operational status of the live-readiness gate baseline.
 Last updated: 2026-06-01. Full pre-submit pipeline complete through PR #98.
-Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. PR 10E cache checker (42 tests, 41 tools). PR 10F Yahoo fetch gate design. PR 10G Yahoo fetch tool (43 tests, 42 tools). PR 10H local fetch runbook. PR 10I cached real-data backtest checker (53 tests, 43 tools). PR 10J first real-data results snapshot (docs-only). PR 10K backtest metrics diagnostics (67 tests). PR 10L Sharpe diagnostics in cached checker (61 tests). PR 10N calibrate Sharpe diagnostic low-vol threshold (72 tests). PR 10O calibrated-diagnostics rerun snapshot (docs-only). PR 10M TrendFollowing default param comparison (29 tests). PR 10P trade summary diagnostics design (docs-only). PR 10Q Trade schema characterization tests (60 tests). PR 10R trade_summary_diagnostics helper (78 tests). PR 10S trade diagnostics in cached checker (86 tests). PR 10T trade diagnostics real-data snapshot (docs-only). PR 10U daily-bar session_end policy design (docs-only). PR 10V daily-bar session_end characterization tests (62 tests). PR 10W Phase 1 daily-bar guard (5 780 tests). PR 10X post-Phase-1 snapshot (docs-only). Test baseline: 5 780 passed.
+Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. PR 10E cache checker (42 tests, 41 tools). PR 10F Yahoo fetch gate design. PR 10G Yahoo fetch tool (43 tests, 42 tools). PR 10H local fetch runbook. PR 10I cached real-data backtest checker (53 tests, 43 tools). PR 10J first real-data results snapshot (docs-only). PR 10K backtest metrics diagnostics (67 tests). PR 10L Sharpe diagnostics in cached checker (61 tests). PR 10N calibrate Sharpe diagnostic low-vol threshold (72 tests). PR 10O calibrated-diagnostics rerun snapshot (docs-only). PR 10M TrendFollowing default param comparison (29 tests). PR 10P trade summary diagnostics design (docs-only). PR 10Q Trade schema characterization tests (60 tests). PR 10R trade_summary_diagnostics helper (78 tests). PR 10S trade diagnostics in cached checker (86 tests). PR 10T trade diagnostics real-data snapshot (docs-only). PR 10U daily-bar session_end policy design (docs-only). PR 10V daily-bar session_end characterization tests (62 tests). PR 10W Phase 1 daily-bar guard (5 780 tests). PR 10X post-Phase-1 snapshot (docs-only). PR 10Y 60m-only evaluation scope design (docs-only). Test baseline: 5 780 passed.
 
 ---
 
@@ -5283,3 +5283,44 @@ Operator rerun confirms Phase 1 works as intended:
 > **No Alpaca endpoint was contacted. No credentials were read.**
 > **Nothing in this repository is financial advice.**
 
+---
+
+## Milestone: PR 10Y — 60m-Only Evaluation Scope — Implemented
+
+**PR:** 10Y (docs-only)
+**File added:** `docs/real_data_60m_only_evaluation_scope_design.md`
+**Test baseline unchanged:** 5 780 passed
+
+### What was defined
+
+**Authorized evaluation scope:** SPY/QQQ 60m only. Daily 1d excluded until
+Phase 2 / Policy A resolves the `BacktestEngine.session_end` same-bar artifact.
+
+**Metrics authorized for evaluation:**
+`total_return_pct`, `max_drawdown_pct`, `sharpe_ratio` (with diagnostic check),
+`num_trades`, `trades_per_100_bars`, `win_rate_pct`, `profit_factor`,
+`avg_trade_return_pct`, `avg_win_pct`, `avg_loss_pct`, `exit_reason_counts`,
+`exposure_pct`, `trade_diagnostic_result`
+
+**Acceptance gates (diagnostic only, not trading):**
+`availability_check_result=PASS`, all 60m `status=OK`,
+`trade_diagnostic_result=PASS`, safety flags all `False`, no raw data committed
+
+**Future PR chain:**
+- PR 10Z: 60m-only checker command wrapper or docs runbook (if needed)
+- PR 11A: 60m metrics threshold design (statistical gates, not trading)
+- PR 11B: 60m out-of-sample / walk-forward design
+- Phase 2 / Policy A: engine fix for daily bars (separate track)
+
+### What is NOT approved
+
+- No parameter optimisation. No paper trading approval. No live trading approval.
+- 60m metrics are backtest-only; they are not performance forecasts.
+- Daily 1d evaluation deferred until Phase 2 / Policy A.
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> **Nothing in this repository is financial advice.**

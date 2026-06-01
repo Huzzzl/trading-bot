@@ -336,6 +336,16 @@ rerun after PR 10W Phase 1 confirms guard works as intended. Overall result:
 QQQ/60m: `OK`, unchanged from PR 10T (197 and 195 trades respectively). Daily
 1d remains not valid for strategy performance until Phase 2 / Policy A.
 
+**PR 10Y — 60m-only evaluation scope design — implemented**
+`docs/real_data_60m_only_evaluation_scope_design.md`: docs-only. Defines the
+authorized short-term evaluation scope after PR 10X: SPY/QQQ 60m only while
+daily 1d remains BLOCKED. Documents metrics to evaluate (`total_return_pct`,
+`max_drawdown_pct`, `sharpe_ratio`, `win_rate_pct`, `profit_factor`,
+`exit_reason_counts`, `exposure_pct`, trade diagnostic fields), interpretation
+constraints (backtest-only, no performance forecasts), acceptance gates for
+diagnostic outputs, and future PR chain (10Z, 11A, 11B, Phase 2 separate track).
+No parameter optimisation, no paper/live approval.
+
 No parameter optimisation or paper/live progression until diagnostics complete.
 
 ### Phase C — Paper trading execution
