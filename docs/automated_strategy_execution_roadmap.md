@@ -355,6 +355,24 @@ metrics / Sharpe diagnostics / trade diagnostics, interpretation rules
 (PASS ≠ trading approval, metrics are backtest-only), failure handling table,
 baseline values from PR 10T/10X. No `src/` changes.
 
+**— 10-series runbook chain complete. No further 10-series runbook PRs. —**
+
+### Phase R — Codebase simplification and automated-runtime alignment
+
+The 10-series diagnostic chain (10U–10Z) is closed. The next work block is
+Phase R: simplify the codebase toward the automated bot target by archiving
+manual-only tools, extracting embedded execution paths, and building the
+automated state machine skeleton.
+
+**PR R1 — Codebase inventory and deletion plan — implemented**
+`docs/automated_bot_codebase_inventory_deletion_plan.md`: docs-only. Classifies
+all `src/` modules and tools into `KEEP_RUNTIME`, `KEEP_RESEARCH`,
+`CONVERT_TO_RUNTIME`, `ARCHIVE_MANUAL`, `DELETE_CANDIDATE`, `FREEZE_DEFERRED`.
+Identifies `src/main.py` paper execution / close paths as `CONVERT_TO_RUNTIME`.
+Identifies ~17 manual-only tools in `src/tools/` as `ARCHIVE_MANUAL` or
+`DELETE_CANDIDATE`. Defines Phase R PR chain (R2–R6) and Phase A2 automated
+skeleton PRs (A2-1, A2-2, A2-3). Includes direction guard.
+
 No parameter optimisation or paper/live progression until diagnostics complete.
 
 ### Phase C — Paper trading execution

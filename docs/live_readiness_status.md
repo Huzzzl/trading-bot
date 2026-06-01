@@ -2,7 +2,7 @@
 
 Current operational status of the live-readiness gate baseline.
 Last updated: 2026-06-01. Full pre-submit pipeline complete through PR #98.
-Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. PR 10E cache checker (42 tests, 41 tools). PR 10F Yahoo fetch gate design. PR 10G Yahoo fetch tool (43 tests, 42 tools). PR 10H local fetch runbook. PR 10I cached real-data backtest checker (53 tests, 43 tools). PR 10J first real-data results snapshot (docs-only). PR 10K backtest metrics diagnostics (67 tests). PR 10L Sharpe diagnostics in cached checker (61 tests). PR 10N calibrate Sharpe diagnostic low-vol threshold (72 tests). PR 10O calibrated-diagnostics rerun snapshot (docs-only). PR 10M TrendFollowing default param comparison (29 tests). PR 10P trade summary diagnostics design (docs-only). PR 10Q Trade schema characterization tests (60 tests). PR 10R trade_summary_diagnostics helper (78 tests). PR 10S trade diagnostics in cached checker (86 tests). PR 10T trade diagnostics real-data snapshot (docs-only). PR 10U daily-bar session_end policy design (docs-only). PR 10V daily-bar session_end characterization tests (62 tests). PR 10W Phase 1 daily-bar guard (5 780 tests). PR 10X post-Phase-1 snapshot (docs-only). PR 10Y 60m-only evaluation scope design (docs-only). PR 10Z 60m-only cached checker runbook (docs-only). Test baseline: 5 780 passed.
+Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. PR 10E cache checker (42 tests, 41 tools). PR 10F Yahoo fetch gate design. PR 10G Yahoo fetch tool (43 tests, 42 tools). PR 10H local fetch runbook. PR 10I cached real-data backtest checker (53 tests, 43 tools). PR 10J first real-data results snapshot (docs-only). PR 10K backtest metrics diagnostics (67 tests). PR 10L Sharpe diagnostics in cached checker (61 tests). PR 10N calibrate Sharpe diagnostic low-vol threshold (72 tests). PR 10O calibrated-diagnostics rerun snapshot (docs-only). PR 10M TrendFollowing default param comparison (29 tests). PR 10P trade summary diagnostics design (docs-only). PR 10Q Trade schema characterization tests (60 tests). PR 10R trade_summary_diagnostics helper (78 tests). PR 10S trade diagnostics in cached checker (86 tests). PR 10T trade diagnostics real-data snapshot (docs-only). PR 10U daily-bar session_end policy design (docs-only). PR 10V daily-bar session_end characterization tests (62 tests). PR 10W Phase 1 daily-bar guard (5 780 tests). PR 10X post-Phase-1 snapshot (docs-only). PR 10Y 60m-only evaluation scope design (docs-only). PR 10Z 60m-only cached checker runbook (docs-only). PR R1 codebase inventory and deletion plan (docs-only). Test baseline: 5 780 passed.
 
 ---
 
@@ -5355,6 +5355,63 @@ Phase 2 / Policy A resolves the `BacktestEngine.session_end` same-bar artifact.
 - No parameter optimisation. No paper trading approval. No live trading approval.
 - 60m metrics are backtest-only; they are not performance forecasts.
 - Daily 1d evaluation deferred until Phase 2 / Policy A.
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> **Nothing in this repository is financial advice.**
+
+---
+
+## Milestone: PR R1 — Codebase Inventory and Deletion Plan — Implemented
+
+**PR:** R1 (docs-only) — direction reset; closes 10-series runbook chain
+**File added:** `docs/automated_bot_codebase_inventory_deletion_plan.md`
+**Test baseline unchanged:** 5 780 passed
+
+### Direction reset
+
+The 10-series diagnostic runbook chain (10U–10Z) is complete. The primary
+objective is now a **fully automated online trading bot** with staged rollout:
+offline validation → automated paper state machine → paper forward observation
+→ limited live automation.
+
+Manual checklist / manual submit / docs snapshot work must stop unless directly
+required by runtime automation.
+
+### Classification summary
+
+All `src/` modules classified into six labels:
+
+| Label | Count / scope |
+|-------|--------------|
+| `KEEP_RUNTIME` | `src/execution/*`, `src/risk/*`, core live tools |
+| `KEEP_RESEARCH` | `src/backtest/`, `src/strategy/`, `src/indicators/`, `src/data/`, `src/analysis/`, `src/experiments/`, `src/portfolio/`, cached tools |
+| `CONVERT_TO_RUNTIME` | Paper execution path and close path in `src/main.py`; `paper_pre_submit_check.py` logic |
+| `ARCHIVE_MANUAL` | ~12 manual-only tools (single submit, operator checklists, paper smoke check) |
+| `DELETE_CANDIDATE` | ~7 v2-era review tools (pending dependency scan) |
+| `FREEZE_DEFERRED` | ~16 live tools (valid but not wired to runtime yet); Phase 2 daily fix; PR 11A/11B |
+
+### Next PR chain (Phase R + A2)
+
+| PR | Scope |
+|----|-------|
+| R2 | Update tool inventory tests: `ACTIVE_TOOLS` vs `ARCHIVED_TOOLS` |
+| R3 | Archive old snapshot docs into `docs/archive/snapshots/` |
+| R4 | Archive / delete manual-only tools after dependency scan |
+| R5 | Extract paper execution path → `src/execution/paper_runner.py` |
+| R6 | Extract paper close path → `src/execution/paper_close_runner.py` |
+| A2-1 | Automated state machine skeleton |
+| A2-2 | Automated risk gate skeleton |
+| A2-3 | Order lifecycle manager skeleton |
+
+### Direction guard (enforced from this PR forward)
+
+Before any future PR: does it move toward automated runtime, reduce
+manual-only complexity, or improve 60m strategy validation? If it is another
+manual safety/runbook loop, do not proceed without explicit approval.
 
 ### Warning
 
