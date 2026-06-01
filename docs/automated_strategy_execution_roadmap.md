@@ -373,6 +373,19 @@ Identifies ~17 manual-only tools in `src/tools/` as `ARCHIVE_MANUAL` or
 `DELETE_CANDIDATE`. Defines Phase R PR chain (R2–R6) and Phase A2 automated
 skeleton PRs (A2-1, A2-2, A2-3). Includes direction guard.
 
+**PR R2 — Refactor tool inventory: active vs. archive classification — implemented**
+`tests/test_tools_inventory.py` rewritten (384 tests). Replaces old 4-group
+constant model with a 5-group cleanup-aware model:
+`ACTIVE_RESEARCH_TOOLS` (3) + `ACTIVE_RUNTIME_CANDIDATE_TOOLS` (15) +
+`ARCHIVE_MANUAL_TOOLS` (14) + `DELETE_CANDIDATE_TOOLS` (10) +
+`PRESERVE_RUNTIME_SUPPORT_TOOLS` (1) = `ALL_TOOLS` (43).
+`ACTIVE_TOOLS` = 19 (research + runtime candidates + preserve).
+`main()` requirement now scoped to `ACTIVE_TOOLS` only.
+Safety scans (Alpaca/env/mutation/secrets) still cover `ALL_TOOLS`.
+`TestPermanentToolsLocation` removed; replaced by `TestCleanupEligibility`.
+No tools moved or deleted — all 43 remain in `src/tools/`.
+Full suite: 384 tests in `test_tools_inventory.py`.
+
 No parameter optimisation or paper/live progression until diagnostics complete.
 
 ### Phase C — Paper trading execution

@@ -256,6 +256,50 @@ No `src/`, `tests/`, `config/`, or `output/` changes.
 
 ---
 
+### PR R2 — Refactor tool inventory: active vs. archive classification
+
+**Status: implemented — `tests/test_tools_inventory.py` (384 tests)**
+
+**Note:** PR R2 is part of the Phase R codebase-simplification chain defined
+in `docs/automated_bot_codebase_inventory_deletion_plan.md` (PR R1).
+The PR 9 four-group model (live safety / manual guard / paper diagnostic /
+3 cached-research additions from PRs 10E–10I) is superseded by the R2
+five-group cleanup-aware model below.
+
+**Goal:** Replace the old 4-group classification with a 5-group model that
+separates ACTIVE tools (needed by runtime or research) from ARCHIVE/DELETE
+candidates (manual-operator workflows not part of the final automated bot).
+No tools are moved or deleted in PR R2 — all 43 remain in `src/tools/`.
+
+**Classification (as of PR R2):**
+
+| Group | Constant | Count | Status |
+|-------|----------|-------|--------|
+| Active research tools | `ACTIVE_RESEARCH_TOOLS` | 3 | Offline cache / characterization |
+| Active runtime candidates | `ACTIVE_RUNTIME_CANDIDATE_TOOLS` | 15 | FREEZE_DEFERRED; may feed automated runtime |
+| Archive manual tools | `ARCHIVE_MANUAL_TOOLS` | 14 | Manual-operator workflow; eligible for archive in PR R4 |
+| Delete candidates | `DELETE_CANDIDATE_TOOLS` | 10 | Likely redundant; eligible for deletion in PR R4 after dependency scan |
+| Preserve runtime support | `PRESERVE_RUNTIME_SUPPORT_TOOLS` | 1 | `paper_ledger_verify`; keep pending runtime review |
+| **Total** | `ALL_TOOLS` | **43** | All still in `src/tools/` — no moves in R2 |
+| **Active** | `ACTIVE_TOOLS` | **19** | Research (3) + Runtime candidates (15) + Preserve (1) |
+
+**Changes to `tests/test_tools_inventory.py`:**
+
+- Replaced old 4-group constants with 5-group constants above.
+- `ACTIVE_TOOLS` (19) replaces old "permanent" concept as the set that must
+  define `main()` and will eventually feed the automated runtime.
+- `TestPermanentToolsLocation` removed; replaced by `TestCleanupEligibility`.
+- `TestActiveToolsHaveMain` now checks only `ACTIVE_TOOLS` (not ARCHIVE/DELETE).
+- Safety scans (Alpaca, env, mutation, secrets) still apply to `ALL_TOOLS`
+  while they remain physically in `src/tools/`.
+- `TestCleanupEligibility` locks archive/delete eligible tools and documents
+  future move/delete intent; does not block the suite.
+
+**Full suite after PR R2:** 384 tests in `tests/test_tools_inventory.py`;
+full suite count updated in `docs/live_readiness_status.md`.
+
+---
+
 ## 5. What This Design Does Not Approve
 
 - **No live tools moved.** `live_*.py` tools stay in `src/tools/` permanently.
