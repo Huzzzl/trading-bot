@@ -219,7 +219,31 @@ remain; the annotation relies on the operator reading and respecting it.
 
 **Primary recommendation: Policy C (block) as the gate; Policy A (disable) as the implementation.**
 
-### Phase 1 — PR 10W (immediate): Policy C
+### Phase 1 — PR 10W (immediate): Policy C — **IMPLEMENTED**
+
+**Implementation summary:**
+
+- `src/backtest/backtest_runner.py`:
+  - `_DAILY_BAR_INTERVALS = frozenset({"1d", "1day", "daily"})` — daily interval set
+  - `_FORCE_EXIT_DISABLED = "23:59"` — sentinel passed to `RiskManager` when `force_exit_time=None`
+  - `BacktestRunConfig.force_exit_time: str | None = "15:55"` — updated type to allow `None`
+  - `_validate_config()`: raises `ValueError("invalid backtest run config")` when
+    `bar_interval in _DAILY_BAR_INTERVALS` and `force_exit_time is not None`
+  - `run_backtest()`: passes `_FORCE_EXIT_DISABLED` sentinel to `RiskManager` when `force_exit_time=None`
+- Tests: `TestDailyBarForceExitGuard` (14 tests in `test_backtest_runner.py`),
+  `TestDailyBarPolicyGuard` (5 tests in `test_daily_bar_session_end_behavior.py`)
+- `cached_real_data_backtest_check.py` not changed — its 1d scenarios now raise
+  `ValueError` from `run_backtest()`, which the checker catches and marks `BLOCKED`
+
+**Error message design:** `ValueError("invalid backtest run config")` — fixed string,
+no raw field values echoed, fail-closed.
+
+**`force_exit_time=None` semantics:** `None` bypasses the Phase 1 guard.
+Sentinel `"23:59"` is passed to `RiskManager`, which never fires for any
+market-hours bar (`HH:MM < "23:59"` always). No engine or `RiskManager` change.
+**`force_exit_time=None` does NOT fix the session_end artifact** — daily bars
+still produce same-bar exits. Phase 1 only blocks the default misconfiguration;
+daily 1d results are not valid for strategy performance until Phase 2 / Policy A.
 
 Add a validation guard in `BacktestRunConfig` or `run_backtest()`: if
 `bar_interval` is `"1d"` (or any interval where all bar timestamps are at
@@ -237,11 +261,9 @@ This is the safest, lowest-risk change: no engine logic is modified, the error
 is raised before any backtest runs, and the operator is forced to make an
 explicit choice.
 
-`cached_real_data_backtest_check` must be updated to either:
-- Remove `force_exit_time` from the 1d config (Policy A semantics)
-- Or exclude `1d` from the default interval list until Policy A is implemented
-
-The checker test must also be updated.
+`cached_real_data_backtest_check` 1d scenarios now return `BLOCKED` status because
+the checker still passes `force_exit_time="15:55"` to the 1d config. The checker
+itself is unchanged; its test expectations have been updated to reflect BLOCKED.
 
 ### Phase 2 — PR 10W or later: Policy A
 
@@ -262,8 +284,9 @@ its own PR.
    zero engine risk. It is the most conservative entry point.
 
 2. **Explicit operator intent:** forcing the operator to set `force_exit_time=None`
-   for daily bars makes the semantics transparent — there is no ambiguity about
-   whether the intraday guard is active.
+   makes the guard decision explicit — there is no silent misconfiguration.
+   However, `force_exit_time=None` alone is not a valid production daily mode;
+   it only satisfies Phase 1. Phase 2 is required for valid daily 1d metrics.
 
 3. **Policy A is the correct long-term fix:** once the block guard is in place,
    Policy A cleanly removes the artifact without complex timestamp surgery
@@ -297,7 +320,7 @@ All of the following must hold after PR 10W merges:
 | PR | Scope | Status |
 |----|-------|--------|
 | PR 10V | Characterization tests for current daily-bar session_end behavior | **Implemented** |
-| PR 10W | Implement chosen policy (Phase 1: block guard; Phase 2: disable) | Pending |
+| PR 10W | Implement chosen policy (Phase 1: block guard; Phase 2: disable) | **Phase 1 implemented** |
 | PR 10X | Rerun `cached_real_data_backtest_check` after PR 10W; record snapshot | Pending |
 
 PR 10V comes before PR 10W: tests must characterize current behavior first, so

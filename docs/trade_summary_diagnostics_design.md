@@ -260,6 +260,18 @@ block `bar_interval=1d` + `force_exit_time` as invalid config) then Phase 2
 Documents acceptance criteria, safety implications, and next PR chain
 (PR 10V → 10W → 10X).
 
+### PR 10W — Phase 1 Policy C block guard
+
+**Status: Phase 1 implemented — `src/backtest/backtest_runner.py`**
+
+Fail-closed guard: `bar_interval in {"1d","1day","daily"}` + `force_exit_time is
+not None` raises `ValueError("invalid backtest run config")`. `force_exit_time`
+updated to `str | None`; `None` bypasses the guard via sentinel `"23:59"` but
+does NOT fix session_end behavior — daily 1d metrics remain not valid for
+strategy performance until Phase 2 / Policy A. Checker unchanged; its 1d
+scenarios (still using `force_exit_time="15:55"`) return `BLOCKED`.
+All 5 780 tests pass.
+
 ---
 
 ## 6. What This Design Does and Does Not Authorise

@@ -258,12 +258,24 @@ holding, 1d vs 60m contrast, safety flags, source scan). No `src/` changes.
 
 ### PR 10W — Implement chosen policy (block guard + disable)
 
-**Scope:** `src/backtest/`, `src/tools/cached_real_data_backtest_check.py`,
-`tests/` (new and updated)
+**Status: Phase 1 implemented**
 
-Phase 1: add validation guard blocking `bar_interval=1d` with `force_exit_time`
-set. Phase 2: disable `session_end`/`force_exit` checks in engine for daily bars.
-Requires its own PR with tests confirming 60m behavior preserved.
+**Scope:** `src/backtest/backtest_runner.py`, `tests/test_backtest_runner.py`,
+`tests/test_daily_bar_session_end_behavior.py`, `tests/test_backtest_trade_schema.py`,
+`tests/test_trendfollowing_offline_scenarios.py`, `tests/test_trendfollowing_param_comparison.py`
+
+Phase 1 (implemented): fail-closed guard blocks `bar_interval in {"1d","1day","daily"}`
+with `force_exit_time is not None`; raises `ValueError("invalid backtest run config")`.
+`force_exit_time` type updated to `str | None`; `None` bypasses the guard via
+sentinel `"23:59"` but does NOT fix the session_end artifact — daily 1d results
+remain not valid for strategy performance until Phase 2 / Policy A.
+`cached_real_data_backtest_check.py` unchanged; its 1d scenarios (still using
+`force_exit_time="15:55"`) return `BLOCKED`. Three additional test files updated
+because their synthetic 1d configs used `force_exit_time="15:55"`.
+All 5 780 tests pass.
+
+Phase 2 (deferred): disable `session_end`/`force_exit` checks in engine for daily
+bars. Requires its own PR with tests confirming 60m behavior preserved.
 
 ### PR 10X — Rerun snapshot after PR 10W
 

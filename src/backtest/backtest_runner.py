@@ -42,6 +42,19 @@ _VALID_SYMBOL_RE = re.compile(r"^[A-Z0-9.\-/]{1,10}$")
 _VALID_DAILY_LOSS_ACTION = frozenset({"block_new_entries", "close_all"})
 _VALID_FORCE_EXIT_TIME_RE = re.compile(r"^([01][0-9]|2[0-3]):[0-5][0-9]$")
 
+# Bar intervals classified as "daily".  Combining any of these with a
+# non-None force_exit_time is an invalid configuration: daily bars carry
+# midnight timestamps, which causes session_end to fire on every bar and
+# produces a degenerate same-bar exit artifact (avg_holding = 0).
+# Use force_exit_time=None to bypass this guard.  NOTE: session_end behavior
+# is unchanged — the same-bar exit artifact remains until Phase 2 / Policy A.
+_DAILY_BAR_INTERVALS: frozenset[str] = frozenset({"1d", "1day", "daily"})
+
+# Sentinel passed to RiskManager when force_exit_time is None.  "23:59"
+# is outside regular market hours for all supported bar series, so
+# force_exit never fires.  This avoids changing the RiskManager API.
+_FORCE_EXIT_DISABLED = "23:59"
+
 
 @dataclass(frozen=True)
 class BacktestRunConfig:
@@ -81,7 +94,7 @@ class BacktestRunConfig:
     slippage_per_share: float = 0.01
     position_size_pct: float = 0.95
     stop_execution: str = "bar_close"
-    force_exit_time: str = "15:55"
+    force_exit_time: str | None = "15:55"
     max_open_positions: int | None = None
     daily_loss_limit_pct: float | None = None
     daily_loss_action: str = "block_new_entries"
@@ -172,10 +185,19 @@ def _validate_config(config: BacktestRunConfig) -> None:
         slip = float(config.slippage_per_share)
         if not math.isfinite(slip) or slip < 0:
             raise ValueError
-        if (
-            not isinstance(config.force_exit_time, str)
-            or not _VALID_FORCE_EXIT_TIME_RE.match(config.force_exit_time)
-        ):
+        if config.force_exit_time is not None:
+            if (
+                not isinstance(config.force_exit_time, str)
+                or not _VALID_FORCE_EXIT_TIME_RE.match(config.force_exit_time)
+            ):
+                raise ValueError
+        # Daily bar intervals are incompatible with an active force_exit_time.
+        # The engine's session_end closes every position each bar for daily
+        # series; combining that with an intraday force_exit_time produces
+        # the degenerate same-bar exit artifact documented in PR 10T/10U.
+        # Use force_exit_time=None to bypass this guard.  Session_end behavior
+        # is unchanged; the same-bar artifact persists until Phase 2 / Policy A.
+        if config.bar_interval in _DAILY_BAR_INTERVALS and config.force_exit_time is not None:
             raise ValueError
         if config.max_open_positions is not None:
             if (
@@ -234,7 +256,11 @@ def run_backtest(
     )
 
     risk_manager = RiskManager(
-        force_exit_time=config.force_exit_time,
+        force_exit_time=(
+            config.force_exit_time
+            if config.force_exit_time is not None
+            else _FORCE_EXIT_DISABLED
+        ),
         stop_execution=config.stop_execution,
         max_open_positions=config.max_open_positions,
         daily_loss_limit_pct=config.daily_loss_limit_pct,

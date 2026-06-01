@@ -16,9 +16,9 @@ volatility_lookback=10, breakout_lookback=3, seed=42, n=100 daily bars.
 Warmup = max(slow_ema=20, atr+vol-1=14, breakout+1=4) = 20 bars.
 Produces 13 closed LONG trades with exit_reason='session_end'.
 
-Daily bar timestamps are 00:00 Eastern; since 00:00 < 15:55 (force_exit_time),
-force_exit never triggers. session_end fires when a position is carried to the
-next bar in the daily series.
+Daily bar timestamps are 00:00 Eastern; force_exit_time=None (PR 10W guard —
+1d+force_exit_time is blocked). session_end fires when a position is carried to
+the next bar in the daily series.
 
 No broker/API/credentials. No network. All tests are offline and deterministic.
 No Alpaca SDK imported. No network library imported. No credentials read.
@@ -131,7 +131,7 @@ def _make_config(params: dict[str, Any]) -> BacktestRunConfig:
         slippage_per_share=0.010,
         position_size_pct=0.95,
         stop_execution="bar_close",
-        force_exit_time="15:55",
+        force_exit_time=None,
     )
 
 

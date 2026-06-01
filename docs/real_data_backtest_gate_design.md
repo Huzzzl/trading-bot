@@ -535,6 +535,29 @@ structural contrast; safety flags; source scan. No `src/` changes.
 
 **Not in scope:** Parameter optimisation, paper trading, live trading.
 
+### PR 10W — Phase 1 Policy C block guard
+
+**Status: Phase 1 implemented — `src/backtest/backtest_runner.py`,
+`tests/test_backtest_runner.py`, `tests/test_daily_bar_session_end_behavior.py`,
+`tests/test_backtest_trade_schema.py`, `tests/test_trendfollowing_offline_scenarios.py`,
+`tests/test_trendfollowing_param_comparison.py`**
+
+Fail-closed validation guard: `bar_interval in {"1d","1day","daily"}` and
+`force_exit_time is not None` raises `ValueError("invalid backtest run config")`.
+`force_exit_time` type updated to `str | None`; `None` bypasses the guard via
+sentinel `"23:59"` but does NOT fix the session_end artifact — daily 1d results
+remain not valid for strategy performance until Phase 2 / Policy A.
+`cached_real_data_backtest_check.py` unchanged — its 1d scenarios (still using
+`force_exit_time="15:55"`) now return `BLOCKED`.
+Three additional test files updated because their synthetic 1d configs used
+`force_exit_time="15:55"`; changed to `None` to satisfy the new guard.
+14 guard tests in `test_backtest_runner.py`, 6 in
+`test_daily_bar_session_end_behavior.py` (including a test confirming the
+session_end artifact persists with `force_exit_time=None`). All 5 780 tests pass.
+Phase 2 (Policy A engine disable) deferred to a later PR.
+
+**Not in scope:** Parameter optimisation, paper trading, live trading.
+
 ---
 
 ## 10. Validation for This Docs PR

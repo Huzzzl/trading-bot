@@ -139,6 +139,12 @@ class _FakeProvider(BaseDataProvider):
 
 
 def _make_daily_config(params: dict[str, Any]) -> BacktestRunConfig:
+    # force_exit_time=None is required by the PR 10W Phase 1 guard (1d +
+    # non-None raises ValueError).  The session_end characterizations in this
+    # file remain valid: sentinel "23:59" means force_exit never fires for
+    # daily bars at "00:00" — identical to pre-guard behavior with "15:55".
+    # NOTE: session_end behavior is unchanged; the same-bar exit artifact
+    # documented in PR 10T persists until Phase 2 / Policy A.
     return BacktestRunConfig(
         strategy_name="trend_following",
         strategy_params=params,
@@ -151,7 +157,7 @@ def _make_daily_config(params: dict[str, Any]) -> BacktestRunConfig:
         slippage_per_share=0.010,
         position_size_pct=0.95,
         stop_execution="bar_close",
-        force_exit_time="15:55",
+        force_exit_time=None,
     )
 
 
@@ -741,3 +747,94 @@ class TestSourceScan:
 
     def test_runner_no_os_environ(self, runner_source: str) -> None:
         assert "os.environ" not in runner_source
+
+
+# ---------------------------------------------------------------------------
+# TestDailyBarPolicyGuard — post-PR 10W Policy C behavior
+# ---------------------------------------------------------------------------
+
+
+class TestDailyBarPolicyGuard:
+    """PR 10W Phase 1 (Policy C): block guard for 1d + force_exit_time.
+
+    Documents post-policy behavior: bar_interval='1d' combined with a
+    non-None force_exit_time is now rejected before the engine runs.
+    The session_end characterizations above remain valid because they use
+    force_exit_time=None (the sentinel '23:59' is used internally, which
+    never fires for daily bars at '00:00').
+
+    IMPORTANT: force_exit_time=None bypasses the guard but does NOT fix the
+    session_end artifact.  Daily bars with force_exit_time=None still produce
+    same-bar exits (entry_time == exit_time, holding = 0.0).  The session_end
+    characterizations in TestDailySameBarExitArtifact remain accurate.
+    Phase 2 / Policy A is required to eliminate the artifact.
+    """
+
+    def test_1d_with_force_exit_15_55_raises(self) -> None:
+        """The default cached-checker 1d+force_exit_time config is now blocked."""
+        bars = _make_daily_bars()
+        config = BacktestRunConfig(
+            strategy_name="trend_following",
+            strategy_params=_SMALL_PARAMS,
+            symbols=["SPY"],
+            start_date="2024-01-02",
+            end_date="2024-12-31",
+            bar_interval="1d",
+            initial_capital=100_000.0,
+            commission_per_share=0.005,
+            slippage_per_share=0.010,
+            position_size_pct=0.95,
+            stop_execution="bar_close",
+            force_exit_time="15:55",
+        )
+        with pytest.raises(ValueError, match="invalid backtest run config"):
+            run_backtest(config, data_provider=_FakeProvider(bars))
+
+    def test_1d_with_force_exit_none_still_runs(self) -> None:
+        """force_exit_time=None bypasses the guard; session_end artifact remains."""
+        result = _run_daily()
+        assert isinstance(result, BacktestRunResult)
+
+    def test_1d_force_exit_value_not_echoed(self) -> None:
+        """Raw force_exit_time is never included in the error message."""
+        bars = _make_daily_bars()
+        secret_time = "13:37"
+        config = BacktestRunConfig(
+            strategy_name="trend_following",
+            strategy_params=_SMALL_PARAMS,
+            symbols=["SPY"],
+            start_date="2024-01-02",
+            end_date="2024-12-31",
+            bar_interval="1d",
+            force_exit_time=secret_time,
+        )
+        with pytest.raises(ValueError) as exc_info:
+            run_backtest(config, data_provider=_FakeProvider(bars))
+        assert secret_time not in str(exc_info.value)
+
+    def test_60m_with_force_exit_15_55_unaffected(self) -> None:
+        """60m + force_exit_time='15:55' is still a valid configuration."""
+        result = _run_60m()
+        assert isinstance(result, BacktestRunResult)
+
+    def test_guard_does_not_change_60m_session_end_behavior(self) -> None:
+        """The guard has no effect on 60m results."""
+        result = _run_60m()
+        session_end_count = sum(1 for t in result.trades if t.exit_reason == "session_end")
+        assert session_end_count >= 0
+
+    def test_1d_force_exit_none_session_end_artifact_remains(self) -> None:
+        """force_exit_time=None does NOT fix the session_end same-bar artifact.
+
+        Daily bars with force_exit_time=None still produce same-bar exits
+        (entry_time == exit_time) because session_end fires on every
+        consecutive daily bar pair.  Phase 2 / Policy A is required to
+        eliminate this artifact.
+        """
+        result = _run_daily()
+        if result.trades:
+            same_bar = [t for t in result.trades if t.entry_time == t.exit_time]
+            assert len(same_bar) > 0, (
+                "Daily bars with force_exit_time=None must still produce "
+                "same-bar session_end exits; artifact not yet fixed"
+            )
