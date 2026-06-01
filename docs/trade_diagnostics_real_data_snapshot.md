@@ -279,10 +279,14 @@ bars. Requires its own PR with tests confirming 60m behavior preserved.
 
 ### PR 10X — Rerun snapshot after PR 10W
 
-**Scope:** `docs/daily_bar_policy_rerun_snapshot.md` (new, docs-only)
+**Status: implemented — `docs/post_phase1_daily_guard_cached_checker_snapshot.md`**
 
-Operator rerun of `cached_real_data_backtest_check` after PR 10W confirms
-daily 1d results are either valid or clearly BLOCKED. No metrics until then.
+Operator rerun of `cached_real_data_backtest_check` after PR 10W Phase 1.
+Overall result: `BLOCKED`. `availability_check_result=PASS` (cache files exist).
+`scenarios_run=2` (60m only). SPY 1d and QQQ 1d return `status=BLOCKED` —
+Phase 1 guard raises `ValueError` for `force_exit_time="15:55"` + `bar_interval=1d`.
+60m scenarios unchanged: SPY 197 trades, QQQ 195 trades, both `trade_diagnostic_result=PASS`.
+No gate status changes. Daily 1d remains not valid until Phase 2 / Policy A.
 
 ---
 
