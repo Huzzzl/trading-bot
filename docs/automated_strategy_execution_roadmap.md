@@ -391,6 +391,27 @@ Created `docs/archive/snapshots/`. Moved 5 superseded snapshot docs (PR 10J, 10O
 and the PR 9F architecture readiness snapshot). Archive notes added to each file. Path
 references updated in 7 active docs. No tests modified. Full suite: 5 701 passed.
 
+**PR R4 — Archive manual tools and delete stubs — implemented**
+First real codebase cleanup after R1/R2/R3. Dependency scan over all 43 tools determined
+final classifications. `ACTIVE_TOOLS` grows 19 → 30 after 11 reclassifications forced by
+active imports found in the scan.
+
+- Archived 10 manual-operator tools to `scripts/archive/manual_live_readiness/`
+  (archive header prepended; not importable as `src.tools.*`)
+- Deleted 3 redundant tool stubs (`live_readiness_history_review`, `paper_ledger_import`,
+  `paper_pre_submit_check`)
+- Deleted 13 matching test files (1 113 tests removed)
+- Updated `tests/conftest.py`: removed `"test_paper_ledger_import.py"` from
+  `_LEDGER_TEST_FILES`
+- Removed `test_report_consumable_by_blocked_review` from
+  `tests/test_live_submit_executor_check.py` (imported now-archived tool)
+- Rewrote `tests/test_tools_inventory.py` (310 tests, 5 classes):
+  `ACTIVE_TOOLS`=30 (`ACTIVE_RESEARCH`=3 + `ACTIVE_RUNTIME_CANDIDATE`=26 + `PRESERVE`=1);
+  `ARCHIVED_TOOLS`=10; `DELETED_TOOLS_R4`=3; `TestCleanupEligibility` →
+  `TestArchiveIntegrity`; all scans / coverage / import-safety tests scoped to
+  `ACTIVE_TOOLS` only.
+Full suite: 4 513 passed.
+
 No parameter optimisation or paper/live progression until diagnostics complete.
 
 ### Phase C — Paper trading execution

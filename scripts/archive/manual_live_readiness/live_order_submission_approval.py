@@ -1,3 +1,5 @@
+# ARCHIVED in PR R4. Historical manual/operator tool. Not part of active automated runtime.
+# Moved from src/tools/live_order_submission_approval.py. Not importable as src.tools.live_order_submission_approval.
 """
 tools/live_order_submission_approval.py
 -----------------------------------------

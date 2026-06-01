@@ -1,3 +1,5 @@
+# ARCHIVED in PR R4. Historical manual/operator tool. Not part of active automated runtime.
+# Moved from src/tools/manual_position_status_checker_readonly.py. Not importable as src.tools.manual_position_status_checker_readonly.
 """
 tools/manual_position_status_checker_readonly.py
 -------------------------------------------------

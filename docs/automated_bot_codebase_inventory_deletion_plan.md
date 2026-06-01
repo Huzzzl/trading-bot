@@ -363,6 +363,97 @@ changed in this PR. `pytest` not run for docs-only PRs.
 | No credentials | No code changes |
 | No order submission | No code changes |
 
+---
+
+## 9. PR R4 Implementation Record
+
+PR R4 executed the first real codebase cleanup against the plan defined in
+this document. The dependency scan over all 43 tools produced the final
+classification below.
+
+### Reclassifications after dependency scan
+
+| Tool | Original class | Final class | Reason |
+|------|---------------|-------------|--------|
+| `live_dry_run_review` | `ARCHIVE_MANUAL` | `ACTIVE_RUNTIME_CANDIDATE` | imported by `live_pre_submit_checklist` |
+| `live_pre_submit_checklist` | `ARCHIVE_MANUAL` | `ACTIVE_RUNTIME_CANDIDATE` | imported by `live_submit` |
+| `paper_smoke_check` | `ARCHIVE_MANUAL` | `ACTIVE_RUNTIME_CANDIDATE` | imported by `test_paper_ledger.py` (immutable) |
+| `paper_status` | `ARCHIVE_MANUAL` | `ACTIVE_RUNTIME_CANDIDATE` | imported by 5 active FREEZE_DEFERRED tools |
+| `live_shadow_review` | `DELETE_CANDIDATE` | `ACTIVE_RUNTIME_CANDIDATE` | imported by `live_readiness_gate` |
+| `live_shadow_screen_review` | `DELETE_CANDIDATE` | `ACTIVE_RUNTIME_CANDIDATE` | imported by `live_readiness_gate` |
+| `live_v2_approvals_review` | `DELETE_CANDIDATE` | `ACTIVE_RUNTIME_CANDIDATE` | imported by `live_submit_enablement_gate` |
+| `live_v2_executor_readiness_review` | `DELETE_CANDIDATE` | `ACTIVE_RUNTIME_CANDIDATE` | imported by `live_submit_enablement_gate` |
+| `live_v2_final_readiness_review` | `DELETE_CANDIDATE` | `ACTIVE_RUNTIME_CANDIDATE` | imported by `live_v2_readiness_bundle` |
+| `live_v2_readiness_bundle` | `DELETE_CANDIDATE` | `ACTIVE_RUNTIME_CANDIDATE` | v2 chain; imported transitively |
+| `replay_order_reconciliation` | `DELETE_CANDIDATE` | `ACTIVE_RUNTIME_CANDIDATE` | imported by `paper_status` and `test_paper_ledger.py` |
+
+### Archived tools (10) — moved to `scripts/archive/manual_live_readiness/`
+
+Archive header prepended; not importable as `src.tools.<name>`.
+
+| Tool |
+|------|
+| `live_operator_config_override_review` |
+| `live_operator_release_checklist` |
+| `live_order_submission_approval` |
+| `live_position_reconciliation_readonly` |
+| `live_real_submit_pr_approval` |
+| `live_single_manual_submit` |
+| `live_single_submit_approval_review` |
+| `live_submit_blocked_review` |
+| `live_submit_plan_review` |
+| `manual_position_status_checker_readonly` |
+
+### Deleted tools (3) — removed from repo
+
+| Tool | Reason |
+|------|--------|
+| `live_readiness_history_review` | No active import references; no archive value |
+| `paper_ledger_import` | No active import references; no archive value |
+| `paper_pre_submit_check` | No active import references; no archive value |
+
+### Test cleanup audit
+
+| Test file | Action | Reason |
+|-----------|--------|--------|
+| `test_live_operator_config_override_review.py` | Deleted | Tool archived |
+| `test_live_operator_release_checklist.py` | Deleted | Tool archived |
+| `test_live_order_submission_approval.py` | Deleted | Tool archived |
+| `test_live_position_reconciliation_readonly.py` | Deleted | Tool archived |
+| `test_live_real_submit_pr_approval.py` | Deleted | Tool archived |
+| `test_live_single_manual_submit.py` | Deleted | Tool archived |
+| `test_live_single_submit_approval_review.py` | Deleted | Tool archived |
+| `test_live_submit_blocked_review.py` | Deleted | Tool archived |
+| `test_live_submit_plan_review.py` | Deleted | Tool archived |
+| `test_manual_position_status_checker_readonly.py` | Deleted | Tool archived |
+| `test_live_readiness_history_review.py` | Deleted | Tool deleted |
+| `test_paper_ledger_import.py` | Deleted | Tool deleted |
+| `test_paper_pre_submit_check.py` | Deleted | Tool deleted |
+
+1 113 tests removed across 13 deleted test files.
+
+`tests/conftest.py`: removed `"test_paper_ledger_import.py"` from `_LEDGER_TEST_FILES`.
+
+`tests/test_live_submit_executor_check.py`: removed `test_report_consumable_by_blocked_review`
+(the only test that imported now-archived `live_submit_blocked_review`).
+
+### Final post-R4 counts
+
+| Classification | Count |
+|----------------|-------|
+| `ACTIVE_TOOLS` (in `src/tools/`) | 30 |
+| `ARCHIVED_TOOLS` (in `scripts/archive/manual_live_readiness/`) | 10 |
+| `DELETED_TOOLS_R4` (removed from repo) | 3 |
+| Full suite | 4 513 passed |
+
+### Safety invariants confirmed
+
+- No `src/backtest/`, `src/strategy/`, `src/risk/`, `src/execution/` runtime files changed
+- No `src/main.py` changed
+- No `config/`, `output/`, `data/cache/` changes
+- No broker calls, no credentials read, no orders, no trading behavior change
+- All archived files preserved in `scripts/archive/manual_live_readiness/` (not deleted)
+
 > **This document does not approve automated live trading.**
 > **This document does not approve any individual trade.**
 > **No Alpaca endpoint was contacted. No credentials were read.**
