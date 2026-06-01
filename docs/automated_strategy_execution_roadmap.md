@@ -346,6 +346,15 @@ constraints (backtest-only, no performance forecasts), acceptance gates for
 diagnostic outputs, and future PR chain (10Z, 11A, 11B, Phase 2 separate track).
 No parameter optimisation, no paper/live approval.
 
+**PR 10Z — 60m-only cached checker runbook — implemented**
+`docs/real_data_60m_only_cached_checker_runbook.md`: docs-only. Step-by-step
+operator runbook for `cached_real_data_backtest_check --intervals 60m`. Covers:
+pre-check availability, checker command with `--output` flag, expected
+`result=PASS`, bash and PowerShell print commands for overall status / per-scenario
+metrics / Sharpe diagnostics / trade diagnostics, interpretation rules
+(PASS ≠ trading approval, metrics are backtest-only), failure handling table,
+baseline values from PR 10T/10X. No `src/` changes.
+
 No parameter optimisation or paper/live progression until diagnostics complete.
 
 ### Phase C — Paper trading execution
