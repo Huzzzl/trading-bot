@@ -329,6 +329,13 @@ return `BLOCKED`. Also updated: `test_backtest_trade_schema.py`,
 `test_daily_bar_session_end_behavior.py` (including one confirming artifact remains).
 All 5 780 tests pass. Phase 2 (Policy A engine disable) deferred to a later PR.
 
+**PR 10X — post-Phase-1 cached checker snapshot — implemented**
+`docs/post_phase1_daily_guard_cached_checker_snapshot.md`: docs-only. Operator
+rerun after PR 10W Phase 1 confirms guard works as intended. Overall result:
+`BLOCKED`. SPY/1d and QQQ/1d: `BLOCKED` (Phase 1 guard fires). SPY/60m and
+QQQ/60m: `OK`, unchanged from PR 10T (197 and 195 trades respectively). Daily
+1d remains not valid for strategy performance until Phase 2 / Policy A.
+
 No parameter optimisation or paper/live progression until diagnostics complete.
 
 ### Phase C — Paper trading execution

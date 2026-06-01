@@ -558,6 +558,19 @@ Phase 2 (Policy A engine disable) deferred to a later PR.
 
 **Not in scope:** Parameter optimisation, paper trading, live trading.
 
+### PR 10X — Post-Phase-1 cached checker snapshot
+
+**Status: implemented — `docs/post_phase1_daily_guard_cached_checker_snapshot.md`**
+
+Docs-only. Operator rerun of `cached_real_data_backtest_check` after PR 10W
+Phase 1 guard merged. Overall result: `BLOCKED` (`scenarios_run=2`).
+SPY/1d and QQQ/1d return `BLOCKED` (Phase 1 guard fires on `force_exit_time="15:55"`
++ `bar_interval=1d`). SPY/60m and QQQ/60m return `OK` — unchanged from PR 10T.
+Confirms the guard works as intended without affecting 60m results.
+Daily 1d remains not valid for strategy performance until Phase 2 / Policy A.
+
+**Not in scope:** Parameter optimisation, paper trading, live trading.
+
 ---
 
 ## 10. Validation for This Docs PR

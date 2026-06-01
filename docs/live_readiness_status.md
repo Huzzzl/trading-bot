@@ -1,8 +1,8 @@
 # Live Readiness Status
 
 Current operational status of the live-readiness gate baseline.
-Last updated: 2026-05-31. Full pre-submit pipeline complete through PR #98.
-Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. PR 10E cache checker (42 tests, 41 tools). PR 10F Yahoo fetch gate design. PR 10G Yahoo fetch tool (43 tests, 42 tools). PR 10H local fetch runbook. PR 10I cached real-data backtest checker (53 tests, 43 tools). PR 10J first real-data results snapshot (docs-only). PR 10K backtest metrics diagnostics (67 tests). PR 10L Sharpe diagnostics in cached checker (61 tests). PR 10N calibrate Sharpe diagnostic low-vol threshold (72 tests). PR 10O calibrated-diagnostics rerun snapshot (docs-only). PR 10M TrendFollowing default param comparison (29 tests). PR 10P trade summary diagnostics design (docs-only). PR 10Q Trade schema characterization tests (60 tests). PR 10R trade_summary_diagnostics helper (78 tests). PR 10S trade diagnostics in cached checker (86 tests). PR 10T trade diagnostics real-data snapshot (docs-only). PR 10U daily-bar session_end policy design (docs-only). PR 10V daily-bar session_end characterization tests (62 tests). Test baseline: 5 761 passed.
+Last updated: 2026-06-01. Full pre-submit pipeline complete through PR #98.
+Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. PR 10E cache checker (42 tests, 41 tools). PR 10F Yahoo fetch gate design. PR 10G Yahoo fetch tool (43 tests, 42 tools). PR 10H local fetch runbook. PR 10I cached real-data backtest checker (53 tests, 43 tools). PR 10J first real-data results snapshot (docs-only). PR 10K backtest metrics diagnostics (67 tests). PR 10L Sharpe diagnostics in cached checker (61 tests). PR 10N calibrate Sharpe diagnostic low-vol threshold (72 tests). PR 10O calibrated-diagnostics rerun snapshot (docs-only). PR 10M TrendFollowing default param comparison (29 tests). PR 10P trade summary diagnostics design (docs-only). PR 10Q Trade schema characterization tests (60 tests). PR 10R trade_summary_diagnostics helper (78 tests). PR 10S trade diagnostics in cached checker (86 tests). PR 10T trade diagnostics real-data snapshot (docs-only). PR 10U daily-bar session_end policy design (docs-only). PR 10V daily-bar session_end characterization tests (62 tests). PR 10W Phase 1 daily-bar guard (5 780 tests). PR 10X post-Phase-1 snapshot (docs-only). Test baseline: 5 780 passed.
 
 ---
 
@@ -5233,4 +5233,53 @@ No `src/`, `tests/`, `config/`, `output/`, `scripts/`, or `data/` files changed.
 > **This design does not constitute parameter optimization or trading approval.**
 > The Phase A–H safety roadmap remains unchanged and required before any automation.
 > Nothing in this repository is financial advice.
+
+---
+
+## Milestone: PR 10W Phase 1 — Daily-Bar Guard — Implemented
+
+**PRs:** 10U (policy design) · 10V (characterization tests) · 10W Phase 1 (block guard) · 10X (post-guard snapshot)
+**Files changed:** `src/backtest/backtest_runner.py`, `tests/test_backtest_runner.py`, `tests/test_daily_bar_session_end_behavior.py`, `tests/test_cached_real_data_backtest_check.py`, `tests/test_backtest_trade_schema.py`, `tests/test_trendfollowing_offline_scenarios.py`, `tests/test_trendfollowing_param_comparison.py`, 6 docs files
+**Test baseline after PR 10W:** 5 780 passed
+
+### What was implemented
+
+**PR 10W Phase 1 — Policy C block guard (`src/backtest/backtest_runner.py`)**
+
+Fail-closed validation guard: `bar_interval in {"1d","1day","daily"}` combined
+with `force_exit_time is not None` raises `ValueError("invalid backtest run config")`.
+`force_exit_time` type updated to `str | None`; `None` bypasses the guard via
+sentinel `"23:59"` passed to `RiskManager`. No engine or `RiskManager` change.
+
+`cached_real_data_backtest_check.py` unchanged — its 1d scenarios still use
+`force_exit_time="15:55"` and now return `BLOCKED`.
+
+**PR 10X — Post-guard snapshot (`docs/post_phase1_daily_guard_cached_checker_snapshot.md`)**
+
+Operator rerun confirms Phase 1 works as intended:
+
+| Scenario | Status | num_trades |
+|----------|--------|-----------|
+| SPY 1d | `BLOCKED` | — |
+| SPY 60m | `OK` | 197 |
+| QQQ 1d | `BLOCKED` | — |
+| QQQ 60m | `OK` | 195 |
+
+`result=BLOCKED`, `scenarios_run=2`, `availability_check_result=PASS`.
+
+### What is NOT implemented / remains pending
+
+- `force_exit_time=None` does NOT fix `BacktestEngine.session_end` behavior —
+  daily bars still produce same-bar exits. Daily 1d results are not valid for
+  strategy performance.
+- Phase 2 / Policy A (disable `session_end`/`force_exit` for daily bars in
+  `BacktestEngine`) is pending a future PR.
+- No parameter optimisation. No paper trading approval. No live trading approval.
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> **Nothing in this repository is financial advice.**
 
