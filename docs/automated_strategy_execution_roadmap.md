@@ -303,6 +303,16 @@ Policy A disable `session_end`/`force_exit` checks in engine for daily bars.
 Acceptance criteria, safety implications, and PR chain (10V → 10W → 10X)
 documented.
 
+**PR 10V — daily-bar session_end / force_exit characterization tests — implemented**
+`tests/test_daily_bar_session_end_behavior.py`: 62 characterization tests (10
+classes) locking in current engine behavior before PR 10W changes. Covers: daily
+bar midnight timestamps; `"00:00" < "15:55"` string comparison (force_exit never
+fires); session_end fires on every daily bar pair; same-bar exit artifact
+(`entry_time == exit_time`, `holding = 0.0`, 0% win rate); 60m intraday
+timestamps; 60m session_end only at day boundaries; 60m non-zero holding; 1d vs
+60m structural contrast; safety flags; source scan of engine/risk_manager/runner.
+No `src/` changes. All 5 761 tests pass.
+
 No parameter optimisation or paper/live progression until diagnostics complete.
 
 ### Phase C — Paper trading execution

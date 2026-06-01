@@ -246,12 +246,15 @@ No behavior change in this docs PR.
 
 ### PR 10V — Daily-bar and force_exit/session_end characterization tests
 
-**Scope:** `tests/test_daily_bar_session_end.py` (new)
+**Status: implemented — `tests/test_daily_bar_session_end_behavior.py`**
 
 Characterizes how the backtest engine processes daily bars: confirms
 `entry_time == exit_time` pattern, confirms `force_exit` never fires for
 midnight daily timestamps (since `00:00 < 15:55`), and locks in current
-behavior before any change.
+behavior before any change. 62 tests across 10 classes (daily bar timestamps,
+force_exit string comparison, session_end dominance, same-bar exit artifact,
+60m bar timestamps, 60m session_end at day boundaries only, 60m non-zero
+holding, 1d vs 60m contrast, safety flags, source scan). No `src/` changes.
 
 ### PR 10W — Implement chosen policy (block guard + disable)
 
