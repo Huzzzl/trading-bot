@@ -144,7 +144,7 @@ No phase may be skipped. Each phase has its own PR(s).
 Before Phase B implementation begins, the repository underwent staged
 architecture alignment for the trend-following MVP (PRs 1–9). This is
 documented in `docs/trend_bot_architecture_refactor_plan.md` and
-`docs/automated_trading_architecture_readiness_snapshot.md`.
+`docs/archive/snapshots/automated_trading_architecture_readiness_snapshot.md`.
 
 **Architecture alignment is now complete (PR 9F).** The refactor covered:
 strategy factory, indicators, trend analysis, TrendFollowing strategy,
@@ -195,7 +195,7 @@ offline characterization tool; reads from data/cache/ only; no network; runs
 run_backtest() with trend_following for SPY/QQQ × 1d/60m; reports metric
 summaries (no raw prices); BLOCKED if cache missing; PASS means characterization
 ran only; count 42 → 43 tools.
-First real-data results snapshot: PR 10J (`docs/first_cached_real_data_backtest_results_snapshot.md`) —
+First real-data results snapshot: PR 10J (`docs/archive/snapshots/first_cached_real_data_backtest_results_snapshot.md`) —
 docs-only; records first operator-run pipeline results (yahoo_cache_fetch PASS,
 4 files written; cached_data_availability_check PASS; cached_real_data_backtest_check
 PASS, 4 scenarios); captures scenario metrics (SPY/QQQ × 1d/60m); interpretation
@@ -234,7 +234,7 @@ correctly show `low_variance_warning=True`. 5 new tests (`TestAnnualizedVolThres
 No strategy/engine/metrics changes.
 
 **PR 10O — Calibrated diagnostics rerun snapshot — implemented**
-`docs/calibrated_sharpe_diagnostics_real_data_snapshot.md`: docs-only. Confirms
+`docs/archive/snapshots/calibrated_sharpe_diagnostics_real_data_snapshot.md`: docs-only. Confirms
 PR 10N calibration: SPY/QQQ 1d `low_variance_warning=True`, 60m scenarios
 `low_variance_warning=False`. No src/tests changes.
 
@@ -282,7 +282,7 @@ Exception → safe fallback BLOCKED with Nones. No raw prices/trade records in o
 25 new tests (86 total in checker test file). No strategy/engine/metrics changes.
 
 **PR 10T — trade diagnostics real-data snapshot — implemented**
-`docs/trade_diagnostics_real_data_snapshot.md`: docs-only. Operator rerun of
+`docs/archive/snapshots/trade_diagnostics_real_data_snapshot.md`: docs-only. Operator rerun of
 `cached_real_data_backtest_check` confirmed PR 10S integration works end-to-end.
 All 4 scenarios returned `trade_diagnostic_result=PASS`. Key finding: daily 1d
 scenarios show `avg_holding_bars=0.0` with 279/280 (SPY) and 265/266 (QQQ)
@@ -330,7 +330,7 @@ return `BLOCKED`. Also updated: `test_backtest_trade_schema.py`,
 All 5 780 tests pass. Phase 2 (Policy A engine disable) deferred to a later PR.
 
 **PR 10X — post-Phase-1 cached checker snapshot — implemented**
-`docs/post_phase1_daily_guard_cached_checker_snapshot.md`: docs-only. Operator
+`docs/archive/snapshots/post_phase1_daily_guard_cached_checker_snapshot.md`: docs-only. Operator
 rerun after PR 10W Phase 1 confirms guard works as intended. Overall result:
 `BLOCKED`. SPY/1d and QQQ/1d: `BLOCKED` (Phase 1 guard fires). SPY/60m and
 QQQ/60m: `OK`, unchanged from PR 10T (197 and 195 trades respectively). Daily
@@ -385,6 +385,11 @@ Safety scans (Alpaca/env/mutation/secrets) still cover `ALL_TOOLS`.
 `TestPermanentToolsLocation` removed; replaced by `TestCleanupEligibility`.
 No tools moved or deleted — all 43 remain in `src/tools/`.
 Full suite: 384 tests in `test_tools_inventory.py`.
+
+**PR R3 — Archive superseded snapshot docs — implemented**
+Created `docs/archive/snapshots/`. Moved 5 superseded snapshot docs (PR 10J, 10O, 10T, 10X,
+and the PR 9F architecture readiness snapshot). Archive notes added to each file. Path
+references updated in 7 active docs. No tests modified. Full suite: 5 701 passed.
 
 No parameter optimisation or paper/live progression until diagnostics complete.
 

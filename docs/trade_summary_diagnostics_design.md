@@ -239,7 +239,7 @@ changes.
 
 ### PR 10T — Operator rerun snapshot with trade summary diagnostics
 
-**Status: implemented — `docs/trade_diagnostics_real_data_snapshot.md`**
+**Status: implemented — `docs/archive/snapshots/trade_diagnostics_real_data_snapshot.md`**
 
 Docs-only. Operator rerun of `cached_real_data_backtest_check` after PR 10S
 confirmed the trade diagnostics integration works end-to-end. All four scenarios

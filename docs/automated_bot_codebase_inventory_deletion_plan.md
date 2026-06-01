@@ -272,10 +272,25 @@ reclassify to `ARCHIVE_MANUAL` until references are cleaned up.
 |----|-------|---------|
 | **R1** | This inventory plan | **Implemented** |
 | **R2** | Update tool inventory tests: separate `ACTIVE_TOOLS` vs `ARCHIVE_MANUAL` / `DELETE_CANDIDATE` (5-group model, 384 tests) | **Implemented** |
-| **R3** | Archive old snapshot docs into `docs/archive/snapshots/` | High |
+| **R3** | Archive old snapshot docs into `docs/archive/snapshots/` | **Implemented** |
 | **R4** | Archive / delete `ARCHIVE_MANUAL` and `DELETE_CANDIDATE` tools after dependency scan | High |
 | **R5** | Extract paper execution path from `src/main.py` → `src/execution/paper_runner.py` | High |
 | **R6** | Extract paper close path from `src/main.py` → `src/execution/paper_close_runner.py` | High |
+
+**PR R3 implementation summary:**
+Created `docs/archive/snapshots/`. Moved 5 superseded snapshot docs:
+- `docs/archive/snapshots/first_cached_real_data_backtest_results_snapshot.md` (PR 10J)
+- `docs/archive/snapshots/calibrated_sharpe_diagnostics_real_data_snapshot.md` (PR 10O)
+- `docs/archive/snapshots/trade_diagnostics_real_data_snapshot.md` (PR 10T)
+- `docs/archive/snapshots/post_phase1_daily_guard_cached_checker_snapshot.md` (PR 10X)
+- `docs/archive/snapshots/automated_trading_architecture_readiness_snapshot.md` (PR 9F area)
+Archive notes added to each file. Path references updated in 7 active docs.
+No tests modified. Full suite: 5 701 passed (unchanged from R2).
+
+**Test cleanup audit (PR R3):**
+- `tests/test_daily_bar_session_end_behavior.py` — `KEEP_ACTIVE_TEST`: references "PR 10T snapshot" in a comment only; tests live engine behavior, not the doc file.
+- `tests/test_live_single_manual_submit.py` — `KEEP_ACTIVE_TEST`: uses "snapshot" as a local variable name for a mock; no file path reference.
+- No `DELETE_TEST_CANDIDATE` tests identified.
 
 **PR R2 implementation summary:**
 `tests/test_tools_inventory.py` rewritten from 363-test 4-group model to

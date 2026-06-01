@@ -1,3 +1,7 @@
+> **ARCHIVED — PR R3.** Historical snapshot moved to `docs/archive/snapshots/` in PR R3.
+> Key conclusions: daily 1d later BLOCKED by PR 10W guard; 60m remains active scope per PR 10Y.
+> Not the current project direction. See `docs/real_data_60m_only_evaluation_scope_design.md`.
+
 # First Cached Yahoo Real-Data TrendFollowing Backtest Results Snapshot
 
 Snapshot document for PR 10J: record the first operator-run results from the

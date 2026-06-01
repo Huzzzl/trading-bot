@@ -21,7 +21,7 @@ produce same-bar exits with `avg_holding_bars=0.0`.
 
 ### 1.1 PR 10T finding
 
-The operator rerun documented in `docs/trade_diagnostics_real_data_snapshot.md`
+The operator rerun documented in `docs/archive/snapshots/trade_diagnostics_real_data_snapshot.md`
 showed that both daily scenarios are dominated by same-bar `session_end` exits:
 
 | Scenario | trades | session_end | avg_holding_bars | win_rate_pct |

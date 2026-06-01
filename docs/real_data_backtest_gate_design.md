@@ -339,7 +339,7 @@ Exit 0 on PASS; exit 1 on BLOCKED. Prints human-readable summary; JSON only with
 
 ### PR 10J — First real-data backtest results snapshot (this document)
 
-**Status: complete — `docs/first_cached_real_data_backtest_results_snapshot.md`**
+**Status: complete — `docs/archive/snapshots/first_cached_real_data_backtest_results_snapshot.md`**
 
 Docs-only. Records the first operator-run results from the full three-step
 real-data pipeline (yahoo_cache_fetch → cached_data_availability_check →
@@ -397,7 +397,7 @@ No `src/`, `tests/`, `config/`, `output/`, `scripts/`, or `data/` changes.
 
 ### PR 10O — Calibrated diagnostics rerun snapshot
 
-**Status: implemented — `docs/calibrated_sharpe_diagnostics_real_data_snapshot.md`**
+**Status: implemented — `docs/archive/snapshots/calibrated_sharpe_diagnostics_real_data_snapshot.md`**
 
 Docs-only. Records operator rerun confirming PR 10N calibration: SPY/QQQ 1d
 `low_variance_warning=True`, SPY/QQQ 60m `low_variance_warning=False`. No src changes.
@@ -496,7 +496,7 @@ changes.
 
 ### PR 10T — Trade diagnostics real-data snapshot
 
-**Status: implemented — `docs/trade_diagnostics_real_data_snapshot.md`**
+**Status: implemented — `docs/archive/snapshots/trade_diagnostics_real_data_snapshot.md`**
 
 Docs-only. Operator rerun of `cached_real_data_backtest_check` after PR 10S.
 All 4 scenarios returned `trade_diagnostic_result=PASS`. Key finding: daily 1d
@@ -560,7 +560,7 @@ Phase 2 (Policy A engine disable) deferred to a later PR.
 
 ### PR 10X — Post-Phase-1 cached checker snapshot
 
-**Status: implemented — `docs/post_phase1_daily_guard_cached_checker_snapshot.md`**
+**Status: implemented — `docs/archive/snapshots/post_phase1_daily_guard_cached_checker_snapshot.md`**
 
 Docs-only. Operator rerun of `cached_real_data_backtest_check` after PR 10W
 Phase 1 guard merged. Overall result: `BLOCKED` (`scenarios_run=2`).
