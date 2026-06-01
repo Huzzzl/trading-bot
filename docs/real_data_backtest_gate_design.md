@@ -571,6 +571,18 @@ Daily 1d remains not valid for strategy performance until Phase 2 / Policy A.
 
 **Not in scope:** Parameter optimisation, paper trading, live trading.
 
+### PR 10Y — 60m-only evaluation scope design
+
+**Status: implemented — `docs/real_data_60m_only_evaluation_scope_design.md`**
+
+Docs-only. Defines the authorized short-term real-data evaluation scope after
+PR 10X: SPY/QQQ 60m only while daily 1d remains BLOCKED pending Phase 2 /
+Policy A. Documents the metrics to evaluate, interpretation constraints,
+acceptance gates for diagnostic outputs (not trading decisions), and the future
+PR chain (10Z, 11A, 11B). No `src/` changes.
+
+**Not in scope:** Parameter optimisation, paper trading, live trading.
+
 ---
 
 ## 10. Validation for This Docs PR

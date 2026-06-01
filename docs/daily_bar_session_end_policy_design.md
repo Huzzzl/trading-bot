@@ -322,6 +322,8 @@ All of the following must hold after PR 10W merges:
 | PR 10V | Characterization tests for current daily-bar session_end behavior | **Implemented** |
 | PR 10W | Implement chosen policy (Phase 1: block guard; Phase 2: disable) | **Phase 1 implemented** |
 | PR 10X | Rerun `cached_real_data_backtest_check` after PR 10W; record snapshot | **Implemented** |
+| PR 10Y | 60m-only evaluation scope design (short-term while 1d deferred) | **Implemented** |
+| Phase 2 | Policy A: disable `session_end`/`force_exit` for daily bars in engine | Pending |
 
 PR 10V comes before PR 10W: tests must characterize current behavior first, so
 that PR 10W tests can assert the behavior has changed in the expected direction
