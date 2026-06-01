@@ -266,8 +266,11 @@ Documents acceptance criteria, safety implications, and next PR chain
 
 Fail-closed guard: `bar_interval in {"1d","1day","daily"}` + `force_exit_time is
 not None` raises `ValueError("invalid backtest run config")`. `force_exit_time`
-updated to `str | None`; `None` uses sentinel `"23:59"`. Checker unchanged; its
-1d scenarios return `BLOCKED`. All 5 779 tests pass.
+updated to `str | None`; `None` bypasses the guard via sentinel `"23:59"` but
+does NOT fix session_end behavior — daily 1d metrics remain not valid for
+strategy performance until Phase 2 / Policy A. Checker unchanged; its 1d
+scenarios (still using `force_exit_time="15:55"`) return `BLOCKED`.
+All 5 779 tests pass.
 
 ---
 

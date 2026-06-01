@@ -317,11 +317,17 @@ No `src/` changes. All 5 761 tests pass.
 `src/backtest/backtest_runner.py`: fail-closed validation guard rejects
 `bar_interval in {"1d","1day","daily"}` combined with `force_exit_time is not None`.
 Raises `ValueError("invalid backtest run config")` — fixed string, no raw values
-echoed. `force_exit_time: str | None`; `None` disables force_exit via sentinel
-`"23:59"`. `cached_real_data_backtest_check.py` unchanged — its 1d scenarios now
-return `BLOCKED`. 14 new guard tests in `test_backtest_runner.py`, 5 in
-`test_daily_bar_session_end_behavior.py`. All 5 779 tests pass. Phase 2 (Policy A
-engine disable) deferred to a later PR.
+echoed. `force_exit_time: str | None`; `None` bypasses the guard via sentinel
+`"23:59"` passed to `RiskManager`. NOTE: `force_exit_time=None` does not fix the
+session_end same-bar artifact — daily 1d results remain not valid for strategy
+performance until Phase 2 / Policy A. `cached_real_data_backtest_check.py`
+unchanged — its 1d scenarios (which still pass `force_exit_time="15:55"`) now
+return `BLOCKED`. Also updated: `test_backtest_trade_schema.py`,
+`test_trendfollowing_offline_scenarios.py`, `test_trendfollowing_param_comparison.py`
+(each had a synthetic 1d config with `force_exit_time="15:55"`; changed to `None`).
+14 new guard tests in `test_backtest_runner.py`, 6 in
+`test_daily_bar_session_end_behavior.py` (including one confirming artifact remains).
+All 5 779 tests pass. Phase 2 (Policy A engine disable) deferred to a later PR.
 
 No parameter optimisation or paper/live progression until diagnostics complete.
 

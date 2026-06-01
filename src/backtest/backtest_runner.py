@@ -46,8 +46,8 @@ _VALID_FORCE_EXIT_TIME_RE = re.compile(r"^([01][0-9]|2[0-3]):[0-5][0-9]$")
 # non-None force_exit_time is an invalid configuration: daily bars carry
 # midnight timestamps, which causes session_end to fire on every bar and
 # produces a degenerate same-bar exit artifact (avg_holding = 0).
-# Use force_exit_time=None to run a daily backtest without intraday session
-# management.  Policy A engine disable is deferred to PR 10X.
+# Use force_exit_time=None to bypass this guard.  NOTE: session_end behavior
+# is unchanged — the same-bar exit artifact remains until Phase 2 / Policy A.
 _DAILY_BAR_INTERVALS: frozenset[str] = frozenset({"1d", "1day", "daily"})
 
 # Sentinel passed to RiskManager when force_exit_time is None.  "23:59"
@@ -195,8 +195,8 @@ def _validate_config(config: BacktestRunConfig) -> None:
         # The engine's session_end closes every position each bar for daily
         # series; combining that with an intraday force_exit_time produces
         # the degenerate same-bar exit artifact documented in PR 10T/10U.
-        # Use force_exit_time=None to run daily backtests without intraday
-        # session management.
+        # Use force_exit_time=None to bypass this guard.  Session_end behavior
+        # is unchanged; the same-bar artifact persists until Phase 2 / Policy A.
         if config.bar_interval in _DAILY_BAR_INTERVALS and config.force_exit_time is not None:
             raise ValueError
         if config.max_open_positions is not None:

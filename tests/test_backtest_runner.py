@@ -745,9 +745,12 @@ class TestDailyBarForceExitGuard:
     """Validation guard: bar_interval in {'1d','1day','daily'} + non-None
     force_exit_time is rejected before the backtest engine runs.
 
-    This implements PR 10U Policy C (Phase 1): fail-closed guard that blocks
-    the degenerate same-bar session_end exit artifact documented in PR 10T.
-    Policy A engine disable is deferred to a later PR.
+    This implements PR 10U Policy C (Phase 1): fail-closed guard that rejects
+    the default cached-checker daily config that produced the same-bar
+    session_end artifact documented in PR 10T.  NOTE: force_exit_time=None
+    bypasses the guard but does NOT fix session_end behavior — daily bars with
+    force_exit_time=None still produce the same-bar exit artifact.  Policy A
+    engine disable is deferred to a later PR.
     """
 
     def _make_1d_config(self, **overrides: Any) -> "BacktestRunConfig":
@@ -800,9 +803,10 @@ class TestDailyBarForceExitGuard:
         assert secret_time not in str(exc_info.value)
         assert str(exc_info.value) == "invalid backtest run config"
 
-    # --- 1d + force_exit_time=None is permitted ---
+    # --- 1d + force_exit_time=None bypasses the guard (artifact remains) ---
 
     def test_1d_with_force_exit_none_passes_validation(self) -> None:
+        """force_exit_time=None bypasses the guard; session_end artifact remains."""
         result = run_backtest(
             self._make_1d_config(force_exit_time=None),
             data_provider=_FakeProvider(),

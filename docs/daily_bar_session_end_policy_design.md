@@ -238,9 +238,12 @@ remain; the annotation relies on the operator reading and respecting it.
 **Error message design:** `ValueError("invalid backtest run config")` — fixed string,
 no raw field values echoed, fail-closed.
 
-**`force_exit_time=None` semantics:** operator sets `force_exit_time=None` for
-daily bars. Sentinel `"23:59"` is passed to `RiskManager`, which never fires for
-any market-hours bar (`HH:MM < "23:59"` always). No engine or `RiskManager` change.
+**`force_exit_time=None` semantics:** `None` bypasses the Phase 1 guard.
+Sentinel `"23:59"` is passed to `RiskManager`, which never fires for any
+market-hours bar (`HH:MM < "23:59"` always). No engine or `RiskManager` change.
+**`force_exit_time=None` does NOT fix the session_end artifact** — daily bars
+still produce same-bar exits. Phase 1 only blocks the default misconfiguration;
+daily 1d results are not valid for strategy performance until Phase 2 / Policy A.
 
 Add a validation guard in `BacktestRunConfig` or `run_backtest()`: if
 `bar_interval` is `"1d"` (or any interval where all bar timestamps are at
@@ -281,8 +284,9 @@ its own PR.
    zero engine risk. It is the most conservative entry point.
 
 2. **Explicit operator intent:** forcing the operator to set `force_exit_time=None`
-   for daily bars makes the semantics transparent — there is no ambiguity about
-   whether the intraday guard is active.
+   makes the guard decision explicit — there is no silent misconfiguration.
+   However, `force_exit_time=None` alone is not a valid production daily mode;
+   it only satisfies Phase 1. Phase 2 is required for valid daily 1d metrics.
 
 3. **Policy A is the correct long-term fix:** once the block guard is in place,
    Policy A cleanly removes the artifact without complex timestamp surgery
