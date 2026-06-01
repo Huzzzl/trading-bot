@@ -3,14 +3,25 @@ tests/test_tools_inventory.py
 ------------------------------
 Inventory tests for src/tools/.
 
-Locks the classification from docs/tools_scripts_isolation_design.md:
-  - 30 live safety / readiness gate tools (stay in src/tools/ permanently)
-  -  4 manual live/paper guard tools (stay in src/tools/ permanently)
-  -  6 paper diagnostic utilities (move candidates in a future PR)
-  -  3 data tools (PR 10E: cached data availability checker; PR 10G: yahoo cache fetch;
-                   PR 10I: cached real-data backtest checker)
+PR R2 replaces the old LIVE_SAFETY / MANUAL_GUARD / PAPER_DIAGNOSTIC / DATA
+classification with a cleanup-aware model aligned with the PR R1 automated-bot
+inventory plan:
 
-Total: 43 tools.
+  ACTIVE_RESEARCH_TOOLS      (3)  — cache / backtest characterisation tools
+  ACTIVE_RUNTIME_CANDIDATE_TOOLS (15) — may feed future automated runtime
+  ARCHIVE_MANUAL_TOOLS       (14) — manual-operator workflow; not part of
+                                    final automated bot; eligible for archive
+  DELETE_CANDIDATE_TOOLS     (10) — likely redundant; eligible for deletion
+                                    after dependency scan
+  PRESERVE_RUNTIME_SUPPORT_TOOLS (1) — may be needed by runtime; keep for now
+
+Total: 43 tools (no files moved or deleted in this PR).
+
+Safety scans (Alpaca, env, mutation, secret literals) still apply to ALL tools
+while they remain physically in src/tools/.
+Import safety still applies to ALL tools.
+main() requirement applies only to ACTIVE_RESEARCH + ACTIVE_RUNTIME_CANDIDATE
++ PRESERVE_RUNTIME_SUPPORT tools.
 
 No broker/API/credentials access.  No file moves.  No order submission.
 No live trading.  No automated paper trading.
@@ -27,65 +38,91 @@ from typing import Iterator
 import pytest
 
 # ---------------------------------------------------------------------------
-# Tool classification — mirrors docs/tools_scripts_isolation_design.md § 2
+# Tool classification — mirrors docs/automated_bot_codebase_inventory_deletion_plan.md
 # ---------------------------------------------------------------------------
 
-LIVE_SAFETY_TOOLS: tuple[str, ...] = (
+# Offline research / characterisation pipeline — keep active.
+ACTIVE_RESEARCH_TOOLS: tuple[str, ...] = (
+    "cached_data_availability_check",
+    "cached_real_data_backtest_check",
+    "yahoo_cache_fetch",
+)
+
+# Tools that may plausibly feed future automated runtime or runtime safety.
+# Not yet wired to automated pipeline; classified FREEZE_DEFERRED in PR R1.
+ACTIVE_RUNTIME_CANDIDATE_TOOLS: tuple[str, ...] = (
     "live_account_check",
     "live_broker_preflight_readonly",
     "live_credential_presence_guard",
     "live_dry_run_intents",
-    "live_dry_run_review",
     "live_ledger_verify",
+    "live_post_submit_ledger_update_dry_run",
+    "live_pre_submit_ledger_dry_run",
+    "live_readiness_gate",
+    "live_safety_status",
+    "live_shadow_preflight",
+    "live_shadow_screen_symbols",
+    "live_submit",
+    "live_submit_enablement_gate",
+    "live_submit_executor_check",
+    "live_trading_approval",
+)
+
+# Manual-operator workflow tools.  Not part of the final automated bot.
+# Eligible for archive to scripts/archive/manual_live_readiness/ after
+# dependency scan (PR R4).
+ARCHIVE_MANUAL_TOOLS: tuple[str, ...] = (
+    "live_dry_run_review",
     "live_operator_config_override_review",
     "live_operator_release_checklist",
     "live_order_submission_approval",
-    "live_post_submit_ledger_update_dry_run",
+    "live_position_reconciliation_readonly",
     "live_pre_submit_checklist",
-    "live_pre_submit_ledger_dry_run",
-    "live_readiness_gate",
-    "live_readiness_history_review",
     "live_real_submit_pr_approval",
-    "live_safety_status",
-    "live_shadow_preflight",
+    "live_single_manual_submit",
+    "live_single_submit_approval_review",
+    "live_submit_blocked_review",
+    "live_submit_plan_review",
+    "manual_position_status_checker_readonly",
+    "paper_smoke_check",
+    "paper_status",
+)
+
+# Tools likely redundant with current codebase.  Eligible for deletion after
+# dependency scan confirms no active import/test/config references (PR R4).
+DELETE_CANDIDATE_TOOLS: tuple[str, ...] = (
+    "live_readiness_history_review",
     "live_shadow_review",
     "live_shadow_screen_review",
-    "live_shadow_screen_symbols",
-    "live_submit",
-    "live_submit_blocked_review",
-    "live_submit_enablement_gate",
-    "live_submit_executor_check",
-    "live_submit_plan_review",
-    "live_trading_approval",
     "live_v2_approvals_review",
     "live_v2_executor_readiness_review",
     "live_v2_final_readiness_review",
     "live_v2_readiness_bundle",
-)
-
-MANUAL_GUARD_TOOLS: tuple[str, ...] = (
-    "live_position_reconciliation_readonly",
-    "live_single_manual_submit",
-    "live_single_submit_approval_review",
-    "manual_position_status_checker_readonly",
-)
-
-PAPER_DIAGNOSTIC_TOOLS: tuple[str, ...] = (
     "paper_ledger_import",
-    "paper_ledger_verify",
     "paper_pre_submit_check",
-    "paper_smoke_check",
-    "paper_status",
     "replay_order_reconciliation",
 )
 
-DATA_TOOLS: tuple[str, ...] = (
-    "cached_data_availability_check",
-    "yahoo_cache_fetch",
-    "cached_real_data_backtest_check",
-)  # 3 tools
+# May be needed by automated runtime; keep in place for now.
+PRESERVE_RUNTIME_SUPPORT_TOOLS: tuple[str, ...] = (
+    "paper_ledger_verify",
+)
 
-ALL_TOOLS: tuple[str, ...] = LIVE_SAFETY_TOOLS + MANUAL_GUARD_TOOLS + PAPER_DIAGNOSTIC_TOOLS + DATA_TOOLS
+# Aggregate sets.
+ALL_TOOLS: tuple[str, ...] = (
+    ACTIVE_RESEARCH_TOOLS
+    + ACTIVE_RUNTIME_CANDIDATE_TOOLS
+    + ARCHIVE_MANUAL_TOOLS
+    + DELETE_CANDIDATE_TOOLS
+    + PRESERVE_RUNTIME_SUPPORT_TOOLS
+)
+
+# Active = still expected to serve as CLI-callable tools going forward.
+ACTIVE_TOOLS: tuple[str, ...] = (
+    ACTIVE_RESEARCH_TOOLS
+    + ACTIVE_RUNTIME_CANDIDATE_TOOLS
+    + PRESERVE_RUNTIME_SUPPORT_TOOLS
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -215,49 +252,56 @@ def _collect_string_literals(tree: ast.Module) -> Iterator[str]:
 
 
 # ---------------------------------------------------------------------------
-# TestToolsInventory — counts and file existence
+# TestToolsInventory — counts, existence, and classification integrity
 # ---------------------------------------------------------------------------
 
 
 class TestToolsInventory:
-    """Verify the tool classification counts match the design document."""
+    """Verify PR R2 classification counts and physical file presence."""
 
-    def test_live_safety_tools_count(self) -> None:
-        assert len(LIVE_SAFETY_TOOLS) == 30
+    def test_active_research_tools_count(self) -> None:
+        assert len(ACTIVE_RESEARCH_TOOLS) == 3
 
-    def test_manual_guard_tools_count(self) -> None:
-        assert len(MANUAL_GUARD_TOOLS) == 4
+    def test_active_runtime_candidate_tools_count(self) -> None:
+        assert len(ACTIVE_RUNTIME_CANDIDATE_TOOLS) == 15
 
-    def test_paper_diagnostic_tools_count(self) -> None:
-        assert len(PAPER_DIAGNOSTIC_TOOLS) == 6
+    def test_archive_manual_tools_count(self) -> None:
+        assert len(ARCHIVE_MANUAL_TOOLS) == 14
+
+    def test_delete_candidate_tools_count(self) -> None:
+        assert len(DELETE_CANDIDATE_TOOLS) == 10
+
+    def test_preserve_runtime_support_tools_count(self) -> None:
+        assert len(PRESERVE_RUNTIME_SUPPORT_TOOLS) == 1
 
     def test_all_tools_count(self) -> None:
         assert len(ALL_TOOLS) == 43
 
-    def test_categories_are_mutually_exclusive(self) -> None:
-        live_set = set(LIVE_SAFETY_TOOLS)
-        manual_set = set(MANUAL_GUARD_TOOLS)
-        paper_set = set(PAPER_DIAGNOSTIC_TOOLS)
-        assert live_set.isdisjoint(manual_set), "overlap: LIVE_SAFETY ∩ MANUAL_GUARD"
-        assert live_set.isdisjoint(paper_set), "overlap: LIVE_SAFETY ∩ PAPER_DIAGNOSTIC"
-        assert manual_set.isdisjoint(paper_set), "overlap: MANUAL_GUARD ∩ PAPER_DIAGNOSTIC"
+    def test_active_tools_count(self) -> None:
+        assert len(ACTIVE_TOOLS) == 19
+
+    def test_groups_are_mutually_exclusive(self) -> None:
+        groups = {
+            "ACTIVE_RESEARCH": set(ACTIVE_RESEARCH_TOOLS),
+            "ACTIVE_RUNTIME_CANDIDATE": set(ACTIVE_RUNTIME_CANDIDATE_TOOLS),
+            "ARCHIVE_MANUAL": set(ARCHIVE_MANUAL_TOOLS),
+            "DELETE_CANDIDATE": set(DELETE_CANDIDATE_TOOLS),
+            "PRESERVE_RUNTIME_SUPPORT": set(PRESERVE_RUNTIME_SUPPORT_TOOLS),
+        }
+        names = list(groups.keys())
+        for i, a in enumerate(names):
+            for b in names[i + 1:]:
+                overlap = groups[a] & groups[b]
+                assert not overlap, f"Overlap between {a} and {b}: {sorted(overlap)}"
 
     def test_no_unclassified_tools_in_src_tools(self) -> None:
-        actual = {
-            p.stem
-            for p in _TOOLS_DIR.glob("*.py")
-            if p.stem != "__init__"
-        }
+        actual = {p.stem for p in _TOOLS_DIR.glob("*.py") if p.stem != "__init__"}
         classified = set(ALL_TOOLS)
         unclassified = actual - classified
         assert not unclassified, f"Unclassified tools found: {sorted(unclassified)}"
 
     def test_no_phantom_tools_in_classification(self) -> None:
-        actual = {
-            p.stem
-            for p in _TOOLS_DIR.glob("*.py")
-            if p.stem != "__init__"
-        }
+        actual = {p.stem for p in _TOOLS_DIR.glob("*.py") if p.stem != "__init__"}
         classified = set(ALL_TOOLS)
         phantoms = classified - actual
         assert not phantoms, f"Classified tools not on disk: {sorted(phantoms)}"
@@ -272,28 +316,36 @@ class TestToolsInventory:
 
 
 # ---------------------------------------------------------------------------
-# TestToolsTestCoverage — every tool has a test file
+# TestToolsTestCoverage — every tool currently has a test file
 # ---------------------------------------------------------------------------
 
 
 class TestToolsTestCoverage:
-    """Every tool in src/tools/ must have a corresponding test file."""
+    """Every tool in src/tools/ must have a corresponding test file.
+
+    This applies to ALL tools while they remain physically in src/tools/.
+    Archive/delete PRs (R3, R4) will update this requirement when files move.
+    """
 
     @pytest.mark.parametrize("name", ALL_TOOLS)
     def test_tool_has_test_file(self, name: str) -> None:
         assert _test_path(name).is_file(), (
             f"tests/test_{name}.py not found — "
-            f"docs/tools_scripts_isolation_design.md § 1 states no tool has zero test coverage"
+            f"all tools in src/tools/ must have test coverage"
         )
 
 
 # ---------------------------------------------------------------------------
-# TestToolsSourceScan — static analysis of tool source files
+# TestToolsSourceScan — static analysis while tools remain in src/tools/
 # ---------------------------------------------------------------------------
 
 
 class TestToolsSourceScan:
-    """Source-level safety checks for every tool module."""
+    """Source-level safety checks for every tool module.
+
+    These apply to ALL 43 tools while they remain in src/tools/.
+    Archive/delete PRs may relax these requirements for moved/deleted files.
+    """
 
     @pytest.mark.parametrize("name", ALL_TOOLS)
     def test_no_module_level_alpaca_import(self, name: str) -> None:
@@ -328,7 +380,6 @@ class TestToolsSourceScan:
 
         Heuristic: long (≥32 chars), all-ASCII, no spaces, no path separators,
         no underscores (config keys / identifiers), no hyphens (CLI flags).
-        This targets raw token/key strings while ignoring legitimate identifiers.
         """
         tree = _parse_tool(name)
         suspicious: list[str] = []
@@ -364,17 +415,20 @@ class TestToolsSourceScan:
 
 
 # ---------------------------------------------------------------------------
-# TestLiveToolsHaveMain — live tools must expose a main() callable
+# TestActiveToolsHaveMain — CLI-callable tools must define main()
 # ---------------------------------------------------------------------------
 
 
-class TestLiveToolsHaveMain:
-    """Every live safety and manual-guard tool must define a main() function."""
+class TestActiveToolsHaveMain:
+    """Active tools (research + runtime candidates + preserve-support) must
+    define a main() function for `python -m src.tools.<name>` CLI usage.
 
-    _GATED_TOOLS = LIVE_SAFETY_TOOLS + MANUAL_GUARD_TOOLS
+    ARCHIVE_MANUAL and DELETE_CANDIDATE tools are not required to have main()
+    since they are targeted for removal and may already be dead-code paths.
+    """
 
-    @pytest.mark.parametrize("name", _GATED_TOOLS)
-    def test_live_tool_has_main_callable(self, name: str) -> None:
+    @pytest.mark.parametrize("name", ACTIVE_TOOLS)
+    def test_active_tool_has_main_callable(self, name: str) -> None:
         tree = _parse_tool(name)
         func_names = {
             node.name
@@ -393,7 +447,10 @@ class TestLiveToolsHaveMain:
 
 
 class TestToolsImportSafety:
-    """All tool modules must be importable (no import-time side effects)."""
+    """All tool modules must be importable (no import-time side effects).
+
+    Applies to ALL tools while they remain in src/tools/.
+    """
 
     @pytest.mark.parametrize("name", ALL_TOOLS)
     def test_tool_is_importable(self, name: str) -> None:
@@ -401,9 +458,6 @@ class TestToolsImportSafety:
         try:
             mod = importlib.import_module(module_name)
         except ImportError as exc:
-            # Optional third-party deps (e.g. alpaca-trade-api) may be absent;
-            # that is acceptable as long as the import failure is an ImportError,
-            # not a SyntaxError or NameError caused by bad module-level code.
             if "alpaca" in str(exc).lower() or "No module named" in str(exc):
                 pytest.skip(f"Optional dependency absent: {exc}")
             raise
@@ -411,11 +465,7 @@ class TestToolsImportSafety:
 
     @pytest.mark.parametrize("name", ALL_TOOLS)
     def test_tool_does_not_module_level_import_src_main_build_engine(self, name: str) -> None:
-        """No tool may import build_engine from src.main at module level.
-
-        Function-level lazy imports are not flagged — they reflect a separate
-        runtime concern and are out of scope for this inventory PR.
-        """
+        """No tool may import build_engine from src.main at module level."""
         tree = _parse_tool(name)
         scanner = _ModuleLevelBuildEngineImportScanner()
         scanner.visit(tree)
@@ -426,93 +476,86 @@ class TestToolsImportSafety:
 
 
 # ---------------------------------------------------------------------------
-# TestPermanentToolsLocation — PR 9E
-# Confirm 30 live safety/readiness + 4 manual-guard tools are in src/tools/
-# and none have been moved to scripts/.
+# TestCleanupEligibility — documents archive/delete intent (PR R1 plan)
 # ---------------------------------------------------------------------------
 
-_PERMANENT_TOOLS: tuple[str, ...] = LIVE_SAFETY_TOOLS + MANUAL_GUARD_TOOLS
-_SCRIPTS_DIR = _REPO_ROOT / "scripts"
 
+class TestCleanupEligibility:
+    """These tests document archive/delete eligibility per the PR R1 plan.
 
-class TestPermanentToolsLocation:
+    No files are moved or deleted in PR R2.  These tests lock in that
+    ARCHIVE_MANUAL and DELETE_CANDIDATE tools are classified for future
+    removal and must not be silently re-promoted to active status without
+    updating this file.
+
+    The actual move/delete happens in PR R4 after dependency scan.
     """
-    PR 9E: assert all 34 permanent tools live in src/tools/ and are absent
-    from scripts/.  These tools must not be moved without a dedicated PR that
-    updates import paths, test paths, and operator runbooks.
-    """
 
-    def test_permanent_tools_count(self) -> None:
-        assert len(_PERMANENT_TOOLS) == 34
+    def test_archive_manual_tools_are_classified(self) -> None:
+        """All archive-manual tools are explicitly listed in ARCHIVE_MANUAL_TOOLS."""
+        assert len(ARCHIVE_MANUAL_TOOLS) > 0
+        for name in ARCHIVE_MANUAL_TOOLS:
+            assert name not in ACTIVE_TOOLS, (
+                f"{name} is in ARCHIVE_MANUAL_TOOLS but also in ACTIVE_TOOLS — "
+                f"a tool cannot be both active and archive-eligible"
+            )
 
-    def test_live_safety_tools_count_unchanged(self) -> None:
-        assert len(LIVE_SAFETY_TOOLS) == 30
+    def test_delete_candidate_tools_are_classified(self) -> None:
+        """All delete-candidate tools are explicitly listed in DELETE_CANDIDATE_TOOLS."""
+        assert len(DELETE_CANDIDATE_TOOLS) > 0
+        for name in DELETE_CANDIDATE_TOOLS:
+            assert name not in ACTIVE_TOOLS, (
+                f"{name} is in DELETE_CANDIDATE_TOOLS but also in ACTIVE_TOOLS — "
+                f"a tool cannot be both active and delete-eligible"
+            )
 
-    def test_manual_guard_tools_count_unchanged(self) -> None:
-        assert len(MANUAL_GUARD_TOOLS) == 4
-
-    @pytest.mark.parametrize("name", _PERMANENT_TOOLS)
-    def test_permanent_tool_in_src_tools(self, name: str) -> None:
-        assert _tool_path(name).is_file(), (
-            f"src/tools/{name}.py missing — "
-            f"permanent tools must stay in src/tools/ (PR 9E)"
+    def test_archive_manual_tools_still_in_src_tools(self) -> None:
+        """ARCHIVE_MANUAL tools still exist in src/tools/ — not yet moved."""
+        missing = [n for n in ARCHIVE_MANUAL_TOOLS if not _tool_path(n).is_file()]
+        assert not missing, (
+            f"ARCHIVE_MANUAL tools already missing from src/tools/ (moved/deleted without PR R4): "
+            f"{missing}"
         )
 
-    @pytest.mark.parametrize("name", _PERMANENT_TOOLS)
-    def test_permanent_tool_not_in_scripts(self, name: str) -> None:
-        scripts_path = _SCRIPTS_DIR / f"{name}.py"
-        assert not scripts_path.exists(), (
-            f"scripts/{name}.py exists — permanent tools must NOT be moved to scripts/ "
-            f"without a dedicated PR updating imports, tests, and runbooks"
+    def test_delete_candidate_tools_still_in_src_tools(self) -> None:
+        """DELETE_CANDIDATE tools still exist in src/tools/ — not yet removed."""
+        missing = [n for n in DELETE_CANDIDATE_TOOLS if not _tool_path(n).is_file()]
+        assert not missing, (
+            f"DELETE_CANDIDATE tools already missing from src/tools/ (deleted without PR R4): "
+            f"{missing}"
         )
 
-    def test_no_live_tool_file_in_scripts(self) -> None:
-        if not _SCRIPTS_DIR.exists():
-            return
-        live_in_scripts = [
-            p.name
-            for p in _SCRIPTS_DIR.glob("live_*.py")
-        ]
-        assert not live_in_scripts, (
-            f"live_*.py files found in scripts/: {sorted(live_in_scripts)} — "
-            f"live safety tools must remain in src/tools/"
+    def test_archive_manual_count_matches_r1_plan(self) -> None:
+        """14 tools classified as ARCHIVE_MANUAL per PR R1 inventory."""
+        assert len(ARCHIVE_MANUAL_TOOLS) == 14
+
+    def test_delete_candidate_count_matches_r1_plan(self) -> None:
+        """10 tools classified as DELETE_CANDIDATE per PR R1 inventory."""
+        assert len(DELETE_CANDIDATE_TOOLS) == 10
+
+    def test_archive_manual_not_in_delete_candidate(self) -> None:
+        overlap = set(ARCHIVE_MANUAL_TOOLS) & set(DELETE_CANDIDATE_TOOLS)
+        assert not overlap, (
+            f"Tools in both ARCHIVE_MANUAL and DELETE_CANDIDATE: {sorted(overlap)}"
         )
 
-    def test_no_manual_tool_file_in_scripts(self) -> None:
-        if not _SCRIPTS_DIR.exists():
-            return
-        manual_in_scripts = [
-            p.name
-            for p in _SCRIPTS_DIR.glob("manual_*.py")
-        ]
-        assert not manual_in_scripts, (
-            f"manual_*.py files found in scripts/: {sorted(manual_in_scripts)} — "
-            f"manual guard tools must remain in src/tools/"
-        )
+    def test_future_move_allowed_for_archive_manual(self) -> None:
+        """Explicit confirmation: ARCHIVE_MANUAL tools may be moved to
+        scripts/archive/manual_live_readiness/ in PR R4 after dependency scan.
+        This test exists to document intent — it always passes.
+        """
+        # Documented intent: these tools are eligible for archive in PR R4.
+        # Dependency scan required before move:
+        #   grep -r "from src.tools.<name>" src/ tests/ scripts/
+        assert True
 
-    def test_scripts_readme_documents_permanent_tools(self) -> None:
-        readme = _SCRIPTS_DIR / "README.md"
-        assert readme.is_file(), "scripts/README.md not found"
-        text = readme.read_text(encoding="utf-8")
-        assert "Permanent in" in text or "permanent" in text.lower(), (
-            "scripts/README.md must document that live/manual tools are permanent in src/tools/"
-        )
-        assert "src/tools/" in text, (
-            "scripts/README.md must reference src/tools/ as the permanent location"
-        )
-
-    def test_scripts_readme_lists_live_safety_count(self) -> None:
-        readme = _SCRIPTS_DIR / "README.md"
-        assert readme.is_file(), "scripts/README.md not found"
-        text = readme.read_text(encoding="utf-8")
-        assert "30" in text, (
-            "scripts/README.md must mention the count of 30 live safety tools"
-        )
-
-    def test_scripts_readme_lists_manual_guard_count(self) -> None:
-        readme = _SCRIPTS_DIR / "README.md"
-        assert readme.is_file(), "scripts/README.md not found"
-        text = readme.read_text(encoding="utf-8")
-        assert "4" in text, (
-            "scripts/README.md must mention the count of 4 manual guard tools"
-        )
+    def test_future_delete_allowed_for_delete_candidates(self) -> None:
+        """Explicit confirmation: DELETE_CANDIDATE tools may be deleted in PR R4
+        after dependency scan confirms no active import/test/config references.
+        This test exists to document intent — it always passes.
+        """
+        # Documented intent: these tools are eligible for deletion in PR R4.
+        # Dependency scan required before deletion:
+        #   grep -r "from src.tools.<name>" src/ tests/ scripts/
+        #   grep -r "<name>" docs/ config/
+        assert True

@@ -270,12 +270,26 @@ reclassify to `ARCHIVE_MANUAL` until references are cleaned up.
 
 | PR | Scope | Priority |
 |----|-------|---------|
-| **R1** | This inventory plan | **This PR** |
-| **R2** | Update tool inventory tests: separate `ACTIVE_TOOLS` vs `ARCHIVED_TOOLS` | High |
+| **R1** | This inventory plan | **Implemented** |
+| **R2** | Update tool inventory tests: separate `ACTIVE_TOOLS` vs `ARCHIVE_MANUAL` / `DELETE_CANDIDATE` (5-group model, 384 tests) | **Implemented** |
 | **R3** | Archive old snapshot docs into `docs/archive/snapshots/` | High |
 | **R4** | Archive / delete `ARCHIVE_MANUAL` and `DELETE_CANDIDATE` tools after dependency scan | High |
 | **R5** | Extract paper execution path from `src/main.py` → `src/execution/paper_runner.py` | High |
 | **R6** | Extract paper close path from `src/main.py` → `src/execution/paper_close_runner.py` | High |
+
+**PR R2 implementation summary:**
+`tests/test_tools_inventory.py` rewritten from 363-test 4-group model to
+384-test 5-group cleanup-aware model.
+- `ACTIVE_RESEARCH_TOOLS` (3): offline cache / characterization
+- `ACTIVE_RUNTIME_CANDIDATE_TOOLS` (15): FREEZE_DEFERRED; may feed automated runtime
+- `ARCHIVE_MANUAL_TOOLS` (14): manual-operator workflow; eligible for archive in PR R4
+- `DELETE_CANDIDATE_TOOLS` (10): likely redundant; eligible for deletion in PR R4 after dep scan
+- `PRESERVE_RUNTIME_SUPPORT_TOOLS` (1): `paper_ledger_verify`; keep pending runtime review
+- `ALL_TOOLS` (43) = no change — all still in `src/tools/`, no moves in R2
+- `ACTIVE_TOOLS` (19) = research (3) + runtime candidates (15) + preserve (1)
+- `main()` requirement now scoped to `ACTIVE_TOOLS` only (not ARCHIVE/DELETE)
+- Safety scans (Alpaca/env/mutation/secrets) still cover `ALL_TOOLS`
+- `TestPermanentToolsLocation` removed; replaced by `TestCleanupEligibility`
 
 ### Phase A2 — Automated runtime skeleton
 
