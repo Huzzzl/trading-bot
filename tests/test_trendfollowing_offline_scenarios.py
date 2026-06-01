@@ -167,7 +167,7 @@ def _make_config(
         slippage_per_share=0.010,
         position_size_pct=0.95,
         stop_execution="bar_close",
-        force_exit_time="15:55",
+        force_exit_time=None if bar_interval == "1d" else "15:55",
     )
 
 

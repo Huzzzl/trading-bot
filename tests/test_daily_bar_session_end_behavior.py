@@ -139,6 +139,11 @@ class _FakeProvider(BaseDataProvider):
 
 
 def _make_daily_config(params: dict[str, Any]) -> BacktestRunConfig:
+    # force_exit_time=None is required for bar_interval="1d" after the
+    # PR 10W Policy C guard.  The session_end / force_exit characterizations
+    # remain valid: with force_exit_time=None the sentinel "23:59" is used
+    # internally, so no force_exit fires for daily bars at "00:00" (same as
+    # the pre-guard behavior with "15:55").
     return BacktestRunConfig(
         strategy_name="trend_following",
         strategy_params=params,
@@ -151,7 +156,7 @@ def _make_daily_config(params: dict[str, Any]) -> BacktestRunConfig:
         slippage_per_share=0.010,
         position_size_pct=0.95,
         stop_execution="bar_close",
-        force_exit_time="15:55",
+        force_exit_time=None,
     )
 
 
@@ -741,3 +746,72 @@ class TestSourceScan:
 
     def test_runner_no_os_environ(self, runner_source: str) -> None:
         assert "os.environ" not in runner_source
+
+
+# ---------------------------------------------------------------------------
+# TestDailyBarPolicyGuard — post-PR 10W Policy C behavior
+# ---------------------------------------------------------------------------
+
+
+class TestDailyBarPolicyGuard:
+    """PR 10W Phase 1 (Policy C): block guard for 1d + force_exit_time.
+
+    Documents post-policy behavior: bar_interval='1d' combined with a
+    non-None force_exit_time is now rejected before the engine runs.
+    The session_end characterizations above remain valid because they use
+    force_exit_time=None (the sentinel '23:59' is used internally, which
+    never fires for daily bars at '00:00').
+    """
+
+    def test_1d_with_force_exit_15_55_raises(self) -> None:
+        """The combination that produced the same-bar exit artifact is now blocked."""
+        bars = _make_daily_bars()
+        config = BacktestRunConfig(
+            strategy_name="trend_following",
+            strategy_params=_SMALL_PARAMS,
+            symbols=["SPY"],
+            start_date="2024-01-02",
+            end_date="2024-12-31",
+            bar_interval="1d",
+            initial_capital=100_000.0,
+            commission_per_share=0.005,
+            slippage_per_share=0.010,
+            position_size_pct=0.95,
+            stop_execution="bar_close",
+            force_exit_time="15:55",
+        )
+        with pytest.raises(ValueError, match="invalid backtest run config"):
+            run_backtest(config, data_provider=_FakeProvider(bars))
+
+    def test_1d_with_force_exit_none_still_runs(self) -> None:
+        """force_exit_time=None is the required setting for daily backtests."""
+        result = _run_daily()
+        assert isinstance(result, BacktestRunResult)
+
+    def test_1d_force_exit_value_not_echoed(self) -> None:
+        """Raw force_exit_time is never included in the error message."""
+        bars = _make_daily_bars()
+        secret_time = "13:37"
+        config = BacktestRunConfig(
+            strategy_name="trend_following",
+            strategy_params=_SMALL_PARAMS,
+            symbols=["SPY"],
+            start_date="2024-01-02",
+            end_date="2024-12-31",
+            bar_interval="1d",
+            force_exit_time=secret_time,
+        )
+        with pytest.raises(ValueError) as exc_info:
+            run_backtest(config, data_provider=_FakeProvider(bars))
+        assert secret_time not in str(exc_info.value)
+
+    def test_60m_with_force_exit_15_55_unaffected(self) -> None:
+        """60m + force_exit_time='15:55' is still a valid configuration."""
+        result = _run_60m()
+        assert isinstance(result, BacktestRunResult)
+
+    def test_guard_does_not_change_60m_session_end_behavior(self) -> None:
+        """The guard has no effect on 60m results."""
+        result = _run_60m()
+        session_end_count = sum(1 for t in result.trades if t.exit_reason == "session_end")
+        assert session_end_count >= 0

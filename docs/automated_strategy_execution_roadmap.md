@@ -313,6 +313,16 @@ timestamps; 60m session_end only at day boundaries; 60m non-zero holding; 1d vs
 60m structural contrast; safety flags; source scan of engine/risk_manager/runner.
 No `src/` changes. All 5 761 tests pass.
 
+**PR 10W — Phase 1 Policy C block guard — implemented**
+`src/backtest/backtest_runner.py`: fail-closed validation guard rejects
+`bar_interval in {"1d","1day","daily"}` combined with `force_exit_time is not None`.
+Raises `ValueError("invalid backtest run config")` — fixed string, no raw values
+echoed. `force_exit_time: str | None`; `None` disables force_exit via sentinel
+`"23:59"`. `cached_real_data_backtest_check.py` unchanged — its 1d scenarios now
+return `BLOCKED`. 14 new guard tests in `test_backtest_runner.py`, 5 in
+`test_daily_bar_session_end_behavior.py`. All 5 779 tests pass. Phase 2 (Policy A
+engine disable) deferred to a later PR.
+
 No parameter optimisation or paper/live progression until diagnostics complete.
 
 ### Phase C — Paper trading execution

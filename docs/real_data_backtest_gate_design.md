@@ -535,6 +535,21 @@ structural contrast; safety flags; source scan. No `src/` changes.
 
 **Not in scope:** Parameter optimisation, paper trading, live trading.
 
+### PR 10W — Phase 1 Policy C block guard
+
+**Status: Phase 1 implemented — `src/backtest/backtest_runner.py`,
+`tests/test_backtest_runner.py`, `tests/test_daily_bar_session_end_behavior.py`**
+
+Fail-closed validation guard: `bar_interval in {"1d","1day","daily"}` and
+`force_exit_time is not None` raises `ValueError("invalid backtest run config")`.
+`force_exit_time` type updated to `str | None`; `None` disables force_exit via
+sentinel `"23:59"`. `cached_real_data_backtest_check.py` unchanged — its 1d
+scenarios now return `BLOCKED` status. 14 guard tests in `test_backtest_runner.py`,
+5 in `test_daily_bar_session_end_behavior.py`. All 5 779 tests pass.
+Phase 2 (Policy A engine disable) deferred to a later PR.
+
+**Not in scope:** Parameter optimisation, paper trading, live trading.
+
 ---
 
 ## 10. Validation for This Docs PR

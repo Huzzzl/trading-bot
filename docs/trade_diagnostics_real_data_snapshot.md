@@ -258,12 +258,19 @@ holding, 1d vs 60m contrast, safety flags, source scan). No `src/` changes.
 
 ### PR 10W — Implement chosen policy (block guard + disable)
 
-**Scope:** `src/backtest/`, `src/tools/cached_real_data_backtest_check.py`,
-`tests/` (new and updated)
+**Status: Phase 1 implemented**
 
-Phase 1: add validation guard blocking `bar_interval=1d` with `force_exit_time`
-set. Phase 2: disable `session_end`/`force_exit` checks in engine for daily bars.
-Requires its own PR with tests confirming 60m behavior preserved.
+**Scope:** `src/backtest/backtest_runner.py`, `tests/test_backtest_runner.py`,
+`tests/test_daily_bar_session_end_behavior.py`
+
+Phase 1 (implemented): fail-closed guard blocks `bar_interval in {"1d","1day","daily"}`
+with `force_exit_time is not None`; raises `ValueError("invalid backtest run config")`.
+`force_exit_time` type updated to `str | None`; `None` uses sentinel `"23:59"`.
+`cached_real_data_backtest_check.py` unchanged; its 1d scenarios return `BLOCKED`.
+All 5 779 tests pass.
+
+Phase 2 (deferred): disable `session_end`/`force_exit` checks in engine for daily
+bars. Requires its own PR with tests confirming 60m behavior preserved.
 
 ### PR 10X — Rerun snapshot after PR 10W
 

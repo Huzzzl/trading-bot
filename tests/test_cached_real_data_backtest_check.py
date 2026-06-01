@@ -173,22 +173,28 @@ class TestMissingCache:
 
 
 class TestValidCache:
-    """Valid cache with all four fixtures → PASS with scenario metrics."""
+    """Valid cache with all four fixtures — 1d scenarios BLOCKED by PR 10W guard;
+    60m scenarios run OK."""
 
     def test_pass_with_all_four_scenarios(self, tmp_path: pathlib.Path) -> None:
+        # After PR 10W: 1d + force_exit_time="15:55" is rejected by the
+        # daily-bar guard in _validate_config.  The checker catches the
+        # ValueError and marks 1d scenarios as BLOCKED.  Overall result is
+        # BLOCKED when any scenario is BLOCKED.
         _write_all_four_fixtures(tmp_path)
         result = run_check(cache_dir=tmp_path)
-        assert result["result"] == "PASS"
+        assert result["result"] == "BLOCKED"
 
     def test_scenarios_run_equals_four(self, tmp_path: pathlib.Path) -> None:
+        # After PR 10W: only the two 60m scenarios succeed; 1d are BLOCKED.
         _write_all_four_fixtures(tmp_path)
         result = run_check(cache_dir=tmp_path)
-        assert result["scenarios_run"] == 4
+        assert result["scenarios_run"] == 2
 
     def test_each_scenario_has_required_keys(self, tmp_path: pathlib.Path) -> None:
         _write_all_four_fixtures(tmp_path)
         result = run_check(cache_dir=tmp_path)
-        required_keys = {
+        ok_required_keys = {
             "symbol", "interval", "rows", "status",
             "total_return_pct", "annualized_return_pct",
             "max_drawdown_pct", "sharpe_ratio", "num_trades",
@@ -201,14 +207,23 @@ class TestValidCache:
             "win_rate_pct", "avg_trade_return_pct", "avg_win_pct", "avg_loss_pct",
             "profit_factor", "exit_reason_counts",
         }
+        blocked_required_keys = {"symbol", "interval", "rows", "status"}
         for s in result["scenarios"]:
-            assert required_keys.issubset(s.keys()), f"Missing keys in scenario: {s}"
+            if s["status"] == "OK":
+                assert ok_required_keys.issubset(s.keys()), (
+                    f"Missing keys in OK scenario {s['symbol']}/{s['interval']}: "
+                    f"{ok_required_keys - set(s.keys())}"
+                )
+            else:
+                assert blocked_required_keys.issubset(s.keys()), (
+                    f"Missing keys in BLOCKED scenario: {s}"
+                )
 
     def test_rows_matches_fixture_size(self, tmp_path: pathlib.Path) -> None:
-        _write_fixture(tmp_path, "SPY", "1d", n=80)
-        result = run_check(cache_dir=tmp_path, symbols=["SPY"], intervals=["1d"])
+        _write_fixture(tmp_path, "SPY", "60m", n=150)
+        result = run_check(cache_dir=tmp_path, symbols=["SPY"], intervals=["60m"])
         assert result["result"] == "PASS"
-        assert result["scenarios"][0]["rows"] == 80
+        assert result["scenarios"][0]["rows"] == 150
 
     def test_num_trades_is_non_negative_int(self, tmp_path: pathlib.Path) -> None:
         _write_all_four_fixtures(tmp_path)
@@ -409,12 +424,14 @@ class TestOutputJson:
     """--output flag writes valid JSON with correct structure."""
 
     def test_json_written_with_output_flag(self, tmp_path: pathlib.Path) -> None:
-        _write_all_four_fixtures(tmp_path)
+        # Use 60m only: 1d + force_exit_time="15:55" is now blocked by PR 10W guard.
+        _write_fixture(tmp_path, "SPY", "60m", n=150)
+        _write_fixture(tmp_path, "QQQ", "60m", n=150)
         output_path = tmp_path / "out" / "result.json"
         rc = main([
             "--cache-dir", str(tmp_path),
             "--symbols", "SPY", "QQQ",
-            "--intervals", "1d", "60m",
+            "--intervals", "60m",
             "--output", str(output_path),
         ])
         assert output_path.exists()
@@ -669,7 +686,8 @@ class TestSharpeDiagnostics:
         """Every OK scenario includes all 5 diagnostic fields."""
         _write_all_four_fixtures(tmp_path)
         result = run_check(cache_dir=tmp_path)
-        assert result["result"] == "PASS"
+        # After PR 10W, 1d scenarios are BLOCKED; overall result is BLOCKED.
+        # Diagnostic fields are only present in OK (60m) scenarios.
         for s in result["scenarios"]:
             if s["status"] == "OK":
                 assert _DIAGNOSTIC_KEYS.issubset(s.keys()), (
@@ -719,9 +737,10 @@ class TestSharpeDiagnostics:
         stays flat and equity never changes.  diagnose_sharpe() detects this
         and returns BLOCKED with zero_std_detected=True.  The scenario status
         remains OK (diagnostic BLOCKED ≠ scenario BLOCKED).
+        Uses 60m interval: 1d + force_exit_time is blocked by PR 10W guard.
         """
-        _write_flat_fixture(tmp_path, "SPY", "1d", n=80)
-        result = run_check(cache_dir=tmp_path, symbols=["SPY"], intervals=["1d"])
+        _write_flat_fixture(tmp_path, "SPY", "60m", n=150)
+        result = run_check(cache_dir=tmp_path, symbols=["SPY"], intervals=["60m"])
         assert result["result"] == "PASS"
         s = result["scenarios"][0]
         assert s["status"] == "OK"
@@ -732,7 +751,8 @@ class TestSharpeDiagnostics:
         """Even when diagnose_sharpe returns BLOCKED, scenario status stays OK."""
         from unittest.mock import patch as _patch
 
-        _write_fixture(tmp_path, "SPY", "1d", n=80)
+        # Use 60m: 1d + force_exit_time is blocked by PR 10W guard.
+        _write_fixture(tmp_path, "SPY", "60m", n=150)
         blocked_diag = {
             "result": "BLOCKED",
             "zero_std_detected": True,
@@ -748,7 +768,7 @@ class TestSharpeDiagnostics:
             "src.tools.cached_real_data_backtest_check.diagnose_sharpe",
             return_value=blocked_diag,
         ):
-            result = run_check(cache_dir=tmp_path, symbols=["SPY"], intervals=["1d"])
+            result = run_check(cache_dir=tmp_path, symbols=["SPY"], intervals=["60m"])
 
         assert result["result"] == "PASS"
         s = result["scenarios"][0]
@@ -808,7 +828,7 @@ class TestTradeDiagnosticsPresent:
     def test_all_trade_diagnostic_fields_in_ok_scenario(self, tmp_path: pathlib.Path) -> None:
         _write_all_four_fixtures(tmp_path)
         result = run_check(cache_dir=tmp_path)
-        assert result["result"] == "PASS"
+        # After PR 10W, 1d scenarios are BLOCKED; diagnostic fields only in OK (60m) scenarios.
         for s in result["scenarios"]:
             if s["status"] == "OK":
                 missing = _TRADE_DIAGNOSTIC_KEYS - set(s.keys())
@@ -817,14 +837,16 @@ class TestTradeDiagnosticsPresent:
                 )
 
     def test_trade_diagnostic_result_present(self, tmp_path: pathlib.Path) -> None:
-        _write_fixture(tmp_path, "SPY", "1d", n=80)
-        result = run_check(cache_dir=tmp_path, symbols=["SPY"], intervals=["1d"])
+        # Use 60m: 1d + force_exit_time is blocked by PR 10W guard.
+        _write_fixture(tmp_path, "SPY", "60m", n=150)
+        result = run_check(cache_dir=tmp_path, symbols=["SPY"], intervals=["60m"])
         s = result["scenarios"][0]
         assert "trade_diagnostic_result" in s
 
     def test_trade_diagnostic_blocker_present(self, tmp_path: pathlib.Path) -> None:
-        _write_fixture(tmp_path, "SPY", "1d", n=80)
-        result = run_check(cache_dir=tmp_path, symbols=["SPY"], intervals=["1d"])
+        # Use 60m: 1d + force_exit_time is blocked by PR 10W guard.
+        _write_fixture(tmp_path, "SPY", "60m", n=150)
+        result = run_check(cache_dir=tmp_path, symbols=["SPY"], intervals=["60m"])
         s = result["scenarios"][0]
         assert "trade_diagnostic_blocker" in s
 
@@ -884,7 +906,9 @@ class TestTradeDiagnosticBlockedDoesNotBlockScenario:
     """BLOCKED trade diagnostic never blocks scenario or overall result."""
 
     def test_blocked_diag_does_not_block_scenario(self, tmp_path: pathlib.Path) -> None:
-        _write_fixture(tmp_path, "SPY", "1d", n=80)
+        # Use 60m: 1d + force_exit_time is blocked by PR 10W guard before
+        # trade_summary_diagnostics is ever called.
+        _write_fixture(tmp_path, "SPY", "60m", n=150)
         blocked_tdiag = {
             "result": "BLOCKED",
             "blocker": "synthetic block for test",
@@ -909,13 +933,14 @@ class TestTradeDiagnosticBlockedDoesNotBlockScenario:
             "src.tools.cached_real_data_backtest_check.trade_summary_diagnostics",
             return_value=blocked_tdiag,
         ):
-            result = run_check(cache_dir=tmp_path, symbols=["SPY"], intervals=["1d"])
+            result = run_check(cache_dir=tmp_path, symbols=["SPY"], intervals=["60m"])
         s = result["scenarios"][0]
         assert s["status"] == "OK"
         assert s["trade_diagnostic_result"] == "BLOCKED"
 
     def test_blocked_diag_does_not_block_overall_result(self, tmp_path: pathlib.Path) -> None:
-        _write_fixture(tmp_path, "SPY", "1d", n=80)
+        # Use 60m: 1d + force_exit_time is blocked by PR 10W guard.
+        _write_fixture(tmp_path, "SPY", "60m", n=150)
         blocked_tdiag = {
             "result": "BLOCKED",
             "blocker": "synthetic block for test",
@@ -925,7 +950,7 @@ class TestTradeDiagnosticBlockedDoesNotBlockScenario:
             "src.tools.cached_real_data_backtest_check.trade_summary_diagnostics",
             return_value=blocked_tdiag,
         ):
-            result = run_check(cache_dir=tmp_path, symbols=["SPY"], intervals=["1d"])
+            result = run_check(cache_dir=tmp_path, symbols=["SPY"], intervals=["60m"])
         assert result["result"] == "PASS"
 
 
@@ -938,33 +963,36 @@ class TestTradeDiagnosticExceptionSafety:
     """Exception in trade_summary_diagnostics does not crash scenario."""
 
     def test_exception_scenario_still_ok(self, tmp_path: pathlib.Path) -> None:
-        _write_fixture(tmp_path, "SPY", "1d", n=80)
+        # Use 60m: 1d + force_exit_time is blocked before trade_summary_diagnostics runs.
+        _write_fixture(tmp_path, "SPY", "60m", n=150)
         with patch(
             "src.tools.cached_real_data_backtest_check.trade_summary_diagnostics",
             side_effect=RuntimeError("synthetic exception"),
         ):
-            result = run_check(cache_dir=tmp_path, symbols=["SPY"], intervals=["1d"])
+            result = run_check(cache_dir=tmp_path, symbols=["SPY"], intervals=["60m"])
         s = result["scenarios"][0]
         assert s["status"] == "OK"
 
     def test_exception_all_trade_fields_present(self, tmp_path: pathlib.Path) -> None:
-        _write_fixture(tmp_path, "SPY", "1d", n=80)
+        # Use 60m: 1d + force_exit_time is blocked before trade_summary_diagnostics runs.
+        _write_fixture(tmp_path, "SPY", "60m", n=150)
         with patch(
             "src.tools.cached_real_data_backtest_check.trade_summary_diagnostics",
             side_effect=RuntimeError("synthetic exception"),
         ):
-            result = run_check(cache_dir=tmp_path, symbols=["SPY"], intervals=["1d"])
+            result = run_check(cache_dir=tmp_path, symbols=["SPY"], intervals=["60m"])
         s = result["scenarios"][0]
         missing = _TRADE_DIAGNOSTIC_KEYS - set(s.keys())
         assert not missing, f"Missing keys after exception: {missing}"
 
     def test_exception_trade_diagnostic_result_is_blocked(self, tmp_path: pathlib.Path) -> None:
-        _write_fixture(tmp_path, "SPY", "1d", n=80)
+        # Use 60m: 1d + force_exit_time is blocked before trade_summary_diagnostics runs.
+        _write_fixture(tmp_path, "SPY", "60m", n=150)
         with patch(
             "src.tools.cached_real_data_backtest_check.trade_summary_diagnostics",
             side_effect=RuntimeError("synthetic exception"),
         ):
-            result = run_check(cache_dir=tmp_path, symbols=["SPY"], intervals=["1d"])
+            result = run_check(cache_dir=tmp_path, symbols=["SPY"], intervals=["60m"])
         s = result["scenarios"][0]
         assert s["trade_diagnostic_result"] == "BLOCKED"
 
@@ -1041,22 +1069,22 @@ class TestTradeDiagnosticEmptyTrades:
     """Flat OHLCV produces no trades; diagnostic reports PASS with zero counts."""
 
     def test_flat_fixture_trade_diagnostic_pass(self, tmp_path: pathlib.Path) -> None:
-        _write_flat_fixture(tmp_path, "SPY", "1d", n=80)
-        result = run_check(cache_dir=tmp_path, symbols=["SPY"], intervals=["1d"])
+        _write_flat_fixture(tmp_path, "SPY", "60m", n=150)
+        result = run_check(cache_dir=tmp_path, symbols=["SPY"], intervals=["60m"])
         assert result["result"] == "PASS"
         s = result["scenarios"][0]
         assert s["status"] == "OK"
         assert s["trade_diagnostic_result"] == "PASS"
 
     def test_flat_fixture_entry_count_zero(self, tmp_path: pathlib.Path) -> None:
-        _write_flat_fixture(tmp_path, "SPY", "1d", n=80)
-        result = run_check(cache_dir=tmp_path, symbols=["SPY"], intervals=["1d"])
+        _write_flat_fixture(tmp_path, "SPY", "60m", n=150)
+        result = run_check(cache_dir=tmp_path, symbols=["SPY"], intervals=["60m"])
         s = result["scenarios"][0]
         assert s["entry_count"] == 0
 
     def test_flat_fixture_exit_reason_counts_empty(self, tmp_path: pathlib.Path) -> None:
-        _write_flat_fixture(tmp_path, "SPY", "1d", n=80)
-        result = run_check(cache_dir=tmp_path, symbols=["SPY"], intervals=["1d"])
+        _write_flat_fixture(tmp_path, "SPY", "60m", n=150)
+        result = run_check(cache_dir=tmp_path, symbols=["SPY"], intervals=["60m"])
         s = result["scenarios"][0]
         assert s["exit_reason_counts"] == {}
 

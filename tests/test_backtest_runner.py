@@ -94,6 +94,7 @@ _DEFAULT_CONFIG = BacktestRunConfig(
     initial_capital=100_000.0,
     position_size_pct=0.95,
     stop_execution="bar_close",
+    force_exit_time=None,
 )
 
 
@@ -263,6 +264,7 @@ class TestRunBacktestValidation:
             "initial_capital": 100_000.0,
             "position_size_pct": 0.95,
             "stop_execution": "bar_close",
+            "force_exit_time": None,
         }
         fields.update(overrides)
         cfg = BacktestRunConfig(**fields)
@@ -381,6 +383,7 @@ class TestRunBacktestValidation:
             start_date="2024-01-02",
             end_date="2024-02-15",
             bar_interval="1d",
+            force_exit_time=None,
         )
         with pytest.raises(ValueError) as exc_info:
             run_backtest(cfg, data_provider=_FakeProvider())
@@ -414,6 +417,7 @@ class TestNewFieldValidation:
             "initial_capital": 100_000.0,
             "position_size_pct": 0.95,
             "stop_execution": "bar_close",
+            "force_exit_time": None,
         }
         fields.update(overrides)
         cfg = BacktestRunConfig(**fields)
@@ -611,6 +615,7 @@ class TestRunBacktestBehaviour:
             start_date="2024-01-02",
             end_date="2024-02-15",
             bar_interval="1d",
+            force_exit_time=None,
         )
         cfg_5m = BacktestRunConfig(
             strategy_name="trend_following",
@@ -635,6 +640,7 @@ class TestRunBacktestBehaviour:
             start_date="2024-01-02",
             end_date="2024-02-15",
             bar_interval="1d",
+            force_exit_time=None,
         )
         orig_params = dict(cfg.strategy_params)
         orig_symbols = list(cfg.symbols)
@@ -728,3 +734,191 @@ class TestSourceScans:
 
     def test_no_trade_record_write(self) -> None:
         assert "ledger" not in self._code()
+
+
+# ---------------------------------------------------------------------------
+# TestDailyBarForceExitGuard — PR 10W Phase 1 (Policy C block guard)
+# ---------------------------------------------------------------------------
+
+
+class TestDailyBarForceExitGuard:
+    """Validation guard: bar_interval in {'1d','1day','daily'} + non-None
+    force_exit_time is rejected before the backtest engine runs.
+
+    This implements PR 10U Policy C (Phase 1): fail-closed guard that blocks
+    the degenerate same-bar session_end exit artifact documented in PR 10T.
+    Policy A engine disable is deferred to a later PR.
+    """
+
+    def _make_1d_config(self, **overrides: Any) -> "BacktestRunConfig":
+        fields: dict[str, Any] = {
+            "strategy_name": "trend_following",
+            "strategy_params": _TREND_STRATEGY_PARAMS,
+            "symbols": ["SPY"],
+            "start_date": "2024-01-02",
+            "end_date": "2024-02-15",
+            "bar_interval": "1d",
+            "force_exit_time": None,
+        }
+        fields.update(overrides)
+        return BacktestRunConfig(**fields)
+
+    # --- 1d + non-None force_exit_time is blocked ---
+
+    def test_1d_with_force_exit_time_15_55_raises(self) -> None:
+        """Standard force_exit_time='15:55' combined with 1d raises."""
+        with pytest.raises(ValueError, match="invalid backtest run config"):
+            run_backtest(
+                self._make_1d_config(force_exit_time="15:55"),
+                data_provider=_FakeProvider(),
+            )
+
+    def test_1d_with_force_exit_time_09_30_raises(self) -> None:
+        """Any non-None force_exit_time with 1d raises."""
+        with pytest.raises(ValueError, match="invalid backtest run config"):
+            run_backtest(
+                self._make_1d_config(force_exit_time="09:30"),
+                data_provider=_FakeProvider(),
+            )
+
+    def test_1d_with_force_exit_time_00_00_raises(self) -> None:
+        """force_exit_time='00:00' with 1d also raises (still non-None)."""
+        with pytest.raises(ValueError, match="invalid backtest run config"):
+            run_backtest(
+                self._make_1d_config(force_exit_time="00:00"),
+                data_provider=_FakeProvider(),
+            )
+
+    def test_1d_force_exit_time_not_echoed_in_error(self) -> None:
+        """Raw force_exit_time value must not appear in the error message."""
+        secret_time = "14:42"
+        with pytest.raises(ValueError) as exc_info:
+            run_backtest(
+                self._make_1d_config(force_exit_time=secret_time),
+                data_provider=_FakeProvider(),
+            )
+        assert secret_time not in str(exc_info.value)
+        assert str(exc_info.value) == "invalid backtest run config"
+
+    # --- 1d + force_exit_time=None is permitted ---
+
+    def test_1d_with_force_exit_none_passes_validation(self) -> None:
+        result = run_backtest(
+            self._make_1d_config(force_exit_time=None),
+            data_provider=_FakeProvider(),
+        )
+        assert isinstance(result, BacktestRunResult)
+
+    def test_1d_force_exit_none_still_has_false_safety_flags(self) -> None:
+        result = run_backtest(
+            self._make_1d_config(force_exit_time=None),
+            data_provider=_FakeProvider(),
+        )
+        assert result.broker_calls_made is False
+        assert result.credentials_read is False
+        assert result.live_submit_enabled is False
+        assert result.order_action_requested is False
+        assert result.paper_trading_enabled is False
+
+    def test_1d_force_exit_none_bar_interval_echoed(self) -> None:
+        result = run_backtest(
+            self._make_1d_config(force_exit_time=None),
+            data_provider=_FakeProvider(),
+        )
+        assert result.bar_interval == "1d"
+
+    # --- "1day" and "daily" aliases ---
+
+    def test_1day_with_force_exit_time_raises(self) -> None:
+        """'1day' + force_exit_time raises (interval unknown or guard fires)."""
+        with pytest.raises(ValueError, match="invalid backtest run config"):
+            run_backtest(
+                BacktestRunConfig(
+                    strategy_name="trend_following",
+                    strategy_params=_TREND_STRATEGY_PARAMS,
+                    symbols=["SPY"],
+                    start_date="2024-01-02",
+                    end_date="2024-02-15",
+                    bar_interval="1day",
+                    force_exit_time="15:55",
+                ),
+                data_provider=_FakeProvider(),
+            )
+
+    def test_daily_with_force_exit_time_raises(self) -> None:
+        """'daily' + force_exit_time raises (interval unknown or guard fires)."""
+        with pytest.raises(ValueError, match="invalid backtest run config"):
+            run_backtest(
+                BacktestRunConfig(
+                    strategy_name="trend_following",
+                    strategy_params=_TREND_STRATEGY_PARAMS,
+                    symbols=["SPY"],
+                    start_date="2024-01-02",
+                    end_date="2024-02-15",
+                    bar_interval="daily",
+                    force_exit_time="15:55",
+                ),
+                data_provider=_FakeProvider(),
+            )
+
+    # --- Sub-daily intervals are not affected ---
+
+    def test_60m_with_force_exit_15_55_still_valid(self) -> None:
+        result = run_backtest(
+            BacktestRunConfig(
+                strategy_name="trend_following",
+                strategy_params=_TREND_STRATEGY_PARAMS,
+                symbols=["SPY"],
+                start_date="2024-01-02",
+                end_date="2024-02-15",
+                bar_interval="60m",
+                force_exit_time="15:55",
+            ),
+            data_provider=_FakeProvider(),
+        )
+        assert isinstance(result, BacktestRunResult)
+
+    def test_1h_with_force_exit_15_55_still_valid(self) -> None:
+        result = run_backtest(
+            BacktestRunConfig(
+                strategy_name="trend_following",
+                strategy_params=_TREND_STRATEGY_PARAMS,
+                symbols=["SPY"],
+                start_date="2024-01-02",
+                end_date="2024-02-15",
+                bar_interval="1h",
+                force_exit_time="15:55",
+            ),
+            data_provider=_FakeProvider(),
+        )
+        assert isinstance(result, BacktestRunResult)
+
+    def test_5m_with_force_exit_15_55_still_valid(self) -> None:
+        result = run_backtest(
+            BacktestRunConfig(
+                strategy_name="trend_following",
+                strategy_params=_TREND_STRATEGY_PARAMS,
+                symbols=["SPY"],
+                start_date="2024-01-02",
+                end_date="2024-02-15",
+                bar_interval="5m",
+                force_exit_time="15:55",
+            ),
+            data_provider=_FakeProvider(),
+        )
+        assert isinstance(result, BacktestRunResult)
+
+    def test_60m_with_force_exit_none_still_valid(self) -> None:
+        result = run_backtest(
+            BacktestRunConfig(
+                strategy_name="trend_following",
+                strategy_params=_TREND_STRATEGY_PARAMS,
+                symbols=["SPY"],
+                start_date="2024-01-02",
+                end_date="2024-02-15",
+                bar_interval="60m",
+                force_exit_time=None,
+            ),
+            data_provider=_FakeProvider(),
+        )
+        assert isinstance(result, BacktestRunResult)
