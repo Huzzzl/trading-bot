@@ -1,3 +1,6 @@
+> **ARCHIVED — PR R3.** Historical snapshot moved to `docs/archive/snapshots/` in PR R3.
+> Confirms PR 10N low-vol threshold calibration. Diagnostic logic is now embedded in codebase and tests.
+
 # Calibrated Sharpe Diagnostics — Real-Data Rerun Snapshot (PR 10O)
 
 Snapshot document for PR 10O: record the operator rerun of

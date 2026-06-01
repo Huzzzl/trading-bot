@@ -1,3 +1,6 @@
+> **ARCHIVED — PR R3.** Historical snapshot moved to `docs/archive/snapshots/` in PR R3.
+> Confirms PR 10W Phase 1 guard: 1d BLOCKED, 60m OK (197/195 trades). Current evaluation scope: 60m only.
+
 # Post-Phase-1 Daily Guard: Cached Checker Snapshot
 
 Snapshot document for PR 10X: record the operator-run results from

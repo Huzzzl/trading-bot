@@ -2,7 +2,7 @@
 
 Current operational status of the live-readiness gate baseline.
 Last updated: 2026-06-01. Full pre-submit pipeline complete through PR #98.
-Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. PR 10E cache checker (42 tests, 41 tools). PR 10F Yahoo fetch gate design. PR 10G Yahoo fetch tool (43 tests, 42 tools). PR 10H local fetch runbook. PR 10I cached real-data backtest checker (53 tests, 43 tools). PR 10J first real-data results snapshot (docs-only). PR 10K backtest metrics diagnostics (67 tests). PR 10L Sharpe diagnostics in cached checker (61 tests). PR 10N calibrate Sharpe diagnostic low-vol threshold (72 tests). PR 10O calibrated-diagnostics rerun snapshot (docs-only). PR 10M TrendFollowing default param comparison (29 tests). PR 10P trade summary diagnostics design (docs-only). PR 10Q Trade schema characterization tests (60 tests). PR 10R trade_summary_diagnostics helper (78 tests). PR 10S trade diagnostics in cached checker (86 tests). PR 10T trade diagnostics real-data snapshot (docs-only). PR 10U daily-bar session_end policy design (docs-only). PR 10V daily-bar session_end characterization tests (62 tests). PR 10W Phase 1 daily-bar guard (5 780 tests). PR 10X post-Phase-1 snapshot (docs-only). PR 10Y 60m-only evaluation scope design (docs-only). PR 10Z 60m-only cached checker runbook (docs-only). PR R1 codebase inventory and deletion plan (docs-only). PR R2 tool inventory active-vs-archive refactor (384 tests in test_tools_inventory.py; 5 701 full suite). Test baseline: 5 701 passed.
+Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. PR 10E cache checker (42 tests, 41 tools). PR 10F Yahoo fetch gate design. PR 10G Yahoo fetch tool (43 tests, 42 tools). PR 10H local fetch runbook. PR 10I cached real-data backtest checker (53 tests, 43 tools). PR 10J first real-data results snapshot (docs-only). PR 10K backtest metrics diagnostics (67 tests). PR 10L Sharpe diagnostics in cached checker (61 tests). PR 10N calibrate Sharpe diagnostic low-vol threshold (72 tests). PR 10O calibrated-diagnostics rerun snapshot (docs-only). PR 10M TrendFollowing default param comparison (29 tests). PR 10P trade summary diagnostics design (docs-only). PR 10Q Trade schema characterization tests (60 tests). PR 10R trade_summary_diagnostics helper (78 tests). PR 10S trade diagnostics in cached checker (86 tests). PR 10T trade diagnostics real-data snapshot (docs-only). PR 10U daily-bar session_end policy design (docs-only). PR 10V daily-bar session_end characterization tests (62 tests). PR 10W Phase 1 daily-bar guard (5 780 tests). PR 10X post-Phase-1 snapshot (docs-only). PR 10Y 60m-only evaluation scope design (docs-only). PR 10Z 60m-only cached checker runbook (docs-only). PR R1 codebase inventory and deletion plan (docs-only). PR R2 tool inventory active-vs-archive refactor (384 tests in test_tools_inventory.py; 5 701 full suite). PR R3 archive superseded snapshot docs (5 docs moved to docs/archive/snapshots/; no test changes; 5 701 full suite). Test baseline: 5 701 passed.
 
 ---
 
@@ -4725,8 +4725,8 @@ python -m pytest  # 5 427 passed (5 366 baseline + 53 tool tests + 8 inventory)
 
 ### What was documented
 
-`docs/first_cached_real_data_backtest_results_snapshot.md` — records the first
-operator-run results from the complete real-data pipeline.
+`docs/archive/snapshots/first_cached_real_data_backtest_results_snapshot.md` — records the first
+operator-run results from the complete real-data pipeline. (Archived in PR R3 — historical record.)
 
 **Three-step pipeline results:**
 
@@ -5254,7 +5254,7 @@ sentinel `"23:59"` passed to `RiskManager`. No engine or `RiskManager` change.
 `cached_real_data_backtest_check.py` unchanged — its 1d scenarios still use
 `force_exit_time="15:55"` and now return `BLOCKED`.
 
-**PR 10X — Post-guard snapshot (`docs/post_phase1_daily_guard_cached_checker_snapshot.md`)**
+**PR 10X — Post-guard snapshot (`docs/archive/snapshots/post_phase1_daily_guard_cached_checker_snapshot.md`)**
 
 Operator rerun confirms Phase 1 works as intended:
 
@@ -5472,5 +5472,70 @@ deletions in this PR.
 > **This milestone does not approve automated live trading.**
 > **This milestone does not approve any individual trade.**
 > **No tools were moved or deleted.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> **Nothing in this repository is financial advice.**
+
+---
+
+## Milestone: PR R3 — Archive Superseded Snapshot Docs
+
+**Status:** Complete
+
+Created `docs/archive/snapshots/`. Moved 5 superseded snapshot docs. No tests
+modified. Full suite: 5 701 passed (unchanged from R2).
+
+**No src/tools files moved or deleted.**
+**No broker calls. No credentials read. No orders.**
+**No paper trading approved. No live trading approved.**
+
+### Archived docs (moved to `docs/archive/snapshots/`)
+
+| File | Original PR | Why archived |
+|------|-------------|-------------|
+| `first_cached_real_data_backtest_results_snapshot.md` | 10J | Daily 1d later BLOCKED; 60m-only scope is current per PR 10Y |
+| `calibrated_sharpe_diagnostics_real_data_snapshot.md` | 10O | Calibration logic now embedded in codebase and tests |
+| `trade_diagnostics_real_data_snapshot.md` | 10T | Same-bar artifact documented here; 1d BLOCKED by PR 10W |
+| `post_phase1_daily_guard_cached_checker_snapshot.md` | 10X | Historical rerun record; conclusions in active scope docs |
+| `automated_trading_architecture_readiness_snapshot.md` | 9F era | Superseded by Phase R direction reset; test baseline 5 193 → 5 701 |
+
+### Archive notes added
+
+Each archived file has a `> **ARCHIVED — PR R3.**` blockquote at the top
+preserving key conclusions (60m-only scope current; 1d BLOCKED/deferred;
+records are historical, not current direction).
+
+### Path references updated
+
+7 active docs updated to `docs/archive/snapshots/<file>.md` paths:
+`docs/automated_strategy_execution_roadmap.md`,
+`docs/real_data_backtest_gate_design.md`,
+`docs/daily_bar_session_end_policy_design.md`,
+`docs/trade_summary_diagnostics_design.md`,
+`docs/trend_bot_architecture_refactor_plan.md`,
+`docs/live_readiness_status.md`,
+`docs/automated_bot_codebase_inventory_deletion_plan.md`.
+
+### Test cleanup audit
+
+| Test file | Classification | Reason |
+|-----------|---------------|--------|
+| `tests/test_daily_bar_session_end_behavior.py` | `KEEP_ACTIVE_TEST` | References "PR 10T snapshot" in a comment only; tests engine behavior |
+| `tests/test_live_single_manual_submit.py` | `KEEP_ACTIVE_TEST` | Uses "snapshot" as a mock variable name; no file path reference |
+
+No `DELETE_TEST_CANDIDATE` tests identified. No tests modified.
+
+### Safety invariants confirmed
+
+- No `src/` code changed
+- No `config/`, `output/`, `scripts/`, `data/` changes
+- No broker calls, no credentials read, no orders
+- 5 snapshot docs preserved in `docs/archive/snapshots/` (not deleted)
+- All active doc links updated to archived paths
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No snapshot docs were deleted — only moved to `docs/archive/snapshots/`.**
 > **No Alpaca endpoint was contacted. No credentials were read.**
 > **Nothing in this repository is financial advice.**

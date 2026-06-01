@@ -405,7 +405,7 @@ No PR may be skipped. Each requires its own test coverage where applicable.
 
 #### PR 10A — Architecture readiness snapshot
 
-**Status: implemented — `docs/automated_trading_architecture_readiness_snapshot.md`**
+**Status: implemented — `docs/archive/snapshots/automated_trading_architecture_readiness_snapshot.md`**
 
 Docs-only. Captures current implementation status after refactor PRs 1–9:
 full component inventory (implemented vs. not yet implemented), CLI surface,

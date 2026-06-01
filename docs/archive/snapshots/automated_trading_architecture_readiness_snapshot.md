@@ -1,3 +1,7 @@
+> **ARCHIVED — PR R3.** Historical snapshot moved to `docs/archive/snapshots/` in PR R3.
+> Records architecture state after PRs 1–9 (5 193 tests). Superseded by Phase R direction reset (PR R1/R2).
+> Current status in `docs/automated_strategy_execution_roadmap.md` and `docs/live_readiness_status.md`.
+
 # Automated Trading Architecture Readiness Snapshot
 
 Point-in-time snapshot of the trading bot architecture after completion of

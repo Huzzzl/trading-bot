@@ -1,3 +1,7 @@
+> **ARCHIVED — PR R3.** Historical snapshot moved to `docs/archive/snapshots/` in PR R3.
+> Key finding: daily 1d same-bar session_end artifact documented here; 1d subsequently BLOCKED by PR 10W.
+> 60m results (197/195 trades) remain the active evaluation scope per PR 10Y/10Z.
+
 # Trade Diagnostics Real-Data Snapshot
 
 Snapshot document for PR 10T: record the first operator-run results from
