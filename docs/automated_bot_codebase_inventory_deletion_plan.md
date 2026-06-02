@@ -486,4 +486,34 @@ Five dependency clusters (A–E) and reduction PRs R4c–R4g:
 ### No code changes in PR R4b
 
 No `src/`, `tests/`, `scripts/`, `config/`, `output/`, or `data/` changes.
-Full suite: 4 513 passed (unchanged from R4).
+Full suite: 4 513 passed (unchanged from R4)
+
+---
+
+## 11. PR R4c Implementation Record
+
+PR R4c broke the `test_paper_ledger.py` → `paper_smoke_check` import chain
+and archived the tool.
+
+### Change
+
+| File | Action |
+|------|--------|
+| `tests/test_paper_ledger.py` | `TestSmokeCheckDoesNotAppendLedger` rewritten — uses `AlpacaBrokerAdapter` fake client + `OrderIntent` CSV write directly |
+| `src/tools/paper_smoke_check.py` | Archived to `scripts/archive/manual_live_readiness/` |
+| `tests/test_paper_smoke_check.py` | Deleted |
+| `tests/test_tools_inventory.py` | `ACTIVE_RUNTIME_CANDIDATE_TOOLS` 26→25; `ACTIVE_TOOLS` 30→29; `ARCHIVED_TOOLS` 10→11 |
+
+### Final post-R4c counts
+
+| Classification | Count |
+|----------------|-------|
+| `ACTIVE_TOOLS` (in `src/tools/`) | 29 |
+| `ARCHIVED_TOOLS` (in `scripts/archive/manual_live_readiness/`) | 11 |
+| `DELETED_TOOLS_R4` | 3 |
+
+### Safety invariants confirmed
+
+- Behavioral assertion preserved: paper preview path (fake broker preflight + CSV write) must not call `append_ledger_row`
+- No runtime trading behavior changed
+- No broker calls, no credentials read, no orders.

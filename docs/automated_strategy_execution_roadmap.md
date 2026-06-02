@@ -419,6 +419,14 @@ them into 5 dependency clusters (A–E), and defines reduction PRs R4c–R4g. Di
 checkpoint: if `ACTIVE_TOOLS` is still above ~22–24 after R4g, do another cleanup pass
 before R5. No `src/`, `tests/`, `scripts/`, or `config/` changes.
 
+**PR R4c — Remove paper_smoke_check active dependency — implemented**
+`tests/test_paper_ledger.py`: rewrote `test_smoke_check_does_not_write_ledger` to use
+`AlpacaBrokerAdapter` with a locally-defined fake client and `OrderIntent` CSV write
+directly — no `paper_smoke_check` import. `paper_smoke_check.py` archived to
+`scripts/archive/manual_live_readiness/`. `tests/test_paper_smoke_check.py` deleted.
+`tests/test_tools_inventory.py` updated: `ACTIVE_RUNTIME_CANDIDATE_TOOLS` 26 → 25,
+`ACTIVE_TOOLS` 30 → 29, `ARCHIVED_TOOLS` 10 → 11. No runtime trading behavior change.
+
 No parameter optimisation or paper/live progression until diagnostics complete.
 
 ### Phase C — Paper trading execution

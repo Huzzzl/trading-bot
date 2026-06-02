@@ -2,7 +2,7 @@
 
 Current operational status of the live-readiness gate baseline.
 Last updated: 2026-06-01. Full pre-submit pipeline complete through PR #98.
-Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. PR 10E cache checker (42 tests, 41 tools). PR 10F Yahoo fetch gate design. PR 10G Yahoo fetch tool (43 tests, 42 tools). PR 10H local fetch runbook. PR 10I cached real-data backtest checker (53 tests, 43 tools). PR 10J first real-data results snapshot (docs-only). PR 10K backtest metrics diagnostics (67 tests). PR 10L Sharpe diagnostics in cached checker (61 tests). PR 10N calibrate Sharpe diagnostic low-vol threshold (72 tests). PR 10O calibrated-diagnostics rerun snapshot (docs-only). PR 10M TrendFollowing default param comparison (29 tests). PR 10P trade summary diagnostics design (docs-only). PR 10Q Trade schema characterization tests (60 tests). PR 10R trade_summary_diagnostics helper (78 tests). PR 10S trade diagnostics in cached checker (86 tests). PR 10T trade diagnostics real-data snapshot (docs-only). PR 10U daily-bar session_end policy design (docs-only). PR 10V daily-bar session_end characterization tests (62 tests). PR 10W Phase 1 daily-bar guard (5 780 tests). PR 10X post-Phase-1 snapshot (docs-only). PR 10Y 60m-only evaluation scope design (docs-only). PR 10Z 60m-only cached checker runbook (docs-only). PR R1 codebase inventory and deletion plan (docs-only). PR R2 tool inventory active-vs-archive refactor (384 tests in test_tools_inventory.py; 5 701 full suite). PR R3 archive superseded snapshot docs (5 docs moved to docs/archive/snapshots/; no test changes; 5 701 full suite). PR R4 archive manual tools and delete stubs (10 tools archived, 3 deleted, 13 test files removed, test_tools_inventory.py rewritten to 310 tests; 4 513 full suite). PR R4b legacy active tool dependency reduction plan (docs-only; adds legacy_active_tool_dependency_reduction_plan.md; defines R4c–R4g cluster reduction chain; no test changes; 4 513 full suite). Test baseline: 4 513 passed.
+Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. PR 10E cache checker (42 tests, 41 tools). PR 10F Yahoo fetch gate design. PR 10G Yahoo fetch tool (43 tests, 42 tools). PR 10H local fetch runbook. PR 10I cached real-data backtest checker (53 tests, 43 tools). PR 10J first real-data results snapshot (docs-only). PR 10K backtest metrics diagnostics (67 tests). PR 10L Sharpe diagnostics in cached checker (61 tests). PR 10N calibrate Sharpe diagnostic low-vol threshold (72 tests). PR 10O calibrated-diagnostics rerun snapshot (docs-only). PR 10M TrendFollowing default param comparison (29 tests). PR 10P trade summary diagnostics design (docs-only). PR 10Q Trade schema characterization tests (60 tests). PR 10R trade_summary_diagnostics helper (78 tests). PR 10S trade diagnostics in cached checker (86 tests). PR 10T trade diagnostics real-data snapshot (docs-only). PR 10U daily-bar session_end policy design (docs-only). PR 10V daily-bar session_end characterization tests (62 tests). PR 10W Phase 1 daily-bar guard (5 780 tests). PR 10X post-Phase-1 snapshot (docs-only). PR 10Y 60m-only evaluation scope design (docs-only). PR 10Z 60m-only cached checker runbook (docs-only). PR R1 codebase inventory and deletion plan (docs-only). PR R2 tool inventory active-vs-archive refactor (384 tests in test_tools_inventory.py; 5 701 full suite). PR R3 archive superseded snapshot docs (5 docs moved to docs/archive/snapshots/; no test changes; 5 701 full suite). PR R4 archive manual tools and delete stubs (10 tools archived, 3 deleted, 13 test files removed, test_tools_inventory.py rewritten to 310 tests; 4 513 full suite). PR R4b legacy active tool dependency reduction plan (docs-only; adds legacy_active_tool_dependency_reduction_plan.md; defines R4c–R4g cluster reduction chain; no test changes; 4 513 full suite). PR R4c remove paper_smoke_check active dependency (test_paper_ledger.py rewritten to use primitives; paper_smoke_check archived; test_paper_smoke_check.py deleted; ACTIVE_TOOLS 30→29; 4 440 full suite). Test baseline: 4 440 passed.
 
 ---
 
@@ -5666,6 +5666,43 @@ before opening R5 (paper runner extraction).
 ### Safety invariants confirmed
 
 - No `src/`, `tests/`, `scripts/`, `config/`, `output/`, `data/cache/` changes
+- No broker calls, no credentials read, no orders, no trading behavior change
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> **Nothing in this repository is financial advice.**
+
+---
+
+## PR R4c Milestone — Remove paper_smoke_check Active Dependency
+
+**Date:** 2026-06-02
+**Branch:** `claude/hopeful-cray-56Jfr`
+**Full suite:** 4 440 passed (down from 4 513 — 66 tests removed via deleted test file; 7 parametrized test slots removed from inventory; 1 new test added to test_paper_ledger.py)
+
+### Summary
+
+PR R4c broke the `test_paper_ledger.py` → `src.tools.paper_smoke_check` import chain and archived the tool. `paper_smoke_check` was the first of the 11 legacy tools from the PR R4b plan to be eliminated.
+
+### Changed files
+
+| File | Action |
+|------|--------|
+| `tests/test_paper_ledger.py` | `TestSmokeCheckDoesNotAppendLedger` rewritten — `AlpacaBrokerAdapter` fake client + `OrderIntent` CSV write directly; no `paper_smoke_check` import |
+| `src/tools/paper_smoke_check.py` | Archived to `scripts/archive/manual_live_readiness/` |
+| `tests/test_paper_smoke_check.py` | Deleted (66 tests removed) |
+| `tests/test_tools_inventory.py` | `ACTIVE_RUNTIME_CANDIDATE_TOOLS` 26→25; `ACTIVE_TOOLS` 30→29; `ARCHIVED_TOOLS` 10→11 |
+| 4 docs | Updated with R4c record |
+
+### Safety invariants confirmed
+
+- Behavioral assertion preserved: paper preview path (fake broker preflight + CSV write) must not call `append_ledger_row`
+- No `src/backtest/`, `src/strategy/`, `src/risk/`, `src/execution/` runtime files changed
+- No `src/main.py` changed
+- No config, output, data/cache changes
 - No broker calls, no credentials read, no orders, no trading behavior change
 
 ### Warning
