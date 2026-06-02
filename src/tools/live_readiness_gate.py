@@ -25,9 +25,11 @@ Stages
 ------
 1. account_check        — credentials + live account health (buying_power, blocks)
 2. shadow_preflight     — single-symbol strategy preview + live account state
-3. shadow_review        — review of preflight artifacts
+3. shadow_review        — BLOCKED: automated runtime state gate not implemented
+                          (manual shadow review chain removed in PR R4f)
 4. symbol_screen        — multi-symbol live sizing screen
-5. symbol_screen_review — review of symbol-screen artifacts
+5. symbol_screen_review — BLOCKED: automated runtime state gate not implemented
+                          (manual shadow screen review chain removed in PR R4f)
 
 Decision
 --------
@@ -60,16 +62,6 @@ from src.tools.live_shadow_preflight import (
     check_live_sizing,
     write_report as _write_preflight_report,
 )
-from src.tools.live_shadow_review import (
-    build_summary as _build_preflight_summary,
-    parse_candidates as _parse_preflight_candidates,
-    parse_report as _parse_preflight_report,
-)
-from src.tools.live_shadow_screen_review import (
-    build_summary as _build_screen_summary,
-    parse_csv as _parse_screen_csv,
-    parse_report as _parse_screen_report,
-)
 from src.tools.live_shadow_screen_symbols import (
     _normalize_symbols,
     compute_overall,
@@ -78,6 +70,12 @@ from src.tools.live_shadow_screen_symbols import (
     write_screen_report as _write_screen_report,
 )
 from src.tools.paper_status import check_config
+
+# ---------------------------------------------------------------------------
+# Automated runtime state gate placeholder
+# ---------------------------------------------------------------------------
+
+_AUTOMATED_RUNTIME_STATE_GATE_IMPLEMENTED = False
 
 _STAGE_NAMES = (
     "account_check",
@@ -164,17 +162,21 @@ def _stage_preflight(
     }
 
 
-def _stage_preflight_review(json_path: Path, csv_path: Path) -> dict[str, Any]:
-    """Stage 3: review of preflight artifacts."""
-    try:
-        report     = _parse_preflight_report(json_path)
-        candidates = _parse_preflight_candidates(csv_path)
-        summary    = _build_preflight_summary(report, candidates)
-    except (FileNotFoundError, ValueError) as exc:
-        return {"status": "FAIL", "blockers": [str(exc)]}
+def _stage_preflight_review(json_path: Any, csv_path: Any) -> dict[str, Any]:
+    """Stage 3: placeholder — automated runtime state gate not implemented.
 
-    blockers = [b["message"] for b in summary["blockers"]]
-    return {"status": summary["result"], "blockers": blockers}
+    PR R4f removed the manual shadow review chain. This stage is BLOCKED
+    until an automated runtime state/risk gate replaces it.
+    """
+    if not _AUTOMATED_RUNTIME_STATE_GATE_IMPLEMENTED:
+        return {
+            "status": "FAIL",
+            "blockers": [
+                "automated runtime state gate not implemented — "
+                "manual shadow review chain removed in PR R4f"
+            ],
+        }
+    return {"status": "FAIL", "blockers": ["not implemented"]}
 
 
 def _stage_symbol_screen(
@@ -217,16 +219,21 @@ def _stage_symbol_screen(
     }
 
 
-def _stage_symbol_screen_review(json_path: Path, csv_path: Path) -> dict[str, Any]:
-    """Stage 5: review of symbol-screen artifacts."""
-    try:
-        report  = _parse_screen_report(json_path)
-        rows    = _parse_screen_csv(csv_path)
-        summary = _build_screen_summary(report, rows)
-    except (FileNotFoundError, ValueError) as exc:
-        return {"status": "FAIL", "blockers": [str(exc)]}
+def _stage_symbol_screen_review(json_path: Any, csv_path: Any) -> dict[str, Any]:
+    """Stage 5: placeholder — automated runtime state gate not implemented.
 
-    return {"status": summary["result"], "blockers": summary["suggested_actions"][:3]}
+    PR R4f removed the manual shadow screen review chain. This stage is BLOCKED
+    until an automated runtime state/risk gate replaces it.
+    """
+    if not _AUTOMATED_RUNTIME_STATE_GATE_IMPLEMENTED:
+        return {
+            "status": "FAIL",
+            "blockers": [
+                "automated runtime state gate not implemented — "
+                "manual shadow review chain removed in PR R4f"
+            ],
+        }
+    return {"status": "FAIL", "blockers": ["not implemented"]}
 
 
 # ---------------------------------------------------------------------------

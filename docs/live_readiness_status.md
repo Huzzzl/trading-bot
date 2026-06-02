@@ -5796,3 +5796,45 @@ tools were archived since no other active callers remained.
 > **This milestone does not approve any individual trade.**
 > **No Alpaca endpoint was contacted. No credentials were read.**
 > **Nothing in this repository is financial advice.**
+
+---
+
+## PR R4f Milestone — Decouple live_readiness_gate from Manual Shadow Review Chain
+
+**Date:** 2026-06-02
+**Branch:** `claude/hopeful-cray-56Jfr`
+**Full suite:** 4 236 passed (down from 4 337 — test_live_shadow_review.py and test_live_shadow_screen_review.py deleted; TestAutomatedRuntimeStateGate added; GO-path tests replaced with NO-GO tests)
+
+### Summary
+
+PR R4f removed `live_readiness_gate`'s module-level imports of `live_shadow_review` and
+`live_shadow_screen_review`. Stages 3 (shadow_review) and 5 (symbol_screen_review) are now
+fail-closed placeholders. The gate can never reach GO until `_AUTOMATED_RUNTIME_STATE_GATE_IMPLEMENTED`
+is set to `True` by a real automated runtime state/risk gate.
+
+### Changed files
+
+| File | Action |
+|------|--------|
+| `src/tools/live_readiness_gate.py` | Module-level imports removed; `_AUTOMATED_RUNTIME_STATE_GATE_IMPLEMENTED = False` added; stages 3+5 replaced with fail-closed stubs |
+| `src/tools/live_shadow_review.py` | Archived to `scripts/archive/manual_live_readiness/` |
+| `src/tools/live_shadow_screen_review.py` | Archived to `scripts/archive/manual_live_readiness/` |
+| `tests/test_live_shadow_review.py` | Deleted |
+| `tests/test_live_shadow_screen_review.py` | Deleted |
+| `tests/test_live_readiness_gate.py` | GO-path tests replaced; `TestAutomatedRuntimeStateGate` added (7 tests) |
+| `tests/test_tools_inventory.py` | `ACTIVE_RUNTIME_CANDIDATE_TOOLS` 22→20; `ACTIVE_TOOLS` 26→24; `ARCHIVED_TOOLS` 14→16 |
+| 5 docs | Updated with R4f record |
+
+### Safety invariants confirmed
+
+- `live_readiness_gate` is fail-closed: stages 3+5 always FAIL until automated gate is implemented
+- No `src/backtest/`, `src/strategy/`, `src/risk/`, `src/execution/` runtime files changed
+- No `src/main.py` changed; no config, output, data/cache changes
+- No broker calls, no credentials read, no orders, no trading behavior change
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> **Nothing in this repository is financial advice.**

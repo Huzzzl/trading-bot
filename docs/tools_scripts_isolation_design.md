@@ -395,6 +395,15 @@ no operator-history value).
 - No broker calls, no credentials read, no orders, no trading behavior change
 - Full suite: 4 513 passed
 
+### PR R4f — Decouple live_readiness_gate from manual shadow review chain
+
+Module-level imports of `live_shadow_review` and `live_shadow_screen_review` removed
+from `live_readiness_gate.py`. `_AUTOMATED_RUNTIME_STATE_GATE_IMPLEMENTED = False` keeps
+gate fail-closed. Stages 3+5 always return FAIL until implemented.
+`live_shadow_review.py` and `live_shadow_screen_review.py` archived.
+`test_live_shadow_review.py` and `test_live_shadow_screen_review.py` deleted.
+`ACTIVE_TOOLS`: 26 → 24. `ARCHIVED_TOOLS`: 14 → 16.
+
 ### PR R4e — Decouple live_submit from manual checklist chain
 
 `live_submit._run_checklist` replaced by `_check_automated_risk_gate()`.

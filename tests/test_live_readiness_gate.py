@@ -350,7 +350,44 @@ class TestCollectTopBlockers:
 
 
 # ---------------------------------------------------------------------------
-# 2. write_gate_report
+# 2. Automated runtime state gate placeholder
+# ---------------------------------------------------------------------------
+
+class TestAutomatedRuntimeStateGate:
+    def test_gate_constant_is_false(self):
+        from src.tools.live_readiness_gate import _AUTOMATED_RUNTIME_STATE_GATE_IMPLEMENTED
+        assert _AUTOMATED_RUNTIME_STATE_GATE_IMPLEMENTED is False
+
+    def test_preflight_review_returns_fail(self):
+        from src.tools.live_readiness_gate import _stage_preflight_review
+        result = _stage_preflight_review(None, None)
+        assert result["status"] == "FAIL"
+        assert result["blockers"]
+
+    def test_preflight_review_blocker_mentions_r4f(self):
+        from src.tools.live_readiness_gate import _stage_preflight_review
+        result = _stage_preflight_review(None, None)
+        assert any("R4f" in b for b in result["blockers"])
+
+    def test_screen_review_returns_fail(self):
+        from src.tools.live_readiness_gate import _stage_symbol_screen_review
+        result = _stage_symbol_screen_review(None, None)
+        assert result["status"] == "FAIL"
+        assert result["blockers"]
+
+    def test_screen_review_blocker_mentions_r4f(self):
+        from src.tools.live_readiness_gate import _stage_symbol_screen_review
+        result = _stage_symbol_screen_review(None, None)
+        assert any("R4f" in b for b in result["blockers"])
+
+    def test_review_blocker_mentions_blocked(self):
+        from src.tools.live_readiness_gate import _stage_preflight_review
+        result = _stage_preflight_review(None, None)
+        assert any("not implemented" in b.lower() for b in result["blockers"])
+
+
+# ---------------------------------------------------------------------------
+# 3. write_gate_report
 # ---------------------------------------------------------------------------
 
 class TestWriteGateReport:
@@ -376,22 +413,29 @@ class TestWriteGateReport:
 
 
 # ---------------------------------------------------------------------------
-# 3. CLI: main()
+# 4. CLI: main()
 # ---------------------------------------------------------------------------
 
 class TestMain:
-    def test_all_pass_exits_0_decision_go(self, tmp_path):
+    def test_review_stages_block_gate_no_go(self, tmp_path):
+        """Stages 3+5 are fail-closed placeholders; gate is always NO-GO until automated."""
         code, _ = _run_main(tmp_path)
-        assert code in (0, None)
+        assert code == 1
         report = json.loads((tmp_path / "live_readiness_gate_report.json").read_text(encoding="utf-8"))
-        assert report["decision"] == "GO"
+        assert report["decision"] == "NO-GO"
 
-    def test_go_report_has_empty_top_blockers(self, tmp_path):
-        code, _ = _run_main(tmp_path)
-        assert code in (0, None)
+    def test_review_stages_fail_in_report(self, tmp_path):
+        """shadow_review and symbol_screen_review must be FAIL in the gate report."""
+        _run_main(tmp_path)
         report = json.loads((tmp_path / "live_readiness_gate_report.json").read_text(encoding="utf-8"))
-        assert report["decision"] == "GO"
-        assert report["top_blockers"] == []
+        assert report["stages"]["shadow_review"] == "FAIL"
+        assert report["stages"]["symbol_screen_review"] == "FAIL"
+
+    def test_review_stage_blockers_mention_r4f(self, tmp_path):
+        """Blockers must reference PR R4f so the reason is traceable."""
+        _run_main(tmp_path)
+        report = json.loads((tmp_path / "live_readiness_gate_report.json").read_text(encoding="utf-8"))
+        assert any("R4f" in b for b in report["top_blockers"])
 
     def test_account_warn_exits_1_no_go(self, tmp_path):
         code, _ = _run_main(tmp_path, account_raw=_mock_account_raw(buying_power="0"))
@@ -513,8 +557,8 @@ class TestMain:
                 pass
         mock_factory.assert_called_once_with("LIVE_K", "LIVE_S")
 
-    def test_multi_symbol_screen_pass(self, tmp_path):
-        """With two passing symbols the gate is GO."""
+    def test_multi_symbol_screen_still_no_go(self, tmp_path):
+        """Even with two passing symbols the review placeholders keep gate NO-GO."""
         code, _ = _run_main(
             tmp_path,
             screen_symbols=["SPY", "QQQ"],
@@ -523,13 +567,13 @@ class TestMain:
                 "QQQ": [_mock_intent("QQQ", entry_price=150.0)],
             },
         )
-        assert code in (0, None)
+        assert code == 1
         report = json.loads((tmp_path / "live_readiness_gate_report.json").read_text(encoding="utf-8"))
-        assert report["decision"] == "GO"
+        assert report["decision"] == "NO-GO"
 
 
 # ---------------------------------------------------------------------------
-# 4. append_history_row (unit)
+# 5. append_history_row (unit)
 # ---------------------------------------------------------------------------
 
 class TestAppendHistoryRow:
@@ -602,7 +646,7 @@ class TestAppendHistoryRow:
 
 
 # ---------------------------------------------------------------------------
-# 5. CLI: --append-history flag
+# 6. CLI: --append-history flag
 # ---------------------------------------------------------------------------
 
 class TestAppendHistory:
