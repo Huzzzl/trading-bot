@@ -1,3 +1,5 @@
+# ARCHIVED in PR R4f. Historical manual shadow screen review tool. Not part of active automated runtime.
+# Moved from src/tools/live_shadow_screen_review.py. Not importable as src.tools.live_shadow_screen_review.
 """
 tools/live_shadow_screen_review.py
 ------------------------------------

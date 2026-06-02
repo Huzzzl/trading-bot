@@ -442,6 +442,15 @@ automated gate exists. `live_pre_submit_checklist.py` and `live_dry_run_review.p
 `tests/test_tools_inventory.py` updated: `ACTIVE_RUNTIME_CANDIDATE_TOOLS` 24 → 22,
 `ACTIVE_TOOLS` 28 → 26, `ARCHIVED_TOOLS` 12 → 14. No runtime trading behavior change.
 
+**PR R4f — Decouple live_readiness_gate from manual shadow review chain — implemented**
+Module-level imports of `live_shadow_review` and `live_shadow_screen_review` removed from
+`live_readiness_gate.py`. `_AUTOMATED_RUNTIME_STATE_GATE_IMPLEMENTED = False` constant added.
+`_stage_preflight_review` and `_stage_symbol_screen_review` replaced with fail-closed stubs.
+`live_shadow_review.py` and `live_shadow_screen_review.py` archived.
+`test_live_shadow_review.py` and `test_live_shadow_screen_review.py` deleted.
+`tests/test_tools_inventory.py` updated: `ACTIVE_RUNTIME_CANDIDATE_TOOLS` 22 → 20,
+`ACTIVE_TOOLS` 26 → 24, `ARCHIVED_TOOLS` 14 → 16. No runtime trading behavior change.
+
 No parameter optimisation or paper/live progression until diagnostics complete.
 
 ### Phase C — Paper trading execution

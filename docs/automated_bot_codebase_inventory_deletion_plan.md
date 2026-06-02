@@ -583,3 +583,36 @@ PR R4e removed `live_submit`'s manual checklist chain dependency and archived bo
 - `live_submit` remains fail-closed: `_AUTOMATED_RISK_GATE_IMPLEMENTED = False` blocks all live submit paths
 - No runtime trading behavior changed
 - No broker calls, no credentials read, no orders.
+
+---
+
+## 14. PR R4f Implementation Record
+
+PR R4f removed `live_readiness_gate`'s manual shadow review chain dependencies and archived both tools.
+
+### Change
+
+| File | Action |
+|------|--------|
+| `src/tools/live_readiness_gate.py` | Module-level imports of `live_shadow_review` and `live_shadow_screen_review` removed; `_AUTOMATED_RUNTIME_STATE_GATE_IMPLEMENTED = False` added; `_stage_preflight_review` and `_stage_symbol_screen_review` replaced with fail-closed stubs |
+| `src/tools/live_shadow_review.py` | Archived to `scripts/archive/manual_live_readiness/` |
+| `src/tools/live_shadow_screen_review.py` | Archived to `scripts/archive/manual_live_readiness/` |
+| `tests/test_live_shadow_review.py` | Deleted |
+| `tests/test_live_shadow_screen_review.py` | Deleted |
+| `tests/test_live_readiness_gate.py` | GO-path tests replaced with NO-GO tests; `TestAutomatedRuntimeStateGate` class added |
+| `tests/test_tools_inventory.py` | `ACTIVE_RUNTIME_CANDIDATE_TOOLS` 22→20; `ACTIVE_TOOLS` 26→24; `ARCHIVED_TOOLS` 14→16 |
+| 5 docs | Updated with R4f record |
+
+### Final post-R4f counts
+
+| Classification | Count |
+|----------------|-------|
+| `ACTIVE_TOOLS` (in `src/tools/`) | 24 |
+| `ARCHIVED_TOOLS` (in `scripts/archive/manual_live_readiness/`) | 16 |
+| `DELETED_TOOLS_R4` | 3 |
+
+### Safety invariants confirmed
+
+- `live_readiness_gate` is fail-closed: stages 3+5 always FAIL until `_AUTOMATED_RUNTIME_STATE_GATE_IMPLEMENTED = True`
+- No runtime trading behavior changed
+- No broker calls, no credentials read, no orders.

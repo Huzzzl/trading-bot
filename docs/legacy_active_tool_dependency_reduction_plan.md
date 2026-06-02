@@ -283,19 +283,24 @@ Full suite: 4 337 passed.
 `src/tools/live_shadow_screen_review.py`
 
 **Change:**
-- Remove `live_readiness_gate`'s imports of `live_shadow_review` and
-  `live_shadow_screen_review`.
-- Replace with an explicit `BLOCKED — shadow review not required by runtime`
-  condition, or remove the shadow review step from the gate if it is
-  entirely manual-operator logic.
-- Archive or delete both shadow review tools if no active references remain.
+- Removed module-level imports of `live_shadow_review` and `live_shadow_screen_review`
+  from `live_readiness_gate.py`.
+- Added `_AUTOMATED_RUNTIME_STATE_GATE_IMPLEMENTED = False` constant.
+- Replaced `_stage_preflight_review` and `_stage_symbol_screen_review` with fail-closed
+  placeholder stubs; both return `status=FAIL` with R4f blocker message.
+- Archived `live_shadow_review.py` and `live_shadow_screen_review.py` to
+  `scripts/archive/manual_live_readiness/` — no other active callers remained.
+- Deleted `tests/test_live_shadow_review.py` and `tests/test_live_shadow_screen_review.py`.
+- Updated `tests/test_live_readiness_gate.py`: GO-path tests replaced with NO-GO tests;
+  `TestAutomatedRuntimeStateGate` class added.
 
-**Safety invariant:** `live_readiness_gate` GO/NO-GO result must remain
-fail-closed. No change may cause the gate to pass when it would previously
-block.
+**Safety invariant:** `live_readiness_gate` is fail-closed: stages 3+5 always return
+FAIL until `_AUTOMATED_RUNTIME_STATE_GATE_IMPLEMENTED` becomes `True`. Gate can never
+reach GO without a real automated runtime state gate.
 
-**Expected outcome:** `live_shadow_review` and `live_shadow_screen_review`
-removed from `ACTIVE_TOOLS`. `ACTIVE_TOOLS`: 26 → 24 (after R4c+R4d+R4e).
+**Actual outcome:** `live_shadow_review` and `live_shadow_screen_review` removed from
+`ACTIVE_TOOLS`. `ACTIVE_TOOLS`: 26 → 24. `ARCHIVED_TOOLS`: 14 → 16.
+Full suite: 4 236 passed.
 
 ---
 
