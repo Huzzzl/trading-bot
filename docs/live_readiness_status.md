@@ -5753,3 +5753,46 @@ into `src/reporting/replay_reconciliation.py`, updated all callers, and archived
 > **This milestone does not approve any individual trade.**
 > **No Alpaca endpoint was contacted. No credentials were read.**
 > **Nothing in this repository is financial advice.**
+
+---
+
+## PR R4e Milestone — Decouple live_submit from Manual Checklist Chain
+
+**Date:** 2026-06-02
+**Branch:** `claude/hopeful-cray-56Jfr`
+**Full suite:** 4 337 passed (down from 4 428 — test_live_pre_submit_checklist.py and test_live_dry_run_review.py deleted; TestCheckAutomatedRiskGate added to test_live_submit.py; happy-path and intent-via-main tests removed)
+
+### Summary
+
+PR R4e removed `live_submit`'s import of `live_pre_submit_checklist` and replaced it with
+`_check_automated_risk_gate()`. With `_AUTOMATED_RISK_GATE_IMPLEMENTED = False`, live submit
+is fail-closed until a real automated state-machine risk gate is implemented. Both checklist
+tools were archived since no other active callers remained.
+
+### Changed files
+
+| File | Action |
+|------|--------|
+| `src/tools/live_submit.py` | `_run_checklist` → `_check_automated_risk_gate()`; `_AUTOMATED_RISK_GATE_IMPLEMENTED = False` added |
+| `src/tools/live_pre_submit_checklist.py` | Archived to `scripts/archive/manual_live_readiness/` |
+| `src/tools/live_dry_run_review.py` | Archived to `scripts/archive/manual_live_readiness/` |
+| `tests/test_live_pre_submit_checklist.py` | Deleted |
+| `tests/test_live_dry_run_review.py` | Deleted |
+| `tests/test_live_submit.py` | `_run_checklist` mock removed; `TestCheckAutomatedRiskGate` added |
+| `tests/test_tools_inventory.py` | `ACTIVE_RUNTIME_CANDIDATE_TOOLS` 24→22; `ACTIVE_TOOLS` 28→26; `ARCHIVED_TOOLS` 12→14 |
+| 5 docs | Updated with R4e record |
+
+### Safety invariants confirmed
+
+- `live_submit` remains fail-closed: `_AUTOMATED_RISK_GATE_IMPLEMENTED = False` blocks all paths
+- No `src/backtest/`, `src/strategy/`, `src/risk/`, `src/execution/` runtime files changed
+- No `src/main.py` changed
+- No config, output, data/cache changes
+- No broker calls, no credentials read, no orders, no trading behavior change
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> **Nothing in this repository is financial advice.**

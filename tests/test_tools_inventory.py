@@ -7,22 +7,24 @@ PR R4 implements the first real codebase cleanup after R1/R2/R3.
 PR R4c archived paper_smoke_check (test_paper_ledger.py rewritten to use primitives).
 PR R4d extracts replay logic to src/reporting/replay_reconciliation.py and archives
 src/tools/replay_order_reconciliation.py.
+PR R4e removes live_submit dependency on manual checklist chain and archives
+src/tools/live_pre_submit_checklist.py and src/tools/live_dry_run_review.py.
 
   ACTIVE_RESEARCH_TOOLS            (3)  — cache / backtest characterisation tools
-  ACTIVE_RUNTIME_CANDIDATE_TOOLS   (24) — in src/tools/; imported by active code
+  ACTIVE_RUNTIME_CANDIDATE_TOOLS   (22) — in src/tools/; imported by active code
                                           or feeds automated runtime
   PRESERVE_RUNTIME_SUPPORT_TOOLS   (1)  — runtime support; keep in place
   -----------------------------------------------------------------------
-  ACTIVE_TOOLS                     (28) — union of the above; must be in src/tools/
+  ACTIVE_TOOLS                     (26) — union of the above; must be in src/tools/
 
-  ARCHIVED_TOOLS                   (12) — moved to scripts/archive/manual_live_readiness/
+  ARCHIVED_TOOLS                   (14) — moved to scripts/archive/manual_live_readiness/
                                           NOT importable as src.tools.<name>
   DELETED_TOOLS_R4                 (3)  — deleted from repo in PR R4
 
-Safety scans (Alpaca, env, mutation, secret literals) apply to ACTIVE_TOOLS (28).
-main() requirement applies to ACTIVE_TOOLS (28).
-Import safety applies to ACTIVE_TOOLS (28).
-Test-coverage requirement applies to ACTIVE_TOOLS (28).
+Safety scans (Alpaca, env, mutation, secret literals) apply to ACTIVE_TOOLS (26).
+main() requirement applies to ACTIVE_TOOLS (26).
+Import safety applies to ACTIVE_TOOLS (26).
+Test-coverage requirement applies to ACTIVE_TOOLS (26).
 
 No broker/API/credentials access.  No order submission.
 No live trading.  No automated paper trading.
@@ -52,7 +54,9 @@ ACTIVE_RESEARCH_TOOLS: tuple[str, ...] = (
 # Tools in src/tools/ with confirmed active import chains or automated-runtime
 # roles.  Original 15 (PR R2 FREEZE_DEFERRED) plus 10 reclassified after the
 # PR R4 dependency scan found active imports.  paper_smoke_check archived in
-# PR R4c after test_paper_ledger.py was rewritten to use primitives directly.
+# PR R4c.  replay_order_reconciliation archived in PR R4d.
+# live_pre_submit_checklist and live_dry_run_review archived in PR R4e after
+# live_submit manual checklist chain was removed.
 ACTIVE_RUNTIME_CANDIDATE_TOOLS: tuple[str, ...] = (
     # --- Original 15 (PR R2) ---
     "live_account_check",
@@ -71,8 +75,6 @@ ACTIVE_RUNTIME_CANDIDATE_TOOLS: tuple[str, ...] = (
     "live_submit_executor_check",
     "live_trading_approval",
     # --- Reclassified from ARCHIVE_MANUAL after PR R4 dependency scan ---
-    "live_dry_run_review",        # imported by live_pre_submit_checklist
-    "live_pre_submit_checklist",  # imported by live_submit
     "paper_status",               # imported by 5 active FREEZE_DEFERRED tools
     # --- Reclassified from DELETE_CANDIDATE after PR R4 dependency scan ---
     "live_shadow_review",               # imported by live_readiness_gate
@@ -103,7 +105,8 @@ ACTIVE_TOOLS: tuple[str, ...] = (
 # Historical record: manual-operator tools moved to
 # scripts/archive/manual_live_readiness/.
 # These are NOT importable as src.tools.<name>.
-# PR R4: 10 tools; PR R4c: +1 (paper_smoke_check); PR R4d: +1 (replay_order_reconciliation)
+# PR R4: 10 tools; PR R4c: +1 (paper_smoke_check); PR R4d: +1 (replay_order_reconciliation);
+# PR R4e: +2 (live_pre_submit_checklist, live_dry_run_review)
 ARCHIVED_TOOLS: tuple[str, ...] = (
     # --- Archived in PR R4 ---
     "live_operator_config_override_review",
@@ -120,6 +123,9 @@ ARCHIVED_TOOLS: tuple[str, ...] = (
     "paper_smoke_check",  # test_paper_ledger.py rewritten to use primitives directly
     # --- Archived in PR R4d ---
     "replay_order_reconciliation",  # logic extracted to src/reporting/replay_reconciliation.py
+    # --- Archived in PR R4e ---
+    "live_pre_submit_checklist",  # manual checklist chain removed from live_submit
+    "live_dry_run_review",        # only consumed by live_pre_submit_checklist (now archived)
 )
 
 # Historical record: tools deleted from the repo in PR R4.
@@ -273,16 +279,16 @@ class TestToolsInventory:
         assert len(ACTIVE_RESEARCH_TOOLS) == 3
 
     def test_active_runtime_candidate_tools_count(self) -> None:
-        assert len(ACTIVE_RUNTIME_CANDIDATE_TOOLS) == 24
+        assert len(ACTIVE_RUNTIME_CANDIDATE_TOOLS) == 22
 
     def test_preserve_runtime_support_tools_count(self) -> None:
         assert len(PRESERVE_RUNTIME_SUPPORT_TOOLS) == 1
 
     def test_active_tools_count(self) -> None:
-        assert len(ACTIVE_TOOLS) == 28
+        assert len(ACTIVE_TOOLS) == 26
 
     def test_archived_tools_count(self) -> None:
-        assert len(ARCHIVED_TOOLS) == 12
+        assert len(ARCHIVED_TOOLS) == 14
 
     def test_deleted_tools_r4_count(self) -> None:
         assert len(DELETED_TOOLS_R4) == 3

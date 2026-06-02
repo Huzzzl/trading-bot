@@ -257,19 +257,23 @@ primitives directly rather than through the CLI wrapper.
 `src/tools/live_dry_run_review.py`
 
 **Change:**
-- Remove `live_submit`'s import of `live_pre_submit_checklist`.
-- Replace with an explicit `BLOCKED — automated risk gate not yet implemented`
-  condition that keeps the submit path fail-closed.
-- Verify no other active callers of `live_pre_submit_checklist` or
-  `live_dry_run_review` remain.
-- Archive both tools if no active references remain.
+- Replaced `_run_checklist` in `live_submit.py` with `_check_automated_risk_gate()`.
+  `_AUTOMATED_RISK_GATE_IMPLEMENTED = False` constant ensures live submit is
+  fail-closed until a real automated gate exists.
+- Verified no other active callers of `live_pre_submit_checklist` or
+  `live_dry_run_review` remained; archived both to
+  `scripts/archive/manual_live_readiness/`.
+- Deleted `tests/test_live_pre_submit_checklist.py` and
+  `tests/test_live_dry_run_review.py` (manual CLI checklist tests only).
+- Updated `tests/test_live_submit.py`: removed `_run_checklist` mock and
+  happy-path tests; added `TestCheckAutomatedRiskGate` class.
 
-**Safety invariant:** `live_submit` must remain fail-closed. The removal of
-the manual checklist import must be replaced by an explicit block, not
-silently dropped.
+**Safety invariant:** `live_submit` remains fail-closed. `_AUTOMATED_RISK_GATE_IMPLEMENTED`
+is `False`; main() always exits 1 until a real automated gate is implemented.
 
-**Expected outcome:** `live_pre_submit_checklist` and `live_dry_run_review`
-removed from `ACTIVE_TOOLS`. `ACTIVE_TOOLS`: 28 → 26 (after R4c+R4d).
+**Actual outcome:** `live_pre_submit_checklist` and `live_dry_run_review`
+removed from `ACTIVE_TOOLS`. `ACTIVE_TOOLS`: 28 → 26. `ARCHIVED_TOOLS`: 12 → 14.
+Full suite: 4 337 passed.
 
 ---
 

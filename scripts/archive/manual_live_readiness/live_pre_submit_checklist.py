@@ -1,3 +1,5 @@
+# ARCHIVED in PR R4e. Historical manual operator checklist. Not part of active automated runtime.
+# Moved from src/tools/live_pre_submit_checklist.py. Not importable as src.tools.live_pre_submit_checklist.
 """
 tools/live_pre_submit_checklist.py
 ------------------------------------
