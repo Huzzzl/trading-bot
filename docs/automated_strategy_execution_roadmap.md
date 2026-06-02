@@ -463,6 +463,28 @@ Four v2 test files deleted. `TestGoHappyPath` and `TestDecisionHardening` remove
 `ACTIVE_RUNTIME_CANDIDATE_TOOLS` 20 → 16, `ACTIVE_TOOLS` 24 → 20, `ARCHIVED_TOOLS` 16 → 20.
 No runtime trading behavior change. Full suite: 4 021 passed.
 
+**PR R5 — Extract paper buy/submit execution path to src/execution/paper_runner.py — implemented**
+`src/execution/paper_runner.py` created: two-phase paper buy/submit runner extracted
+from `src/main.py`. `PaperRunResult` frozen dataclass captures deterministic result
+fields (result, mode, orders_submitted, intents_generated, ledger_rows_written,
+broker_calls_made, credentials_read, order_action_requested, network_calls_made).
+`run_paper_execution(config, *, output_dir, _broker, _data_provider)` accepts
+injectable broker and data provider for fully offline testing. All guards (kill switch,
+market hours, daily limits, open orders, ledger) remain as lazy imports inside the
+function body — unchanged from main.py behavior. `src/main.py` paper buy/submit block
+replaced by three-line thin dispatch: `from src.execution.paper_runner import
+run_paper_execution; run_paper_execution(cfg, output_dir=output_dir); return`.
+`_run_paper_close` and all gates in `main()` unchanged.
+`tests/test_paper_runner.py` added: 11 test classes covering PaperRunResult dataclass,
+preview mode, submit mode, preview/submit safety flags, safety constraints,
+position safety, quantity override, guard delegation, output artifacts, and main()
+delegation. `tests/test_main_characterization.py` updated: 2 new tests in
+`TestMainImport` and `TestMainPaperGate`.
+No live trading behavior changed. Injected-broker tests remain offline. Default paper
+AlpacaBrokerAdapter path may read paper credentials and make broker/account/position
+preflight calls, matching existing behavior. Preview mode submits no orders; submit mode
+may request exactly one paper order after all guards pass.
+
 No parameter optimisation or paper/live progression until diagnostics complete.
 
 ### Phase C — Paper trading execution
