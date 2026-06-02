@@ -485,6 +485,27 @@ AlpacaBrokerAdapter path may read paper credentials and make broker/account/posi
 preflight calls, matching existing behavior. Preview mode submits no orders; submit mode
 may request exactly one paper order after all guards pass.
 
+**PR R6 — Extract paper close/flatten runner to src/execution/paper_close_runner.py — implemented**
+`src/execution/paper_close_runner.py` created: two-phase paper close/flatten runner
+extracted from `src/main.py`. `PaperCloseRunResult` frozen dataclass captures
+deterministic result fields (result, mode, close_candidates_generated, orders_submitted,
+ledger_rows_written, broker_calls_made, credentials_read, order_action_requested,
+network_calls_made). `run_paper_close(config, *, output_dir, _broker)` accepts injectable
+broker for fully offline testing. All guards and safety constraints remain as lazy imports
+inside the function body — unchanged from `_run_paper_close` behavior. `src/main.py`
+`_run_paper_close` function (~325 lines) removed; close/flatten path replaced by 3-line
+thin dispatch: `from src.execution.paper_close_runner import run_paper_close;
+run_paper_close(cfg, output_dir=output_dir); return`.
+`tests/test_paper_close_runner.py` added: 10 test classes covering PaperCloseRunResult
+dataclass, preview mode, submit mode, preview/submit safety flags, safety constraints,
+quantity override, guard delegation, output artifacts, and default-broker-path flag
+semantics. `tests/test_main_characterization.py` updated: 2 comment updates, 1 new test
+in `TestMainPaperGate`, 1 new test in `TestSourceCharacterization`.
+`tests/test_paper_runner.py` updated: `test_paper_close_path_does_not_call_run_paper_execution`
+now patches `src.execution.paper_close_runner.run_paper_close` instead of
+`src.main._run_paper_close`.
+No live trading behavior changed. Injected-broker tests remain offline. Default paper AlpacaBrokerAdapter path may read paper credentials and make broker/account/position preflight calls, matching existing behavior. Preview mode submits no orders; submit mode may request exactly one paper close order after all guards pass. Full suite: 4 167 passed.
+
 No parameter optimisation or paper/live progression until diagnostics complete.
 
 ### Phase C — Paper trading execution

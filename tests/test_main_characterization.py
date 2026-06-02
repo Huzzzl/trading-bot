@@ -138,7 +138,7 @@ class TestMainImport:
         assert isinstance(_main_mod.CANDIDATE_B_OVERRIDES, dict)
 
     def test_alpaca_broker_not_at_module_level(self) -> None:
-        # AlpacaBrokerAdapter is a lazy import inside _run_paper_close and the
+        # AlpacaBrokerAdapter is a lazy import inside paper_close_runner and the
         # paper execution block — not a module-level name.  Importing main must
         # not bind it at top scope.
         assert not hasattr(_main_mod, "AlpacaBrokerAdapter")
@@ -359,6 +359,44 @@ class TestMainPaperGate:
         _main_mod.main()
         assert len(calls) == 1
 
+    def test_paper_close_delegates_to_run_paper_close(self, monkeypatch, tmp_path) -> None:
+        """When paper_close_positions_enabled=True, main() delegates to run_paper_close."""
+        import src.execution.paper_close_runner as _close_runner_mod
+        from src.execution.paper_close_runner import PaperCloseRunResult
+
+        cfg = _default_cfg()
+        cfg.execution.mode = "paper"
+        cfg.execution.paper_trading_enabled = True
+        cfg.execution.paper_close_positions_enabled = True
+        cfg.execution.paper_close_preview_only = True
+
+        calls: list = []
+
+        def _fake_close(config, *, output_dir=None, **kw):
+            calls.append(config)
+            return PaperCloseRunResult(
+                result="PREVIEW_COMPLETE",
+                blocker=None,
+                mode="preview",
+                preview_only=True,
+                close_candidates_generated=0,
+                orders_submitted=0,
+                ledger_rows_written=0,
+                output_dir=str(output_dir) if output_dir else None,
+                broker_calls_made=False,
+                credentials_read=False,
+                order_action_requested=False,
+                network_calls_made=False,
+            )
+
+        monkeypatch.setattr(sys, "argv", ["src.main", "--output-dir", str(tmp_path)])
+        monkeypatch.setattr(_main_mod, "load_config", lambda _: cfg)
+        monkeypatch.setattr(_main_mod, "configure_logging", lambda **kw: None)
+        monkeypatch.setattr(_close_runner_mod, "run_paper_close", _fake_close)
+
+        _main_mod.main()
+        assert len(calls) == 1
+
 
 # ---------------------------------------------------------------------------
 # TestMainModeDispatch
@@ -471,7 +509,7 @@ class TestMainModeDispatch:
                 alpaca_calls.append(True)
 
         mocks = _apply_common_patches(monkeypatch, tmp_path, "backtest")
-        # Patch the lazy-import path inside _run_paper_close (not normally reached)
+        # Patch the lazy-import path inside paper_close_runner (not normally reached)
         import src.execution.alpaca_broker as _ab
         monkeypatch.setattr(_ab, "AlpacaBrokerAdapter", _FakeAlpaca)
 
@@ -538,3 +576,8 @@ class TestSourceCharacterization:
                 pytest.fail(
                     "alpaca_broker import appears at module top level in src/main.py"
                 )
+
+    def test_run_paper_close_not_defined_in_main(self) -> None:
+        # After R6, _run_paper_close is extracted to paper_close_runner.py
+        import src.main as _m
+        assert not hasattr(_m, "_run_paper_close")

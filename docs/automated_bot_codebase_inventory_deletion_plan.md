@@ -662,3 +662,27 @@ PR R4f removed `live_readiness_gate`'s manual shadow review chain dependencies a
 - No live trading behavior changed. Injected-broker tests remain offline. Default paper AlpacaBrokerAdapter path may read paper credentials and make broker/account/position preflight calls, matching existing behavior. Preview mode submits no orders; submit mode may request exactly one paper order after all guards pass.
 - All guards (kill switch, market hours, daily limits, open orders, ledger) behavior preserved exactly — same lazy import pattern, same check order, same error messages.
 - Full suite: 4 103 passed.
+
+---
+
+## PR R6 — Extract paper close/flatten runner to src/execution/paper_close_runner.py
+
+### Files changed
+
+| File | Action |
+|------|--------|
+| `src/execution/paper_close_runner.py` | Created — two-phase paper close/flatten runner with `PaperCloseRunResult` dataclass and `run_paper_close()` function; injectable `_broker` for offline testing; all guards remain as lazy imports |
+| `src/main.py` | `_run_paper_close` function (~325 lines) removed; close path replaced by 3-line thin dispatch (`from src.execution.paper_close_runner import run_paper_close; run_paper_close(cfg, output_dir=output_dir); return`) |
+| `tests/test_paper_close_runner.py` | Created — 10 test classes; injected-broker tests are fully offline; covers PaperCloseRunResult dataclass, preview mode, submit mode, safety flags, safety constraints, quantity override, guard delegation, output artifacts, default-broker-path flag semantics |
+| `tests/test_paper_runner.py` | Updated `test_paper_close_path_does_not_call_run_paper_execution` to patch `src.execution.paper_close_runner.run_paper_close` instead of `src.main._run_paper_close` |
+| `tests/test_main_characterization.py` | 2 comment updates; added `test_paper_close_delegates_to_run_paper_close` to `TestMainPaperGate`; added `test_run_paper_close_not_defined_in_main` to `TestSourceCharacterization` |
+| 2 docs | Updated with R6 record |
+
+### Safety invariants confirmed
+
+- `src/execution/paper_close_runner.py` classified `KEEP_RUNTIME` (was `CONVERT_TO_RUNTIME` in Section 3.11)
+- `_run_paper_close` removed from `src/main.py` — extracted to `paper_close_runner.py`
+- No runtime trading behavior changed
+- No live trading behavior changed. Injected-broker tests remain offline. Default paper AlpacaBrokerAdapter path may read paper credentials and make broker/account/position preflight calls, matching existing behavior. Preview mode submits no orders; submit mode may request exactly one paper order after all guards pass.
+- All guards (kill switch, market hours, daily limits, open orders, ledger) behavior preserved exactly — same lazy import pattern, same check order, same error messages.
+- Full suite: 4 167 passed.
