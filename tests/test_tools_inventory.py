@@ -4,24 +4,25 @@ tests/test_tools_inventory.py
 Inventory tests for src/tools/.
 
 PR R4 implements the first real codebase cleanup after R1/R2/R3.
-PR R4c (this update) archives paper_smoke_check after rewriting
-test_paper_ledger.py to use lower-level execution primitives directly.
+PR R4c archived paper_smoke_check (test_paper_ledger.py rewritten to use primitives).
+PR R4d extracts replay logic to src/reporting/replay_reconciliation.py and archives
+src/tools/replay_order_reconciliation.py.
 
   ACTIVE_RESEARCH_TOOLS            (3)  — cache / backtest characterisation tools
-  ACTIVE_RUNTIME_CANDIDATE_TOOLS   (25) — in src/tools/; imported by active code
+  ACTIVE_RUNTIME_CANDIDATE_TOOLS   (24) — in src/tools/; imported by active code
                                           or feeds automated runtime
   PRESERVE_RUNTIME_SUPPORT_TOOLS   (1)  — runtime support; keep in place
   -----------------------------------------------------------------------
-  ACTIVE_TOOLS                     (29) — union of the above; must be in src/tools/
+  ACTIVE_TOOLS                     (28) — union of the above; must be in src/tools/
 
-  ARCHIVED_TOOLS                   (11) — moved to scripts/archive/manual_live_readiness/
+  ARCHIVED_TOOLS                   (12) — moved to scripts/archive/manual_live_readiness/
                                           NOT importable as src.tools.<name>
   DELETED_TOOLS_R4                 (3)  — deleted from repo in PR R4
 
-Safety scans (Alpaca, env, mutation, secret literals) apply to ACTIVE_TOOLS (29).
-main() requirement applies to ACTIVE_TOOLS (29).
-Import safety applies to ACTIVE_TOOLS (29).
-Test-coverage requirement applies to ACTIVE_TOOLS (29).
+Safety scans (Alpaca, env, mutation, secret literals) apply to ACTIVE_TOOLS (28).
+main() requirement applies to ACTIVE_TOOLS (28).
+Import safety applies to ACTIVE_TOOLS (28).
+Test-coverage requirement applies to ACTIVE_TOOLS (28).
 
 No broker/API/credentials access.  No order submission.
 No live trading.  No automated paper trading.
@@ -80,7 +81,6 @@ ACTIVE_RUNTIME_CANDIDATE_TOOLS: tuple[str, ...] = (
     "live_v2_executor_readiness_review",# imported by live_submit_enablement_gate
     "live_v2_final_readiness_review",   # imported by live_v2_readiness_bundle
     "live_v2_readiness_bundle",         # v2 chain; imported transitively
-    "replay_order_reconciliation",      # imported by paper_status + test_paper_ledger.py
 )
 
 # May be needed by automated runtime; keep in place.
@@ -103,7 +103,7 @@ ACTIVE_TOOLS: tuple[str, ...] = (
 # Historical record: manual-operator tools moved to
 # scripts/archive/manual_live_readiness/.
 # These are NOT importable as src.tools.<name>.
-# PR R4: 10 tools; PR R4c: +1 (paper_smoke_check)
+# PR R4: 10 tools; PR R4c: +1 (paper_smoke_check); PR R4d: +1 (replay_order_reconciliation)
 ARCHIVED_TOOLS: tuple[str, ...] = (
     # --- Archived in PR R4 ---
     "live_operator_config_override_review",
@@ -118,6 +118,8 @@ ARCHIVED_TOOLS: tuple[str, ...] = (
     "manual_position_status_checker_readonly",
     # --- Archived in PR R4c ---
     "paper_smoke_check",  # test_paper_ledger.py rewritten to use primitives directly
+    # --- Archived in PR R4d ---
+    "replay_order_reconciliation",  # logic extracted to src/reporting/replay_reconciliation.py
 )
 
 # Historical record: tools deleted from the repo in PR R4.
@@ -271,16 +273,16 @@ class TestToolsInventory:
         assert len(ACTIVE_RESEARCH_TOOLS) == 3
 
     def test_active_runtime_candidate_tools_count(self) -> None:
-        assert len(ACTIVE_RUNTIME_CANDIDATE_TOOLS) == 25
+        assert len(ACTIVE_RUNTIME_CANDIDATE_TOOLS) == 24
 
     def test_preserve_runtime_support_tools_count(self) -> None:
         assert len(PRESERVE_RUNTIME_SUPPORT_TOOLS) == 1
 
     def test_active_tools_count(self) -> None:
-        assert len(ACTIVE_TOOLS) == 29
+        assert len(ACTIVE_TOOLS) == 28
 
     def test_archived_tools_count(self) -> None:
-        assert len(ARCHIVED_TOOLS) == 11
+        assert len(ARCHIVED_TOOLS) == 12
 
     def test_deleted_tools_r4_count(self) -> None:
         assert len(DELETED_TOOLS_R4) == 3

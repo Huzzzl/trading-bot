@@ -1,10 +1,14 @@
 """
 tests/test_replay_order_reconciliation.py
 ------------------------------------------
-Tests for the offline reconciliation replay utility.
+Tests for src.reporting.replay_reconciliation (library module).
 
 All tests are fully offline — no Alpaca credentials, no network calls,
 no order submissions or cancellations.
+
+The former src.tools.replay_order_reconciliation CLI tool was archived in
+PR R4d; its CLI tests are removed.  All reconciliation logic now lives in
+src.reporting.replay_reconciliation and is tested here.
 """
 
 from __future__ import annotations
@@ -15,11 +19,10 @@ from pathlib import Path
 
 import pytest
 
-from src.tools.replay_order_reconciliation import (
+from src.reporting.replay_reconciliation import (
     _normalize_side,
     _normalize_status,
     replay,
-    main,
 )
 
 
@@ -295,56 +298,6 @@ class TestWriteFlag:
         _write_bt000035_fixture(tmp_path)
         replay(tmp_path, write=False)
         assert not (tmp_path / "order_reconciliation_replay.json").exists()
-
-
-# ---------------------------------------------------------------------------
-# CLI main() entry-point
-# ---------------------------------------------------------------------------
-
-class TestCLIMain:
-    def test_cli_prints_json(self, tmp_path, capsys):
-        _write_bt000035_fixture(tmp_path)
-        main(["--output-dir", str(tmp_path)])
-        out = capsys.readouterr().out
-        parsed = json.loads(out)
-        assert parsed["overall_status"] == "PASS"
-
-    def test_cli_missing_intents_exits_nonzero(self, tmp_path):
-        (tmp_path / "order_results.csv").write_text("", encoding="utf-8")
-        with pytest.raises(SystemExit) as exc_info:
-            main(["--output-dir", str(tmp_path)])
-        assert exc_info.value.code != 0
-
-    def test_cli_write_flag_creates_file(self, tmp_path, capsys):
-        _write_bt000035_fixture(tmp_path)
-        main(["--output-dir", str(tmp_path), "--write"])
-        assert (tmp_path / "order_reconciliation_replay.json").exists()
-
-    def test_cli_does_not_import_alpaca_broker(self, tmp_path):
-        """The tool must not import AlpacaBrokerAdapter."""
-        import sys
-        _write_bt000035_fixture(tmp_path)
-        main(["--output-dir", str(tmp_path)])
-        assert "src.execution.alpaca_broker" not in sys.modules or True
-        # Positive assertion: the module itself has no import of alpaca_broker
-        import src.tools.replay_order_reconciliation as mod
-        import inspect
-        source = inspect.getsource(mod)
-        assert "AlpacaBrokerAdapter" not in source
-        assert "alpaca_broker" not in source
-
-    def test_no_real_network_calls(self, tmp_path, monkeypatch):
-        """Replay must work with no network access."""
-        import urllib.request
-        _write_bt000035_fixture(tmp_path)
-        original_urlopen = urllib.request.urlopen
-
-        def fail_urlopen(*a, **kw):
-            raise AssertionError("no real network calls allowed")
-
-        monkeypatch.setattr(urllib.request, "urlopen", fail_urlopen)
-        main(["--output-dir", str(tmp_path)])  # must not raise
-        monkeypatch.setattr(urllib.request, "urlopen", original_urlopen)
 
 
 # ---------------------------------------------------------------------------

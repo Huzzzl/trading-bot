@@ -263,7 +263,7 @@ def check_replay(replay_dir: Path) -> dict[str, Any]:
             f"skipped — order_intents.csv or order_results.csv not found in {replay_dir}",
         )
     try:
-        from src.tools.replay_order_reconciliation import replay
+        from src.reporting.replay_reconciliation import replay
         recon  = replay(replay_dir)
         status = recon.get("overall_status", "UNKNOWN")
         mapped = "PASS" if status in ("PASS", "N/A") else "WARN"

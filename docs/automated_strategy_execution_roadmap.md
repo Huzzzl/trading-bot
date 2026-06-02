@@ -427,6 +427,13 @@ directly — no `paper_smoke_check` import. `paper_smoke_check.py` archived to
 `tests/test_tools_inventory.py` updated: `ACTIVE_RUNTIME_CANDIDATE_TOOLS` 26 → 25,
 `ACTIVE_TOOLS` 30 → 29, `ARCHIVED_TOOLS` 10 → 11. No runtime trading behavior change.
 
+**PR R4d — Extract replay_order_reconciliation library — implemented**
+`src/reporting/replay_reconciliation.py` created. `src/tools/replay_order_reconciliation.py` archived.
+`paper_status.py` and `test_paper_ledger.py` updated to import from `src.reporting.replay_reconciliation`.
+`test_paper_status.py` patch target updated. `TestCLIMain` (5 tests) removed.
+`tests/test_tools_inventory.py` updated: `ACTIVE_RUNTIME_CANDIDATE_TOOLS` 25 → 24,
+`ACTIVE_TOOLS` 29 → 28, `ARCHIVED_TOOLS` 11 → 12. No runtime trading behavior change.
+
 No parameter optimisation or paper/live progression until diagnostics complete.
 
 ### Phase C — Paper trading execution

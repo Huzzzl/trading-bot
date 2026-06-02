@@ -517,3 +517,36 @@ and archived the tool.
 - Behavioral assertion preserved: paper preview path (fake broker preflight + CSV write) must not call `append_ledger_row`
 - No runtime trading behavior changed
 - No broker calls, no credentials read, no orders.
+
+---
+
+## 12. PR R4d Implementation Record
+
+PR R4d extracted reusable reconciliation logic from `src/tools/replay_order_reconciliation.py`
+into `src/reporting/replay_reconciliation.py` and archived the CLI tool.
+
+### Change
+
+| File | Action |
+|------|--------|
+| `src/reporting/replay_reconciliation.py` | Created — library module with `_normalize_side`, `_normalize_status`, `replay()` |
+| `src/tools/replay_order_reconciliation.py` | Archived to `scripts/archive/manual_live_readiness/` |
+| `src/tools/paper_status.py` | `check_replay` lazy import updated to `src.reporting.replay_reconciliation` |
+| `tests/test_paper_ledger.py` | Section 7 import updated to `src.reporting.replay_reconciliation` |
+| `tests/test_paper_status.py` | Patch target updated to `src.reporting.replay_reconciliation.replay` |
+| `tests/test_replay_order_reconciliation.py` | Imports updated; `TestCLIMain` (5 tests) removed |
+| `tests/test_tools_inventory.py` | `ACTIVE_RUNTIME_CANDIDATE_TOOLS` 25→24; `ACTIVE_TOOLS` 29→28; `ARCHIVED_TOOLS` 11→12 |
+
+### Final post-R4d counts
+
+| Classification | Count |
+|----------------|-------|
+| `ACTIVE_TOOLS` (in `src/tools/`) | 28 |
+| `ARCHIVED_TOOLS` (in `scripts/archive/manual_live_readiness/`) | 12 |
+| `DELETED_TOOLS_R4` | 3 |
+
+### Safety invariants confirmed
+
+- Reconciliation correctness tests remain in `test_replay_order_reconciliation.py`
+- No runtime trading behavior changed
+- No broker calls, no credentials read, no orders.
