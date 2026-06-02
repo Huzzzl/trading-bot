@@ -21,11 +21,19 @@ GO   — all conditions satisfied; ``config_safety`` is the only remaining
        explicitly change the three config flags to enable live trading.
 NO_GO — one or more conditions are not satisfied.
 
-GO conditions (all must be true)
----------------------------------
+Automated gate status (PR R4g)
+--------------------------------
+The v2 approval/review bundle (``live_v2_approvals_review``,
+``live_v2_executor_readiness_review``, ``live_v2_final_readiness_review``,
+``live_v2_readiness_bundle``) was removed in PR R4g.  The gate is
+**BLOCKED** until an automated submit enablement gate is implemented
+(``_AUTOMATED_SUBMIT_ENABLEMENT_GATE_IMPLEMENTED = False``).
+
+GO conditions (future — not yet implemented)
+---------------------------------------------
 * readiness bundle has ``bundle_result="PASS"``
-* trading approval passes ``validate_approvals``
-* submission approval passes ``validate_approvals``
+* trading approval passes automated validation
+* submission approval passes automated validation
 * executor report has ``blocked=true``
 * executor report has ``submit_order_called=false``
 * executor report has ``block_guard="config_safety"``
@@ -69,19 +77,25 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from src.tools.live_v2_approvals_review import (
-    _read_json,
-    validate_approvals,
-)
-from src.tools.live_v2_executor_readiness_review import (
-    parse_blocked_report,
-    validate_readiness,
-)
+# ---------------------------------------------------------------------------
+# Gate constant — BLOCKED until automated gate is implemented
+# ---------------------------------------------------------------------------
+
+_AUTOMATED_SUBMIT_ENABLEMENT_GATE_IMPLEMENTED = False
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _read_json(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        raise FileNotFoundError(f"artifact not found: {path}")
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"malformed JSON in {path}: {exc}") from exc
+
 
 def _is_truthy(value: Any) -> bool:
     if isinstance(value, bool):
@@ -166,10 +180,13 @@ def run_gate(
         _check_safety_flags(sa, "submission approval", violations)
 
     if ta is not None and sa is not None:
-        a_result, a_violations = validate_approvals(ta, sa, ta_path, sa_path)
-        approvals_valid = (a_result == "PASS")
-        for v in a_violations:
-            violations.append(f"[approvals] {v}")
+        if not _AUTOMATED_SUBMIT_ENABLEMENT_GATE_IMPLEMENTED:
+            violations.append(
+                "[approvals] automated submit enablement gate not implemented — "
+                "v2 approval/review bundle removed in PR R4g; "
+                "live submit enablement is blocked until an automated gate is in place"
+            )
+            approvals_valid = False
     else:
         approvals_valid = False
 
@@ -178,20 +195,19 @@ def run_gate(
     # ------------------------------------------------------------------
     exec_report: dict[str, Any] | None = None
     try:
-        exec_report = parse_blocked_report(exec_path)
+        exec_report = _read_json(exec_path)
     except (FileNotFoundError, ValueError) as exc:
         violations.append(f"executor report: {exc}")
 
     if exec_report is not None:
         _check_safety_flags(exec_report, "executor report", violations)
 
-        e_result, e_violations = validate_readiness(exec_report)
-        executor_ready = (e_result == "PASS")
-        for v in e_violations:
-            violations.append(f"[executor] {v}")
-
-        block_guard = str(exec_report.get("block_guard") or "").strip()
-        config_safety_is_final_blocker = executor_ready and (block_guard == "config_safety")
+        if not _AUTOMATED_SUBMIT_ENABLEMENT_GATE_IMPLEMENTED:
+            violations.append(
+                "[executor] automated submit enablement gate not implemented — "
+                "v2 executor readiness validation removed in PR R4g"
+            )
+            executor_ready = False
 
     # ------------------------------------------------------------------
     # Decision — explicit AND of all core booleans plus empty violations.

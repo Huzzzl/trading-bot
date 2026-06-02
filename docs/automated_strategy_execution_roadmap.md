@@ -451,6 +451,18 @@ Module-level imports of `live_shadow_review` and `live_shadow_screen_review` rem
 `tests/test_tools_inventory.py` updated: `ACTIVE_RUNTIME_CANDIDATE_TOOLS` 22 → 20,
 `ACTIVE_TOOLS` 26 → 24, `ARCHIVED_TOOLS` 14 → 16. No runtime trading behavior change.
 
+**PR R4g — Decouple live_submit_enablement_gate from v2 approval bundle — implemented**
+Module-level imports of `live_v2_approvals_review` and `live_v2_executor_readiness_review`
+removed from `live_submit_enablement_gate.py`. `_read_json` inlined locally.
+`_AUTOMATED_SUBMIT_ENABLEMENT_GATE_IMPLEMENTED = False` constant added. `validate_approvals`
+and `validate_readiness` calls replaced with fail-closed stubs. All four v2 tools archived:
+`live_v2_approvals_review.py`, `live_v2_executor_readiness_review.py`,
+`live_v2_final_readiness_review.py`, `live_v2_readiness_bundle.py`.
+Four v2 test files deleted. `TestGoHappyPath` and `TestDecisionHardening` removed;
+`TestAutomatedSubmitEnablementGate` added. `tests/test_tools_inventory.py` updated:
+`ACTIVE_RUNTIME_CANDIDATE_TOOLS` 20 → 16, `ACTIVE_TOOLS` 24 → 20, `ARCHIVED_TOOLS` 16 → 20.
+No runtime trading behavior change. Full suite: 4 021 passed.
+
 No parameter optimisation or paper/live progression until diagnostics complete.
 
 ### Phase C — Paper trading execution

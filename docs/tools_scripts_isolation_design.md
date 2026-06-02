@@ -395,6 +395,17 @@ no operator-history value).
 - No broker calls, no credentials read, no orders, no trading behavior change
 - Full suite: 4 513 passed
 
+### PR R4g — Decouple live_submit_enablement_gate from v2 approval bundle
+
+Module-level imports of `live_v2_approvals_review` (`_read_json`, `validate_approvals`)
+and `live_v2_executor_readiness_review` (`parse_blocked_report`, `validate_readiness`)
+removed from `live_submit_enablement_gate.py`. `_read_json` inlined locally.
+`_AUTOMATED_SUBMIT_ENABLEMENT_GATE_IMPLEMENTED = False` keeps gate fail-closed.
+`validate_approvals` and `validate_readiness` calls replaced with fail-closed stubs.
+All four v2 tools archived. Four v2 test files deleted.
+`TestGoHappyPath` and `TestDecisionHardening` removed; `TestAutomatedSubmitEnablementGate` added.
+`ACTIVE_TOOLS`: 24 → 20. `ARCHIVED_TOOLS`: 16 → 20. Full suite: 4 021 passed.
+
 ### PR R4f — Decouple live_readiness_gate from manual shadow review chain
 
 Module-level imports of `live_shadow_review` and `live_shadow_screen_review` removed

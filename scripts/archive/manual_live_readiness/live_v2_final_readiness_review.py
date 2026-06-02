@@ -1,3 +1,5 @@
+# ARCHIVED in PR R4g. Historical manual v2 final readiness review tool. Not part of active automated runtime.
+# Moved from src/tools/live_v2_final_readiness_review.py. Not importable as src.tools.live_v2_final_readiness_review.
 """
 tools/live_v2_final_readiness_review.py
 -----------------------------------------

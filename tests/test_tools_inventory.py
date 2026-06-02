@@ -11,22 +11,25 @@ PR R4e removes live_submit dependency on manual checklist chain and archives
 src/tools/live_pre_submit_checklist.py and src/tools/live_dry_run_review.py.
 PR R4f removes live_readiness_gate dependency on manual shadow review chain and archives
 src/tools/live_shadow_review.py and src/tools/live_shadow_screen_review.py.
+PR R4g removes live_submit_enablement_gate dependency on v2 approval/review bundle and
+archives live_v2_approvals_review, live_v2_executor_readiness_review,
+live_v2_final_readiness_review, and live_v2_readiness_bundle.
 
   ACTIVE_RESEARCH_TOOLS            (3)  — cache / backtest characterisation tools
-  ACTIVE_RUNTIME_CANDIDATE_TOOLS   (20) — in src/tools/; imported by active code
+  ACTIVE_RUNTIME_CANDIDATE_TOOLS   (16) — in src/tools/; imported by active code
                                           or feeds automated runtime
   PRESERVE_RUNTIME_SUPPORT_TOOLS   (1)  — runtime support; keep in place
   -----------------------------------------------------------------------
-  ACTIVE_TOOLS                     (24) — union of the above; must be in src/tools/
+  ACTIVE_TOOLS                     (20) — union of the above; must be in src/tools/
 
-  ARCHIVED_TOOLS                   (16) — moved to scripts/archive/manual_live_readiness/
+  ARCHIVED_TOOLS                   (20) — moved to scripts/archive/manual_live_readiness/
                                           NOT importable as src.tools.<name>
   DELETED_TOOLS_R4                 (3)  — deleted from repo in PR R4
 
-Safety scans (Alpaca, env, mutation, secret literals) apply to ACTIVE_TOOLS (24).
-main() requirement applies to ACTIVE_TOOLS (24).
-Import safety applies to ACTIVE_TOOLS (24).
-Test-coverage requirement applies to ACTIVE_TOOLS (24).
+Safety scans (Alpaca, env, mutation, secret literals) apply to ACTIVE_TOOLS (20).
+main() requirement applies to ACTIVE_TOOLS (20).
+Import safety applies to ACTIVE_TOOLS (20).
+Test-coverage requirement applies to ACTIVE_TOOLS (20).
 
 No broker/API/credentials access.  No order submission.
 No live trading.  No automated paper trading.
@@ -60,6 +63,9 @@ ACTIVE_RESEARCH_TOOLS: tuple[str, ...] = (
 # live_pre_submit_checklist and live_dry_run_review archived in PR R4e.
 # live_shadow_review and live_shadow_screen_review archived in PR R4f after
 # live_readiness_gate manual shadow review chain was removed.
+# live_v2_approvals_review, live_v2_executor_readiness_review,
+# live_v2_final_readiness_review, live_v2_readiness_bundle archived in PR R4g
+# after live_submit_enablement_gate v2 approval/review bundle was removed.
 ACTIVE_RUNTIME_CANDIDATE_TOOLS: tuple[str, ...] = (
     # --- Original 15 (PR R2) ---
     "live_account_check",
@@ -79,11 +85,6 @@ ACTIVE_RUNTIME_CANDIDATE_TOOLS: tuple[str, ...] = (
     "live_trading_approval",
     # --- Reclassified from ARCHIVE_MANUAL after PR R4 dependency scan ---
     "paper_status",               # imported by 5 active FREEZE_DEFERRED tools
-    # --- Reclassified from DELETE_CANDIDATE after PR R4 dependency scan ---
-    "live_v2_approvals_review",         # imported by live_submit_enablement_gate
-    "live_v2_executor_readiness_review",# imported by live_submit_enablement_gate
-    "live_v2_final_readiness_review",   # imported by live_v2_readiness_bundle
-    "live_v2_readiness_bundle",         # v2 chain; imported transitively
 )
 
 # May be needed by automated runtime; keep in place.
@@ -108,7 +109,9 @@ ACTIVE_TOOLS: tuple[str, ...] = (
 # These are NOT importable as src.tools.<name>.
 # PR R4: 10 tools; PR R4c: +1 (paper_smoke_check); PR R4d: +1 (replay_order_reconciliation);
 # PR R4e: +2 (live_pre_submit_checklist, live_dry_run_review);
-# PR R4f: +2 (live_shadow_review, live_shadow_screen_review)
+# PR R4f: +2 (live_shadow_review, live_shadow_screen_review);
+# PR R4g: +4 (live_v2_approvals_review, live_v2_executor_readiness_review,
+#              live_v2_final_readiness_review, live_v2_readiness_bundle)
 ARCHIVED_TOOLS: tuple[str, ...] = (
     # --- Archived in PR R4 ---
     "live_operator_config_override_review",
@@ -131,6 +134,11 @@ ARCHIVED_TOOLS: tuple[str, ...] = (
     # --- Archived in PR R4f ---
     "live_shadow_review",       # manual shadow review chain removed from live_readiness_gate
     "live_shadow_screen_review",# only consumed by live_readiness_gate (now uses placeholder)
+    # --- Archived in PR R4g ---
+    "live_v2_approvals_review",         # v2 approval validation removed from live_submit_enablement_gate
+    "live_v2_executor_readiness_review",# v2 executor validation removed from live_submit_enablement_gate
+    "live_v2_final_readiness_review",   # only consumed by live_v2_readiness_bundle (now archived)
+    "live_v2_readiness_bundle",         # v2 bundle chain; all consumers archived in PR R4g
 )
 
 # Historical record: tools deleted from the repo in PR R4.
@@ -284,16 +292,16 @@ class TestToolsInventory:
         assert len(ACTIVE_RESEARCH_TOOLS) == 3
 
     def test_active_runtime_candidate_tools_count(self) -> None:
-        assert len(ACTIVE_RUNTIME_CANDIDATE_TOOLS) == 20
+        assert len(ACTIVE_RUNTIME_CANDIDATE_TOOLS) == 16
 
     def test_preserve_runtime_support_tools_count(self) -> None:
         assert len(PRESERVE_RUNTIME_SUPPORT_TOOLS) == 1
 
     def test_active_tools_count(self) -> None:
-        assert len(ACTIVE_TOOLS) == 24
+        assert len(ACTIVE_TOOLS) == 20
 
     def test_archived_tools_count(self) -> None:
-        assert len(ARCHIVED_TOOLS) == 16
+        assert len(ARCHIVED_TOOLS) == 20
 
     def test_deleted_tools_r4_count(self) -> None:
         assert len(DELETED_TOOLS_R4) == 3

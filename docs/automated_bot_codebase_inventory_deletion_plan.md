@@ -603,16 +603,39 @@ PR R4f removed `live_readiness_gate`'s manual shadow review chain dependencies a
 | `tests/test_tools_inventory.py` | `ACTIVE_RUNTIME_CANDIDATE_TOOLS` 22→20; `ACTIVE_TOOLS` 26→24; `ARCHIVED_TOOLS` 14→16 |
 | 5 docs | Updated with R4f record |
 
-### Final post-R4f counts
+---
+
+## PR R4g — Decouple live_submit_enablement_gate from v2 approval bundle
+
+### Files changed
+
+| File | Action |
+|------|--------|
+| `src/tools/live_submit_enablement_gate.py` | Removed imports from `live_v2_approvals_review` and `live_v2_executor_readiness_review`; inlined `_read_json`; added `_AUTOMATED_SUBMIT_ENABLEMENT_GATE_IMPLEMENTED = False`; replaced `validate_approvals` and `validate_readiness` calls with fail-closed stubs |
+| `src/tools/live_v2_approvals_review.py` | Archived to `scripts/archive/manual_live_readiness/` |
+| `src/tools/live_v2_executor_readiness_review.py` | Archived to `scripts/archive/manual_live_readiness/` |
+| `src/tools/live_v2_final_readiness_review.py` | Archived to `scripts/archive/manual_live_readiness/` |
+| `src/tools/live_v2_readiness_bundle.py` | Archived to `scripts/archive/manual_live_readiness/` |
+| `tests/test_live_v2_approvals_review.py` | Deleted |
+| `tests/test_live_v2_executor_readiness_review.py` | Deleted |
+| `tests/test_live_v2_final_readiness_review.py` | Deleted |
+| `tests/test_live_v2_readiness_bundle.py` | Deleted |
+| `tests/test_live_submit_enablement_gate.py` | `TestGoHappyPath` (10) and `TestDecisionHardening` (11) removed; 3 executor violation-string tests removed; `TestAutomatedSubmitEnablementGate` class (7 tests) added |
+| `tests/test_tools_inventory.py` | `ACTIVE_RUNTIME_CANDIDATE_TOOLS` 20→16; `ACTIVE_TOOLS` 24→20; `ARCHIVED_TOOLS` 16→20 |
+| 5 docs | Updated with R4g record |
+
+### Final post-R4g counts
 
 | Classification | Count |
 |----------------|-------|
-| `ACTIVE_TOOLS` (in `src/tools/`) | 24 |
-| `ARCHIVED_TOOLS` (in `scripts/archive/manual_live_readiness/`) | 16 |
+| `ACTIVE_TOOLS` (in `src/tools/`) | 20 |
+| `ARCHIVED_TOOLS` (in `scripts/archive/manual_live_readiness/`) | 20 |
 | `DELETED_TOOLS_R4` | 3 |
 
 ### Safety invariants confirmed
 
 - `live_readiness_gate` is fail-closed: stages 3+5 always FAIL until `_AUTOMATED_RUNTIME_STATE_GATE_IMPLEMENTED = True`
+- `live_submit_enablement_gate` is fail-closed: `run_gate()` always returns NO_GO until `_AUTOMATED_SUBMIT_ENABLEMENT_GATE_IMPLEMENTED = True`
 - No runtime trading behavior changed
 - No broker calls, no credentials read, no orders.
+- Full suite: 4 021 passed.
