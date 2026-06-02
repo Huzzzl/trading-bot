@@ -706,7 +706,7 @@ class TestCloseSubmitLedgerIntegration:
 # 6. Paper preview path does not write ledger
 # ---------------------------------------------------------------------------
 
-class TestSmokeCheckDoesNotAppendLedger:
+class TestPaperPreviewDoesNotAppendLedger:
     def test_paper_preview_path_does_not_write_ledger(self, tmp_path):
         """Paper preview execution path must never call append_ledger_row.
 

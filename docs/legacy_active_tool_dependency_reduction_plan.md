@@ -212,7 +212,7 @@ No code changes.
   write directly; no `paper_smoke_check` import.
 - `paper_smoke_check.py` archived to `scripts/archive/manual_live_readiness/`
   (archive header prepended; not importable as `src.tools.paper_smoke_check`).
-- `tests/test_paper_smoke_check.py` deleted (663 tests removed — CLI wrapper
+- `tests/test_paper_smoke_check.py` deleted (66 tests removed — CLI wrapper
   tests; behavioral ledger coverage preserved in `test_paper_ledger.py`).
 
 **Safety invariant:** The behavioral assertion is preserved — the paper preview
