@@ -508,6 +508,29 @@ No live trading behavior changed. Injected-broker tests remain offline. Default 
 
 No parameter optimisation or paper/live progression until diagnostics complete.
 
+**PR A2-1 — Automated runtime state machine skeleton — implemented**
+`src/runtime/__init__.py` and `src/runtime/state_machine.py` created.
+`RuntimeState` (9 states: IDLE, CHECKING_RISK, PAPER_PREVIEW, PAPER_SUBMIT_READY,
+PAPER_SUBMITTED, PAPER_CLOSE_PREVIEW, PAPER_CLOSED, BLOCKED, ERROR) and
+`RuntimeAction` (5 actions: NONE, PREVIEW_BUY, SUBMIT_BUY, PREVIEW_CLOSE, SUBMIT_CLOSE)
+enums defined. `RuntimeDecision` and `RuntimeStepResult` frozen dataclasses defined.
+`AutomatedRuntimeStateMachine` class accepts injectable `risk_gate`, `paper_buy_runner`,
+`paper_close_runner`, and optional `state_store`. Default behavior is fail-closed:
+no `risk_gate` injected → every submit action returns `BLOCKED` with blocker
+"automated risk gate not implemented". No direct broker, credential, or Alpaca access
+inside state machine. All broker interaction remains inside injected paper runners.
+Config is deep-copied before preview/submit flags are set; caller config is never mutated.
+`tests/test_runtime_state_machine.py` added: 57 tests across 12 classes covering
+enums, dataclasses, default fail-closed behavior, risk gate rejection, PREVIEW_BUY,
+SUBMIT_BUY, PREVIEW_CLOSE, SUBMIT_CLOSE, runner exception → ERROR transition,
+safety flag aggregation, config immutability, state transitions, no-live-gate-import
+scan, and `_extract_safety_flags()` helper.
+No live trading behavior changed. No live gates unfrozen. No direct broker/API/credential
+access inside state machine. Injected-runner tests are fully offline.
+Full suite: 4 224 passed.
+
+**Next PR: A2-2 — Automated risk gate skeleton.**
+
 ### Phase C — Paper trading execution
 
 - Paper account executor: applies approved signal on Alpaca paper account

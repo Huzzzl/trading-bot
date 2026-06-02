@@ -308,11 +308,17 @@ No tests modified. Full suite: 5 701 passed (unchanged from R2).
 
 ### Phase A2 — Automated runtime skeleton
 
-| PR | Scope | Priority |
-|----|-------|---------|
-| **A2-1** | Automated runtime state machine skeleton (`src/execution/state_machine.py`) | High |
-| **A2-2** | Automated risk gate skeleton (`src/execution/risk_gate.py`) | High |
-| **A2-3** | Order lifecycle manager skeleton (`src/execution/order_lifecycle.py`) | Medium |
+| PR | Scope | Priority | Status |
+|----|-------|---------|--------|
+| **A2-1** | Automated runtime state machine skeleton (`src/runtime/state_machine.py`) | High | **Implemented** |
+| **A2-2** | Automated risk gate skeleton (`src/runtime/risk_gate.py`) | High | Pending |
+| **A2-3** | Order lifecycle manager skeleton (`src/runtime/order_lifecycle.py`) | Medium | Pending |
+
+**A2-1 — Automated runtime state machine skeleton — implemented**
+`src/runtime/state_machine.py` created. Injectable `risk_gate`, `paper_buy_runner`,
+`paper_close_runner`. Default fail-closed: no `risk_gate` → BLOCKED.
+No broker/credential/Alpaca access inside state machine.
+57 new tests in `tests/test_runtime_state_machine.py`. Full suite: 4 224 passed.
 
 ### Deferred
 
