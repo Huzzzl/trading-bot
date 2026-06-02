@@ -3,27 +3,27 @@ tests/test_tools_inventory.py
 ------------------------------
 Inventory tests for src/tools/.
 
-PR R2 replaces the old LIVE_SAFETY / MANUAL_GUARD / PAPER_DIAGNOSTIC / DATA
-classification with a cleanup-aware model aligned with the PR R1 automated-bot
-inventory plan:
+PR R4 implements the first real codebase cleanup after the R1/R2/R3 preparatory
+PRs.  Manual-operator tools are archived or deleted; only tools with confirmed
+active imports or active automated-runtime roles remain in src/tools/.
 
-  ACTIVE_RESEARCH_TOOLS      (3)  — cache / backtest characterisation tools
-  ACTIVE_RUNTIME_CANDIDATE_TOOLS (15) — may feed future automated runtime
-  ARCHIVE_MANUAL_TOOLS       (14) — manual-operator workflow; not part of
-                                    final automated bot; eligible for archive
-  DELETE_CANDIDATE_TOOLS     (10) — likely redundant; eligible for deletion
-                                    after dependency scan
-  PRESERVE_RUNTIME_SUPPORT_TOOLS (1) — may be needed by runtime; keep for now
+  ACTIVE_RESEARCH_TOOLS            (3)  — cache / backtest characterisation tools
+  ACTIVE_RUNTIME_CANDIDATE_TOOLS   (26) — in src/tools/; imported by active code
+                                          or feeds automated runtime
+  PRESERVE_RUNTIME_SUPPORT_TOOLS   (1)  — runtime support; keep in place
+  -----------------------------------------------------------------------
+  ACTIVE_TOOLS                     (30) — union of the above; must be in src/tools/
 
-Total: 43 tools (no files moved or deleted in this PR).
+  ARCHIVED_TOOLS                   (10) — moved to scripts/archive/manual_live_readiness/
+                                          NOT importable as src.tools.<name>
+  DELETED_TOOLS_R4                 (3)  — deleted from repo in PR R4
 
-Safety scans (Alpaca, env, mutation, secret literals) still apply to ALL tools
-while they remain physically in src/tools/.
-Import safety still applies to ALL tools.
-main() requirement applies only to ACTIVE_RESEARCH + ACTIVE_RUNTIME_CANDIDATE
-+ PRESERVE_RUNTIME_SUPPORT tools.
+Safety scans (Alpaca, env, mutation, secret literals) apply to ACTIVE_TOOLS (30).
+main() requirement applies to ACTIVE_TOOLS (30).
+Import safety applies to ACTIVE_TOOLS (30).
+Test-coverage requirement applies to ACTIVE_TOOLS (30).
 
-No broker/API/credentials access.  No file moves.  No order submission.
+No broker/API/credentials access.  No order submission.
 No live trading.  No automated paper trading.
 """
 
@@ -48,9 +48,11 @@ ACTIVE_RESEARCH_TOOLS: tuple[str, ...] = (
     "yahoo_cache_fetch",
 )
 
-# Tools that may plausibly feed future automated runtime or runtime safety.
-# Not yet wired to automated pipeline; classified FREEZE_DEFERRED in PR R1.
+# Tools in src/tools/ with confirmed active import chains or automated-runtime
+# roles.  Original 15 (PR R2 FREEZE_DEFERRED) plus 11 reclassified after the
+# PR R4 dependency scan found active imports.
 ACTIVE_RUNTIME_CANDIDATE_TOOLS: tuple[str, ...] = (
+    # --- Original 15 (PR R2) ---
     "live_account_check",
     "live_broker_preflight_readonly",
     "live_credential_presence_guard",
@@ -66,62 +68,59 @@ ACTIVE_RUNTIME_CANDIDATE_TOOLS: tuple[str, ...] = (
     "live_submit_enablement_gate",
     "live_submit_executor_check",
     "live_trading_approval",
+    # --- Reclassified from ARCHIVE_MANUAL after PR R4 dependency scan ---
+    "live_dry_run_review",        # imported by live_pre_submit_checklist
+    "live_pre_submit_checklist",  # imported by live_submit
+    "paper_smoke_check",          # imported by test_paper_ledger.py (immutable)
+    "paper_status",               # imported by 5 active FREEZE_DEFERRED tools
+    # --- Reclassified from DELETE_CANDIDATE after PR R4 dependency scan ---
+    "live_shadow_review",               # imported by live_readiness_gate
+    "live_shadow_screen_review",        # imported by live_readiness_gate
+    "live_v2_approvals_review",         # imported by live_submit_enablement_gate
+    "live_v2_executor_readiness_review",# imported by live_submit_enablement_gate
+    "live_v2_final_readiness_review",   # imported by live_v2_readiness_bundle
+    "live_v2_readiness_bundle",         # v2 chain; imported transitively
+    "replay_order_reconciliation",      # imported by paper_status + test_paper_ledger.py
 )
 
-# Manual-operator workflow tools.  Not part of the final automated bot.
-# Eligible for archive to scripts/archive/manual_live_readiness/ after
-# dependency scan (PR R4).
-ARCHIVE_MANUAL_TOOLS: tuple[str, ...] = (
-    "live_dry_run_review",
+# May be needed by automated runtime; keep in place.
+PRESERVE_RUNTIME_SUPPORT_TOOLS: tuple[str, ...] = (
+    "paper_ledger_verify",
+)
+
+# ---------------------------------------------------------------------------
+# Aggregate sets
+# ---------------------------------------------------------------------------
+
+# All tools currently in src/tools/ — the only classification that should
+# have files on disk under src/tools/.
+ACTIVE_TOOLS: tuple[str, ...] = (
+    ACTIVE_RESEARCH_TOOLS
+    + ACTIVE_RUNTIME_CANDIDATE_TOOLS
+    + PRESERVE_RUNTIME_SUPPORT_TOOLS
+)
+
+# Historical record: manual-operator tools moved to
+# scripts/archive/manual_live_readiness/ in PR R4.
+# These are NOT importable as src.tools.<name>.
+ARCHIVED_TOOLS: tuple[str, ...] = (
     "live_operator_config_override_review",
     "live_operator_release_checklist",
     "live_order_submission_approval",
     "live_position_reconciliation_readonly",
-    "live_pre_submit_checklist",
     "live_real_submit_pr_approval",
     "live_single_manual_submit",
     "live_single_submit_approval_review",
     "live_submit_blocked_review",
     "live_submit_plan_review",
     "manual_position_status_checker_readonly",
-    "paper_smoke_check",
-    "paper_status",
 )
 
-# Tools likely redundant with current codebase.  Eligible for deletion after
-# dependency scan confirms no active import/test/config references (PR R4).
-DELETE_CANDIDATE_TOOLS: tuple[str, ...] = (
+# Historical record: tools deleted from the repo in PR R4.
+DELETED_TOOLS_R4: tuple[str, ...] = (
     "live_readiness_history_review",
-    "live_shadow_review",
-    "live_shadow_screen_review",
-    "live_v2_approvals_review",
-    "live_v2_executor_readiness_review",
-    "live_v2_final_readiness_review",
-    "live_v2_readiness_bundle",
     "paper_ledger_import",
     "paper_pre_submit_check",
-    "replay_order_reconciliation",
-)
-
-# May be needed by automated runtime; keep in place for now.
-PRESERVE_RUNTIME_SUPPORT_TOOLS: tuple[str, ...] = (
-    "paper_ledger_verify",
-)
-
-# Aggregate sets.
-ALL_TOOLS: tuple[str, ...] = (
-    ACTIVE_RESEARCH_TOOLS
-    + ACTIVE_RUNTIME_CANDIDATE_TOOLS
-    + ARCHIVE_MANUAL_TOOLS
-    + DELETE_CANDIDATE_TOOLS
-    + PRESERVE_RUNTIME_SUPPORT_TOOLS
-)
-
-# Active = still expected to serve as CLI-callable tools going forward.
-ACTIVE_TOOLS: tuple[str, ...] = (
-    ACTIVE_RESEARCH_TOOLS
-    + ACTIVE_RUNTIME_CANDIDATE_TOOLS
-    + PRESERVE_RUNTIME_SUPPORT_TOOLS
 )
 
 # ---------------------------------------------------------------------------
@@ -131,6 +130,7 @@ ACTIVE_TOOLS: tuple[str, ...] = (
 _REPO_ROOT = pathlib.Path(__file__).parent.parent
 _TOOLS_DIR = _REPO_ROOT / "src" / "tools"
 _TESTS_DIR = _REPO_ROOT / "tests"
+_ARCHIVE_DIR = _REPO_ROOT / "scripts" / "archive" / "manual_live_readiness"
 
 
 def _tool_path(name: str) -> pathlib.Path:
@@ -139,6 +139,10 @@ def _tool_path(name: str) -> pathlib.Path:
 
 def _test_path(name: str) -> pathlib.Path:
     return _TESTS_DIR / f"test_{name}.py"
+
+
+def _archive_path(name: str) -> pathlib.Path:
+    return _ARCHIVE_DIR / f"{name}.py"
 
 
 def _parse_tool(name: str) -> ast.Module:
@@ -257,36 +261,33 @@ def _collect_string_literals(tree: ast.Module) -> Iterator[str]:
 
 
 class TestToolsInventory:
-    """Verify PR R2 classification counts and physical file presence."""
+    """Verify PR R4 classification counts and physical file presence."""
 
     def test_active_research_tools_count(self) -> None:
         assert len(ACTIVE_RESEARCH_TOOLS) == 3
 
     def test_active_runtime_candidate_tools_count(self) -> None:
-        assert len(ACTIVE_RUNTIME_CANDIDATE_TOOLS) == 15
-
-    def test_archive_manual_tools_count(self) -> None:
-        assert len(ARCHIVE_MANUAL_TOOLS) == 14
-
-    def test_delete_candidate_tools_count(self) -> None:
-        assert len(DELETE_CANDIDATE_TOOLS) == 10
+        assert len(ACTIVE_RUNTIME_CANDIDATE_TOOLS) == 26
 
     def test_preserve_runtime_support_tools_count(self) -> None:
         assert len(PRESERVE_RUNTIME_SUPPORT_TOOLS) == 1
 
-    def test_all_tools_count(self) -> None:
-        assert len(ALL_TOOLS) == 43
-
     def test_active_tools_count(self) -> None:
-        assert len(ACTIVE_TOOLS) == 19
+        assert len(ACTIVE_TOOLS) == 30
+
+    def test_archived_tools_count(self) -> None:
+        assert len(ARCHIVED_TOOLS) == 10
+
+    def test_deleted_tools_r4_count(self) -> None:
+        assert len(DELETED_TOOLS_R4) == 3
 
     def test_groups_are_mutually_exclusive(self) -> None:
         groups = {
             "ACTIVE_RESEARCH": set(ACTIVE_RESEARCH_TOOLS),
             "ACTIVE_RUNTIME_CANDIDATE": set(ACTIVE_RUNTIME_CANDIDATE_TOOLS),
-            "ARCHIVE_MANUAL": set(ARCHIVE_MANUAL_TOOLS),
-            "DELETE_CANDIDATE": set(DELETE_CANDIDATE_TOOLS),
             "PRESERVE_RUNTIME_SUPPORT": set(PRESERVE_RUNTIME_SUPPORT_TOOLS),
+            "ARCHIVED": set(ARCHIVED_TOOLS),
+            "DELETED_R4": set(DELETED_TOOLS_R4),
         }
         names = list(groups.keys())
         for i, a in enumerate(names):
@@ -296,58 +297,58 @@ class TestToolsInventory:
 
     def test_no_unclassified_tools_in_src_tools(self) -> None:
         actual = {p.stem for p in _TOOLS_DIR.glob("*.py") if p.stem != "__init__"}
-        classified = set(ALL_TOOLS)
+        classified = set(ACTIVE_TOOLS)
         unclassified = actual - classified
-        assert not unclassified, f"Unclassified tools found: {sorted(unclassified)}"
+        assert not unclassified, (
+            f"Unclassified tools found in src/tools/ — add to ACTIVE_TOOLS or archive/delete: "
+            f"{sorted(unclassified)}"
+        )
 
-    def test_no_phantom_tools_in_classification(self) -> None:
+    def test_no_phantom_tools_in_active_classification(self) -> None:
         actual = {p.stem for p in _TOOLS_DIR.glob("*.py") if p.stem != "__init__"}
-        classified = set(ALL_TOOLS)
+        classified = set(ACTIVE_TOOLS)
         phantoms = classified - actual
-        assert not phantoms, f"Classified tools not on disk: {sorted(phantoms)}"
+        assert not phantoms, (
+            f"ACTIVE_TOOLS lists tools not found on disk in src/tools/: {sorted(phantoms)}"
+        )
 
-    @pytest.mark.parametrize("name", ALL_TOOLS)
-    def test_tool_file_exists(self, name: str) -> None:
+    @pytest.mark.parametrize("name", ACTIVE_TOOLS)
+    def test_active_tool_file_exists(self, name: str) -> None:
         assert _tool_path(name).is_file(), f"src/tools/{name}.py not found"
-
-    def test_all_tools_are_in_src_tools(self) -> None:
-        missing = [n for n in ALL_TOOLS if not _tool_path(n).is_file()]
-        assert not missing, f"Missing tool files: {missing}"
 
 
 # ---------------------------------------------------------------------------
-# TestToolsTestCoverage — every tool currently has a test file
+# TestToolsTestCoverage — active tools must have test files
 # ---------------------------------------------------------------------------
 
 
 class TestToolsTestCoverage:
-    """Every tool in src/tools/ must have a corresponding test file.
+    """Every active tool in src/tools/ must have a corresponding test file.
 
-    This applies to ALL tools while they remain physically in src/tools/.
-    Archive/delete PRs (R3, R4) will update this requirement when files move.
+    Applies to ACTIVE_TOOLS (30) only.  Archived and deleted tools no longer
+    need test coverage in tests/.
     """
 
-    @pytest.mark.parametrize("name", ALL_TOOLS)
+    @pytest.mark.parametrize("name", ACTIVE_TOOLS)
     def test_tool_has_test_file(self, name: str) -> None:
         assert _test_path(name).is_file(), (
             f"tests/test_{name}.py not found — "
-            f"all tools in src/tools/ must have test coverage"
+            f"all active tools in src/tools/ must have test coverage"
         )
 
 
 # ---------------------------------------------------------------------------
-# TestToolsSourceScan — static analysis while tools remain in src/tools/
+# TestToolsSourceScan — static analysis for active tools
 # ---------------------------------------------------------------------------
 
 
 class TestToolsSourceScan:
-    """Source-level safety checks for every tool module.
+    """Source-level safety checks for ACTIVE_TOOLS (30) in src/tools/.
 
-    These apply to ALL 43 tools while they remain in src/tools/.
-    Archive/delete PRs may relax these requirements for moved/deleted files.
+    Archived and deleted tools are no longer scanned (not in src/tools/).
     """
 
-    @pytest.mark.parametrize("name", ALL_TOOLS)
+    @pytest.mark.parametrize("name", ACTIVE_TOOLS)
     def test_no_module_level_alpaca_import(self, name: str) -> None:
         tree = _parse_tool(name)
         scanner = _ModuleLevelAlpacaImportScanner()
@@ -356,7 +357,7 @@ class TestToolsSourceScan:
             f"{name}.py has module-level Alpaca imports: {scanner.findings}"
         )
 
-    @pytest.mark.parametrize("name", ALL_TOOLS)
+    @pytest.mark.parametrize("name", ACTIVE_TOOLS)
     def test_no_module_level_env_reads(self, name: str) -> None:
         tree = _parse_tool(name)
         scanner = _ModuleLevelEnvScanner()
@@ -365,7 +366,7 @@ class TestToolsSourceScan:
             f"{name}.py reads os.environ at module level: {scanner.findings}"
         )
 
-    @pytest.mark.parametrize("name", ALL_TOOLS)
+    @pytest.mark.parametrize("name", ACTIVE_TOOLS)
     def test_no_module_level_mutation_calls(self, name: str) -> None:
         tree = _parse_tool(name)
         scanner = _ModuleLevelMutationScanner()
@@ -374,7 +375,7 @@ class TestToolsSourceScan:
             f"{name}.py calls an order-mutation API at module level: {scanner.findings}"
         )
 
-    @pytest.mark.parametrize("name", ALL_TOOLS)
+    @pytest.mark.parametrize("name", ACTIVE_TOOLS)
     def test_no_hardcoded_secret_literals(self, name: str) -> None:
         """No string literal that looks like a hardcoded API key or secret token.
 
@@ -420,11 +421,10 @@ class TestToolsSourceScan:
 
 
 class TestActiveToolsHaveMain:
-    """Active tools (research + runtime candidates + preserve-support) must
-    define a main() function for `python -m src.tools.<name>` CLI usage.
+    """Active tools must define a main() function for CLI usage.
 
-    ARCHIVE_MANUAL and DELETE_CANDIDATE tools are not required to have main()
-    since they are targeted for removal and may already be dead-code paths.
+    Applies to ACTIVE_TOOLS (30) only.  Archived and deleted tools are not
+    required to have main().
     """
 
     @pytest.mark.parametrize("name", ACTIVE_TOOLS)
@@ -442,17 +442,17 @@ class TestActiveToolsHaveMain:
 
 
 # ---------------------------------------------------------------------------
-# TestToolsImportSafety — all tools importable without side effects
+# TestToolsImportSafety — active tools importable without side effects
 # ---------------------------------------------------------------------------
 
 
 class TestToolsImportSafety:
-    """All tool modules must be importable (no import-time side effects).
+    """Active tool modules must be importable (no import-time side effects).
 
-    Applies to ALL tools while they remain in src/tools/.
+    Applies to ACTIVE_TOOLS (30) only.
     """
 
-    @pytest.mark.parametrize("name", ALL_TOOLS)
+    @pytest.mark.parametrize("name", ACTIVE_TOOLS)
     def test_tool_is_importable(self, name: str) -> None:
         module_name = f"src.tools.{name}"
         try:
@@ -463,7 +463,7 @@ class TestToolsImportSafety:
             raise
         assert mod is not None
 
-    @pytest.mark.parametrize("name", ALL_TOOLS)
+    @pytest.mark.parametrize("name", ACTIVE_TOOLS)
     def test_tool_does_not_module_level_import_src_main_build_engine(self, name: str) -> None:
         """No tool may import build_engine from src.main at module level."""
         tree = _parse_tool(name)
@@ -476,86 +476,63 @@ class TestToolsImportSafety:
 
 
 # ---------------------------------------------------------------------------
-# TestCleanupEligibility — documents archive/delete intent (PR R1 plan)
+# TestArchiveIntegrity — PR R4 archive/delete invariants
 # ---------------------------------------------------------------------------
 
 
-class TestCleanupEligibility:
-    """These tests document archive/delete eligibility per the PR R1 plan.
+class TestArchiveIntegrity:
+    """Verify the PR R4 archive and delete operations completed correctly.
 
-    No files are moved or deleted in PR R2.  These tests lock in that
-    ARCHIVE_MANUAL and DELETE_CANDIDATE tools are classified for future
-    removal and must not be silently re-promoted to active status without
-    updating this file.
-
-    The actual move/delete happens in PR R4 after dependency scan.
+    Replaces TestCleanupEligibility (which asserted pre-R4 state).
     """
 
-    def test_archive_manual_tools_are_classified(self) -> None:
-        """All archive-manual tools are explicitly listed in ARCHIVE_MANUAL_TOOLS."""
-        assert len(ARCHIVE_MANUAL_TOOLS) > 0
-        for name in ARCHIVE_MANUAL_TOOLS:
-            assert name not in ACTIVE_TOOLS, (
-                f"{name} is in ARCHIVE_MANUAL_TOOLS but also in ACTIVE_TOOLS — "
-                f"a tool cannot be both active and archive-eligible"
-            )
-
-    def test_delete_candidate_tools_are_classified(self) -> None:
-        """All delete-candidate tools are explicitly listed in DELETE_CANDIDATE_TOOLS."""
-        assert len(DELETE_CANDIDATE_TOOLS) > 0
-        for name in DELETE_CANDIDATE_TOOLS:
-            assert name not in ACTIVE_TOOLS, (
-                f"{name} is in DELETE_CANDIDATE_TOOLS but also in ACTIVE_TOOLS — "
-                f"a tool cannot be both active and delete-eligible"
-            )
-
-    def test_archive_manual_tools_still_in_src_tools(self) -> None:
-        """ARCHIVE_MANUAL tools still exist in src/tools/ — not yet moved."""
-        missing = [n for n in ARCHIVE_MANUAL_TOOLS if not _tool_path(n).is_file()]
-        assert not missing, (
-            f"ARCHIVE_MANUAL tools already missing from src/tools/ (moved/deleted without PR R4): "
-            f"{missing}"
+    def test_archive_directory_exists(self) -> None:
+        assert _ARCHIVE_DIR.is_dir(), (
+            f"Archive directory missing: {_ARCHIVE_DIR} — "
+            f"PR R4 should have created scripts/archive/manual_live_readiness/"
         )
 
-    def test_delete_candidate_tools_still_in_src_tools(self) -> None:
-        """DELETE_CANDIDATE tools still exist in src/tools/ — not yet removed."""
-        missing = [n for n in DELETE_CANDIDATE_TOOLS if not _tool_path(n).is_file()]
-        assert not missing, (
-            f"DELETE_CANDIDATE tools already missing from src/tools/ (deleted without PR R4): "
-            f"{missing}"
+    @pytest.mark.parametrize("name", ARCHIVED_TOOLS)
+    def test_archived_tool_exists_in_archive_dir(self, name: str) -> None:
+        assert _archive_path(name).is_file(), (
+            f"{name}.py not found in scripts/archive/manual_live_readiness/ — "
+            f"PR R4 should have moved it there"
         )
 
-    def test_archive_manual_count_matches_r1_plan(self) -> None:
-        """14 tools classified as ARCHIVE_MANUAL per PR R1 inventory."""
-        assert len(ARCHIVE_MANUAL_TOOLS) == 14
+    @pytest.mark.parametrize("name", ARCHIVED_TOOLS)
+    def test_archived_tool_not_in_src_tools(self, name: str) -> None:
+        assert not _tool_path(name).is_file(), (
+            f"src/tools/{name}.py still exists — PR R4 should have removed it "
+            f"(moved to scripts/archive/manual_live_readiness/)"
+        )
 
-    def test_delete_candidate_count_matches_r1_plan(self) -> None:
-        """10 tools classified as DELETE_CANDIDATE per PR R1 inventory."""
-        assert len(DELETE_CANDIDATE_TOOLS) == 10
+    @pytest.mark.parametrize("name", DELETED_TOOLS_R4)
+    def test_deleted_tool_not_in_src_tools(self, name: str) -> None:
+        assert not _tool_path(name).is_file(), (
+            f"src/tools/{name}.py still exists — PR R4 should have deleted it"
+        )
 
-    def test_archive_manual_not_in_delete_candidate(self) -> None:
-        overlap = set(ARCHIVE_MANUAL_TOOLS) & set(DELETE_CANDIDATE_TOOLS)
+    @pytest.mark.parametrize("name", DELETED_TOOLS_R4)
+    def test_deleted_tool_not_in_archive_dir(self, name: str) -> None:
+        assert not _archive_path(name).is_file(), (
+            f"{name}.py found in archive — deleted tools should not be archived, "
+            f"only truly manual tools are archived"
+        )
+
+    def test_archived_tools_are_not_active(self) -> None:
+        overlap = set(ARCHIVED_TOOLS) & set(ACTIVE_TOOLS)
         assert not overlap, (
-            f"Tools in both ARCHIVE_MANUAL and DELETE_CANDIDATE: {sorted(overlap)}"
+            f"Tools in both ARCHIVED_TOOLS and ACTIVE_TOOLS: {sorted(overlap)}"
         )
 
-    def test_future_move_allowed_for_archive_manual(self) -> None:
-        """Explicit confirmation: ARCHIVE_MANUAL tools may be moved to
-        scripts/archive/manual_live_readiness/ in PR R4 after dependency scan.
-        This test exists to document intent — it always passes.
-        """
-        # Documented intent: these tools are eligible for archive in PR R4.
-        # Dependency scan required before move:
-        #   grep -r "from src.tools.<name>" src/ tests/ scripts/
-        assert True
+    def test_deleted_tools_are_not_active(self) -> None:
+        overlap = set(DELETED_TOOLS_R4) & set(ACTIVE_TOOLS)
+        assert not overlap, (
+            f"Tools in both DELETED_TOOLS_R4 and ACTIVE_TOOLS: {sorted(overlap)}"
+        )
 
-    def test_future_delete_allowed_for_delete_candidates(self) -> None:
-        """Explicit confirmation: DELETE_CANDIDATE tools may be deleted in PR R4
-        after dependency scan confirms no active import/test/config references.
-        This test exists to document intent — it always passes.
-        """
-        # Documented intent: these tools are eligible for deletion in PR R4.
-        # Dependency scan required before deletion:
-        #   grep -r "from src.tools.<name>" src/ tests/ scripts/
-        #   grep -r "<name>" docs/ config/
-        assert True
+    def test_archived_tools_not_in_deleted(self) -> None:
+        overlap = set(ARCHIVED_TOOLS) & set(DELETED_TOOLS_R4)
+        assert not overlap, (
+            f"Tools in both ARCHIVED_TOOLS and DELETED_TOOLS_R4: {sorted(overlap)}"
+        )

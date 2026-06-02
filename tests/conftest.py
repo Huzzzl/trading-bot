@@ -21,7 +21,6 @@ import pytest
 _LEDGER_TEST_FILES = {
     "test_paper_ledger.py",
     "test_paper_status.py",
-    "test_paper_ledger_import.py",
     "test_paper_ledger_verify.py",
 }
 

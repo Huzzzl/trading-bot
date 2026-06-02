@@ -346,6 +346,57 @@ python -m src.tools.paper_status --help          # must still work after any mov
 
 ---
 
+---
+
+## 8. PR R4 Implementation Record
+
+PR R4 completed the archive and delete operations planned in this document and in
+`docs/automated_bot_codebase_inventory_deletion_plan.md`.
+
+### Archive destination created
+
+`scripts/archive/manual_live_readiness/` — created in PR R4.
+
+### Files moved (10 tools)
+
+| Tool | Destination |
+|------|------------|
+| `live_operator_config_override_review.py` | `scripts/archive/manual_live_readiness/` |
+| `live_operator_release_checklist.py` | `scripts/archive/manual_live_readiness/` |
+| `live_order_submission_approval.py` | `scripts/archive/manual_live_readiness/` |
+| `live_position_reconciliation_readonly.py` | `scripts/archive/manual_live_readiness/` |
+| `live_real_submit_pr_approval.py` | `scripts/archive/manual_live_readiness/` |
+| `live_single_manual_submit.py` | `scripts/archive/manual_live_readiness/` |
+| `live_single_submit_approval_review.py` | `scripts/archive/manual_live_readiness/` |
+| `live_submit_blocked_review.py` | `scripts/archive/manual_live_readiness/` |
+| `live_submit_plan_review.py` | `scripts/archive/manual_live_readiness/` |
+| `manual_position_status_checker_readonly.py` | `scripts/archive/manual_live_readiness/` |
+
+Each archived file has a two-line archive header prepended:
+```python
+# ARCHIVED in PR R4. Historical manual/operator tool. Not part of active automated runtime.
+# Moved from src/tools/<name>.py. Not importable as src.tools.<name>.
+```
+
+### Files deleted (3 tools)
+
+`live_readiness_history_review.py`, `paper_ledger_import.py`, `paper_pre_submit_check.py`
+— removed from `src/tools/` with no archive copy (no active import references,
+no operator-history value).
+
+### `src/tools/` count after PR R4
+
+30 active tools remain in `src/tools/`. All are covered by tests in `tests/`.
+
+### Safety invariants confirmed
+
+- No `src/backtest/`, `src/strategy/`, `src/risk/`, `src/execution/` runtime files changed
+- No `src/main.py` changed; no `config/`, `output/`, `data/` changes
+- No broker calls, no credentials read, no orders, no trading behavior change
+- Full suite: 4 513 passed
+
+---
+
 Nothing in this document or this repository constitutes financial advice.
 All trading decisions are made by the operator and are the operator's
 sole responsibility.

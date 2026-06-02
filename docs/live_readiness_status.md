@@ -2,7 +2,7 @@
 
 Current operational status of the live-readiness gate baseline.
 Last updated: 2026-06-01. Full pre-submit pipeline complete through PR #98.
-Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. PR 10E cache checker (42 tests, 41 tools). PR 10F Yahoo fetch gate design. PR 10G Yahoo fetch tool (43 tests, 42 tools). PR 10H local fetch runbook. PR 10I cached real-data backtest checker (53 tests, 43 tools). PR 10J first real-data results snapshot (docs-only). PR 10K backtest metrics diagnostics (67 tests). PR 10L Sharpe diagnostics in cached checker (61 tests). PR 10N calibrate Sharpe diagnostic low-vol threshold (72 tests). PR 10O calibrated-diagnostics rerun snapshot (docs-only). PR 10M TrendFollowing default param comparison (29 tests). PR 10P trade summary diagnostics design (docs-only). PR 10Q Trade schema characterization tests (60 tests). PR 10R trade_summary_diagnostics helper (78 tests). PR 10S trade diagnostics in cached checker (86 tests). PR 10T trade diagnostics real-data snapshot (docs-only). PR 10U daily-bar session_end policy design (docs-only). PR 10V daily-bar session_end characterization tests (62 tests). PR 10W Phase 1 daily-bar guard (5 780 tests). PR 10X post-Phase-1 snapshot (docs-only). PR 10Y 60m-only evaluation scope design (docs-only). PR 10Z 60m-only cached checker runbook (docs-only). PR R1 codebase inventory and deletion plan (docs-only). PR R2 tool inventory active-vs-archive refactor (384 tests in test_tools_inventory.py; 5 701 full suite). PR R3 archive superseded snapshot docs (5 docs moved to docs/archive/snapshots/; no test changes; 5 701 full suite). Test baseline: 5 701 passed.
+Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. PR 10E cache checker (42 tests, 41 tools). PR 10F Yahoo fetch gate design. PR 10G Yahoo fetch tool (43 tests, 42 tools). PR 10H local fetch runbook. PR 10I cached real-data backtest checker (53 tests, 43 tools). PR 10J first real-data results snapshot (docs-only). PR 10K backtest metrics diagnostics (67 tests). PR 10L Sharpe diagnostics in cached checker (61 tests). PR 10N calibrate Sharpe diagnostic low-vol threshold (72 tests). PR 10O calibrated-diagnostics rerun snapshot (docs-only). PR 10M TrendFollowing default param comparison (29 tests). PR 10P trade summary diagnostics design (docs-only). PR 10Q Trade schema characterization tests (60 tests). PR 10R trade_summary_diagnostics helper (78 tests). PR 10S trade diagnostics in cached checker (86 tests). PR 10T trade diagnostics real-data snapshot (docs-only). PR 10U daily-bar session_end policy design (docs-only). PR 10V daily-bar session_end characterization tests (62 tests). PR 10W Phase 1 daily-bar guard (5 780 tests). PR 10X post-Phase-1 snapshot (docs-only). PR 10Y 60m-only evaluation scope design (docs-only). PR 10Z 60m-only cached checker runbook (docs-only). PR R1 codebase inventory and deletion plan (docs-only). PR R2 tool inventory active-vs-archive refactor (384 tests in test_tools_inventory.py; 5 701 full suite). PR R3 archive superseded snapshot docs (5 docs moved to docs/archive/snapshots/; no test changes; 5 701 full suite). PR R4 archive manual tools and delete stubs (10 tools archived, 3 deleted, 13 test files removed, test_tools_inventory.py rewritten to 310 tests; 4 513 full suite). Test baseline: 4 513 passed.
 
 ---
 
@@ -5537,5 +5537,80 @@ No `DELETE_TEST_CANDIDATE` tests identified. No tests modified.
 > **This milestone does not approve automated live trading.**
 > **This milestone does not approve any individual trade.**
 > **No snapshot docs were deleted — only moved to `docs/archive/snapshots/`.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> **Nothing in this repository is financial advice.**
+
+---
+
+## PR R4 Milestone — Archive Manual Tools and Delete Stubs
+
+**Date:** 2026-06-01
+**Branch:** `claude/hopeful-cray-56Jfr`
+**Full suite:** 4 513 passed (down from 5 701 — 1 113 tests removed by deleting 13 test files for archived/deleted tools; 310 tests added via rewritten `test_tools_inventory.py`)
+
+### Summary
+
+PR R4 executed the first real `src/tools/` cleanup after the R1/R2/R3 preparatory PRs.
+A dependency scan over all 43 tools determined which could be safely archived or deleted
+and which had active import chains requiring reclassification.
+
+### Dependency scan reclassifications
+
+11 tools reclassified to `ACTIVE_RUNTIME_CANDIDATE` after confirmed active imports:
+
+| Tool | Imported by |
+|------|------------|
+| `live_dry_run_review` | `live_pre_submit_checklist` |
+| `live_pre_submit_checklist` | `live_submit` |
+| `paper_smoke_check` | `test_paper_ledger.py` (immutable) |
+| `paper_status` | 5 active FREEZE_DEFERRED tools |
+| `live_shadow_review` | `live_readiness_gate` |
+| `live_shadow_screen_review` | `live_readiness_gate` |
+| `live_v2_approvals_review` | `live_submit_enablement_gate` |
+| `live_v2_executor_readiness_review` | `live_submit_enablement_gate` |
+| `live_v2_final_readiness_review` | `live_v2_readiness_bundle` |
+| `live_v2_readiness_bundle` | v2 chain |
+| `replay_order_reconciliation` | `paper_status` + `test_paper_ledger.py` |
+
+`ACTIVE_TOOLS` grows from 19 → 30 as a result.
+
+### Archived tools (10) — `scripts/archive/manual_live_readiness/`
+
+`live_operator_config_override_review`, `live_operator_release_checklist`,
+`live_order_submission_approval`, `live_position_reconciliation_readonly`,
+`live_real_submit_pr_approval`, `live_single_manual_submit`,
+`live_single_submit_approval_review`, `live_submit_blocked_review`,
+`live_submit_plan_review`, `manual_position_status_checker_readonly`.
+
+Each file has a two-line archive header prepended. Not importable as `src.tools.*`.
+
+### Deleted tools (3)
+
+`live_readiness_history_review`, `paper_ledger_import`, `paper_pre_submit_check`.
+No active import references; no operator-history value warranting archival.
+
+### Test cleanup
+
+- 13 test files deleted (1 113 tests removed)
+- `tests/conftest.py`: removed `"test_paper_ledger_import.py"` from `_LEDGER_TEST_FILES`
+- `tests/test_live_submit_executor_check.py`: removed `test_report_consumable_by_blocked_review`
+  (imported now-archived `live_submit_blocked_review`)
+- `tests/test_tools_inventory.py`: fully rewritten (310 tests, 5 classes)
+  — `ACTIVE_TOOLS`=30, `ARCHIVED_TOOLS`=10, `DELETED_TOOLS_R4`=3
+  — `TestCleanupEligibility` replaced by `TestArchiveIntegrity`
+  — all scans / coverage / import-safety scoped to `ACTIVE_TOOLS` only
+
+### Safety invariants confirmed
+
+- No `src/backtest/`, `src/strategy/`, `src/risk/`, `src/execution/` runtime files changed
+- No `src/main.py` changed
+- No config, output, data/cache changes
+- No broker calls, no credentials read, no orders, no trading behavior change
+- All archived files preserved in `scripts/archive/manual_live_readiness/`
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
 > **No Alpaca endpoint was contacted. No credentials were read.**
 > **Nothing in this repository is financial advice.**

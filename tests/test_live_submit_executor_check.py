@@ -264,24 +264,6 @@ class TestMain:
             _run_main(args)
         assert not ledger.exists()
 
-    def test_report_consumable_by_blocked_review(self, tmp_path):
-        """Blocked report written by executor can be reviewed by live_submit_blocked_review."""
-        config_path, approval, pre_submit, plan_review, output_dir, _ = _setup_files(tmp_path)
-        args = _base_args(tmp_path, config_path, approval, pre_submit, plan_review, output_dir)
-        report = _blocked_report()
-        with patch(f"{_MODULE}.load_config", return_value=self._mock_config()), \
-             patch(f"{_MODULE}.maybe_execute_live_submit", return_value=report):
-            _write_report_to_dir(output_dir, report)
-            _run_main(args)
-
-        from src.tools.live_submit_blocked_review import parse_report, validate_report
-        report_path = output_dir / "live_submit_blocked_report.json"
-        assert report_path.exists()
-        parsed = parse_report(report_path)
-        result, violations = validate_report(parsed)
-        assert result == "PASS"
-        assert violations == []
-
     def test_plan_file_fields_extracted(self, tmp_path):
         config_path, approval, pre_submit, plan_review, output_dir, _ = _setup_files(tmp_path)
         plan = _write(tmp_path, "plan.json", {

@@ -1,3 +1,5 @@
+# ARCHIVED in PR R4. Historical manual/operator tool. Not part of active automated runtime.
+# Moved from src/tools/live_operator_config_override_review.py. Not importable as src.tools.live_operator_config_override_review.
 """
 tools/live_operator_config_override_review.py
 ----------------------------------------------

@@ -1,3 +1,5 @@
+# ARCHIVED in PR R4. Historical manual/operator tool. Not part of active automated runtime.
+# Moved from src/tools/live_single_manual_submit.py. Not importable as src.tools.live_single_manual_submit.
 """
 tools/live_single_manual_submit.py
 ------------------------------------
