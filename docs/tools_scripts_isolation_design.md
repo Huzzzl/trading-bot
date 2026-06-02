@@ -395,6 +395,14 @@ no operator-history value).
 - No broker calls, no credentials read, no orders, no trading behavior change
 - Full suite: 4 513 passed
 
+### PR R4b — Legacy active tool dependency reduction plan (docs-only)
+
+Adds `docs/legacy_active_tool_dependency_reduction_plan.md`. Documents the 11 tools
+PR R4 was forced to keep active due to old import chains, and defines reduction PRs
+R4c–R4g to break those chains cluster by cluster. No code or test changes in this PR.
+
+See `docs/legacy_active_tool_dependency_reduction_plan.md` for full detail.
+
 ---
 
 Nothing in this document or this repository constitutes financial advice.

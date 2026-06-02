@@ -458,3 +458,32 @@ Archive header prepended; not importable as `src.tools.<name>`.
 > **This document does not approve any individual trade.**
 > **No Alpaca endpoint was contacted. No credentials were read.**
 > **Nothing in this repository is financial advice.**
+
+---
+
+## 10. PR R4b — Legacy Dependency Reduction Plan (docs-only)
+
+Adds `docs/legacy_active_tool_dependency_reduction_plan.md`.
+
+### Problem documented
+
+PR R4 forced 11 tools into `ACTIVE_RUNTIME_CANDIDATE` due to old import chains,
+raising `ACTIVE_TOOLS` from 19 → 30. Those 11 tools are not active because they
+serve automated runtime — they are active because legacy tool code imports them.
+
+### Plan documented
+
+Five dependency clusters (A–E) and reduction PRs R4c–R4g:
+
+| Cluster | Tools in chain | Reduction PR |
+|---------|---------------|--------------|
+| A — live submit checklist | `live_pre_submit_checklist`, `live_dry_run_review` | R4e |
+| B — readiness shadow | `live_shadow_review`, `live_shadow_screen_review` | R4f |
+| C — v2 approval bundle | `live_v2_approvals_review`, `live_v2_executor_readiness_review`, `live_v2_final_readiness_review`, `live_v2_readiness_bundle` | R4g |
+| D — paper status / replay | `replay_order_reconciliation` | R4d |
+| E — paper smoke check | `paper_smoke_check` | R4c |
+
+### No code changes in PR R4b
+
+No `src/`, `tests/`, `scripts/`, `config/`, `output/`, or `data/` changes.
+Full suite: 4 513 passed (unchanged from R4).
