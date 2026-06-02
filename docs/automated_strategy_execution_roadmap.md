@@ -412,6 +412,13 @@ active imports found in the scan.
   `ACTIVE_TOOLS` only.
 Full suite: 4 513 passed.
 
+**PR R4b — Document legacy active tool dependency reduction plan — implemented**
+Docs-only. Adds `docs/legacy_active_tool_dependency_reduction_plan.md`. Documents the
+11 legacy tools that PR R4 was forced to keep active due to old import chains, organises
+them into 5 dependency clusters (A–E), and defines reduction PRs R4c–R4g. Direction
+checkpoint: if `ACTIVE_TOOLS` is still above ~22–24 after R4g, do another cleanup pass
+before R5. No `src/`, `tests/`, `scripts/`, or `config/` changes.
+
 No parameter optimisation or paper/live progression until diagnostics complete.
 
 ### Phase C — Paper trading execution

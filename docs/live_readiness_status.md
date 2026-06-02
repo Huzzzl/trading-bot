@@ -2,7 +2,7 @@
 
 Current operational status of the live-readiness gate baseline.
 Last updated: 2026-06-01. Full pre-submit pipeline complete through PR #98.
-Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. PR 10E cache checker (42 tests, 41 tools). PR 10F Yahoo fetch gate design. PR 10G Yahoo fetch tool (43 tests, 42 tools). PR 10H local fetch runbook. PR 10I cached real-data backtest checker (53 tests, 43 tools). PR 10J first real-data results snapshot (docs-only). PR 10K backtest metrics diagnostics (67 tests). PR 10L Sharpe diagnostics in cached checker (61 tests). PR 10N calibrate Sharpe diagnostic low-vol threshold (72 tests). PR 10O calibrated-diagnostics rerun snapshot (docs-only). PR 10M TrendFollowing default param comparison (29 tests). PR 10P trade summary diagnostics design (docs-only). PR 10Q Trade schema characterization tests (60 tests). PR 10R trade_summary_diagnostics helper (78 tests). PR 10S trade diagnostics in cached checker (86 tests). PR 10T trade diagnostics real-data snapshot (docs-only). PR 10U daily-bar session_end policy design (docs-only). PR 10V daily-bar session_end characterization tests (62 tests). PR 10W Phase 1 daily-bar guard (5 780 tests). PR 10X post-Phase-1 snapshot (docs-only). PR 10Y 60m-only evaluation scope design (docs-only). PR 10Z 60m-only cached checker runbook (docs-only). PR R1 codebase inventory and deletion plan (docs-only). PR R2 tool inventory active-vs-archive refactor (384 tests in test_tools_inventory.py; 5 701 full suite). PR R3 archive superseded snapshot docs (5 docs moved to docs/archive/snapshots/; no test changes; 5 701 full suite). PR R4 archive manual tools and delete stubs (10 tools archived, 3 deleted, 13 test files removed, test_tools_inventory.py rewritten to 310 tests; 4 513 full suite). Test baseline: 4 513 passed.
+Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. PR 10E cache checker (42 tests, 41 tools). PR 10F Yahoo fetch gate design. PR 10G Yahoo fetch tool (43 tests, 42 tools). PR 10H local fetch runbook. PR 10I cached real-data backtest checker (53 tests, 43 tools). PR 10J first real-data results snapshot (docs-only). PR 10K backtest metrics diagnostics (67 tests). PR 10L Sharpe diagnostics in cached checker (61 tests). PR 10N calibrate Sharpe diagnostic low-vol threshold (72 tests). PR 10O calibrated-diagnostics rerun snapshot (docs-only). PR 10M TrendFollowing default param comparison (29 tests). PR 10P trade summary diagnostics design (docs-only). PR 10Q Trade schema characterization tests (60 tests). PR 10R trade_summary_diagnostics helper (78 tests). PR 10S trade diagnostics in cached checker (86 tests). PR 10T trade diagnostics real-data snapshot (docs-only). PR 10U daily-bar session_end policy design (docs-only). PR 10V daily-bar session_end characterization tests (62 tests). PR 10W Phase 1 daily-bar guard (5 780 tests). PR 10X post-Phase-1 snapshot (docs-only). PR 10Y 60m-only evaluation scope design (docs-only). PR 10Z 60m-only cached checker runbook (docs-only). PR R1 codebase inventory and deletion plan (docs-only). PR R2 tool inventory active-vs-archive refactor (384 tests in test_tools_inventory.py; 5 701 full suite). PR R3 archive superseded snapshot docs (5 docs moved to docs/archive/snapshots/; no test changes; 5 701 full suite). PR R4 archive manual tools and delete stubs (10 tools archived, 3 deleted, 13 test files removed, test_tools_inventory.py rewritten to 310 tests; 4 513 full suite). PR R4b legacy active tool dependency reduction plan (docs-only; adds legacy_active_tool_dependency_reduction_plan.md; defines R4c–R4g cluster reduction chain; no test changes; 4 513 full suite). Test baseline: 4 513 passed.
 
 ---
 
@@ -5607,6 +5607,66 @@ No active import references; no operator-history value warranting archival.
 - No config, output, data/cache changes
 - No broker calls, no credentials read, no orders, no trading behavior change
 - All archived files preserved in `scripts/archive/manual_live_readiness/`
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> **Nothing in this repository is financial advice.**
+
+---
+
+## PR R4b Milestone — Legacy Active Tool Dependency Reduction Plan
+
+**Date:** 2026-06-02
+**Branch:** `claude/hopeful-cray-56Jfr`
+**Full suite:** 4 513 passed (unchanged from R4 — docs-only PR)
+
+### Summary
+
+PR R4b documents the 11 legacy tools that PR R4 was forced to keep active due
+to old tool-to-tool import chains. These tools are not active because they serve
+automated runtime — they are active because legacy manual-operator code imports
+them. This PR defines a cluster-by-cluster reduction plan (R4c–R4g).
+
+### New document
+
+`docs/legacy_active_tool_dependency_reduction_plan.md`
+
+### 11 legacy tools documented
+
+| Tool | Original R2 class | Reason kept in R4 |
+|------|------------------|-------------------|
+| `live_dry_run_review` | `ARCHIVE_MANUAL` | imported by `live_pre_submit_checklist` |
+| `live_pre_submit_checklist` | `ARCHIVE_MANUAL` | imported by `live_submit` |
+| `paper_smoke_check` | `ARCHIVE_MANUAL` | imported by `test_paper_ledger.py` |
+| `paper_status` | `ARCHIVE_MANUAL` | imported by 5 active tools |
+| `live_shadow_review` | `DELETE_CANDIDATE` | imported by `live_readiness_gate` |
+| `live_shadow_screen_review` | `DELETE_CANDIDATE` | imported by `live_readiness_gate` |
+| `live_v2_approvals_review` | `DELETE_CANDIDATE` | imported by `live_submit_enablement_gate` |
+| `live_v2_executor_readiness_review` | `DELETE_CANDIDATE` | imported by `live_submit_enablement_gate` |
+| `live_v2_final_readiness_review` | `DELETE_CANDIDATE` | imported by `live_v2_readiness_bundle` |
+| `live_v2_readiness_bundle` | `DELETE_CANDIDATE` | v2 chain |
+| `replay_order_reconciliation` | `DELETE_CANDIDATE` | imported by `paper_status` + tests |
+
+### Reduction PR chain
+
+| PR | Cluster | Tools removed | Expected `ACTIVE_TOOLS` |
+|----|---------|--------------|------------------------|
+| R4c | E — paper smoke check | `paper_smoke_check` | 29 |
+| R4d | D — paper status / replay | `replay_order_reconciliation` | 28 |
+| R4e | A — live submit checklist | `live_pre_submit_checklist`, `live_dry_run_review` | 26 |
+| R4f | B — readiness shadow | `live_shadow_review`, `live_shadow_screen_review` | 24 |
+| R4g | C — v2 approval bundle | `live_v2_approvals_review`, `live_v2_executor_readiness_review`, `live_v2_final_readiness_review`, `live_v2_readiness_bundle` | 20 |
+
+Direction checkpoint after R4g: if `ACTIVE_TOOLS` > ~22–24, do another pass
+before opening R5 (paper runner extraction).
+
+### Safety invariants confirmed
+
+- No `src/`, `tests/`, `scripts/`, `config/`, `output/`, `data/cache/` changes
+- No broker calls, no credentials read, no orders, no trading behavior change
 
 ### Warning
 
