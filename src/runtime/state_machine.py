@@ -32,7 +32,6 @@ from src.config.loader import AppConfig
 
 logger = logging.getLogger(__name__)
 
-_AUTOMATED_RISK_GATE_IMPLEMENTED = False
 _NO_RISK_GATE_BLOCKER = "automated risk gate not implemented"
 
 
