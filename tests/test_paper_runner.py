@@ -1280,6 +1280,8 @@ class TestMainDelegation:
         """When paper_close_positions_enabled=True, run_paper_execution must NOT be called."""
         import src.main as _main_mod
         import src.execution.paper_runner as _runner_mod
+        import src.execution.paper_close_runner as _close_runner_mod
+        from src.execution.paper_close_runner import PaperCloseRunResult
 
         cfg = _default_cfg()
         cfg.execution.mode = "paper"
@@ -1308,18 +1310,32 @@ class TestMainDelegation:
 
         close_calls = []
 
-        def _fake_close(c, outdir):
+        def _fake_close(config, *, output_dir=None, **kw):
             close_calls.append(True)
+            return PaperCloseRunResult(
+                result="PREVIEW_COMPLETE",
+                blocker=None,
+                mode="preview",
+                preview_only=True,
+                close_candidates_generated=0,
+                orders_submitted=0,
+                ledger_rows_written=0,
+                output_dir=str(output_dir) if output_dir else None,
+                broker_calls_made=True,
+                credentials_read=False,
+                order_action_requested=False,
+                network_calls_made=False,
+            )
 
         monkeypatch.setattr(sys, "argv", ["src.main", "--output-dir", str(tmp_path)])
         monkeypatch.setattr(_main_mod, "load_config", lambda _: cfg)
         monkeypatch.setattr(_main_mod, "configure_logging", lambda **kw: None)
         monkeypatch.setattr(_runner_mod, "run_paper_execution", _fake_run)
-        monkeypatch.setattr(_main_mod, "_run_paper_close", _fake_close)
+        monkeypatch.setattr(_close_runner_mod, "run_paper_close", _fake_close)
 
         _main_mod.main()
         assert runner_calls == []  # run_paper_execution must NOT be called
-        assert close_calls == [True]  # _run_paper_close IS called
+        assert close_calls == [True]  # run_paper_close IS called
 
     def test_paper_gate_not_enabled_raises_not_implemented(self, monkeypatch, tmp_path) -> None:
         import src.main as _main_mod
