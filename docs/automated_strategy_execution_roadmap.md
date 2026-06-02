@@ -434,6 +434,14 @@ directly — no `paper_smoke_check` import. `paper_smoke_check.py` archived to
 `tests/test_tools_inventory.py` updated: `ACTIVE_RUNTIME_CANDIDATE_TOOLS` 25 → 24,
 `ACTIVE_TOOLS` 29 → 28, `ARCHIVED_TOOLS` 11 → 12. No runtime trading behavior change.
 
+**PR R4e — Decouple live_submit from manual checklist chain — implemented**
+`live_submit._run_checklist` replaced by `_check_automated_risk_gate()`.
+`_AUTOMATED_RISK_GATE_IMPLEMENTED = False` ensures live submit is fail-closed until a real
+automated gate exists. `live_pre_submit_checklist.py` and `live_dry_run_review.py` archived.
+`test_live_pre_submit_checklist.py` and `test_live_dry_run_review.py` deleted.
+`tests/test_tools_inventory.py` updated: `ACTIVE_RUNTIME_CANDIDATE_TOOLS` 24 → 22,
+`ACTIVE_TOOLS` 28 → 26, `ARCHIVED_TOOLS` 12 → 14. No runtime trading behavior change.
+
 No parameter optimisation or paper/live progression until diagnostics complete.
 
 ### Phase C — Paper trading execution

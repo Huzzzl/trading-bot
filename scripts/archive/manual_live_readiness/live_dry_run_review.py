@@ -1,3 +1,5 @@
+# ARCHIVED in PR R4e. Historical manual operator review tool. Not part of active automated runtime.
+# Moved from src/tools/live_dry_run_review.py. Not importable as src.tools.live_dry_run_review.
 """
 tools/live_dry_run_review.py
 -----------------------------

@@ -25,7 +25,9 @@ Preconditions checked (all must pass before writing the plan)
 4. ``live_submit_dry_run`` must be ``true``.
 5. ``live_kill_switch_enabled`` must be ``true``.
 6. ``live_require_human_confirm`` must be ``true``.
-7. ``live_pre_submit_checklist`` must return ``READY``.
+7. Automated risk gate must be implemented (currently BLOCKED — PR R4e
+   removed the manual checklist chain; a real automated risk gate is
+   required before this path is unblocked).
 8. At least one matching dry-run intent must exist with:
    ``live_sizing_mode=notional``, ``sizing_status=PASS``,
    ``dry_run_only=true``, ``submit_allowed=false``.
@@ -126,19 +128,26 @@ def _validate_selected_intent(intent: dict[str, Any]) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Mockable orchestration functions
+# Automated risk gate placeholder
 # ---------------------------------------------------------------------------
 
-def _run_checklist(config_path: str, symbol: str, checklist_output_dir: Path) -> str:
-    """Run live_pre_submit_checklist.  Returns 'READY' or 'NOT READY'.
+_AUTOMATED_RISK_GATE_IMPLEMENTED = False
 
-    Separated into its own function so tests can mock it without network calls.
+
+def _check_automated_risk_gate() -> list[str]:
+    """Return blocking errors until an automated risk gate is implemented.
+
+    PR R4e removed the manual checklist chain (live_pre_submit_checklist /
+    live_dry_run_review).  Live submit is fail-closed until an automated
+    state-machine risk gate replaces it.
     """
-    from src.tools.live_pre_submit_checklist import run_checklist, write_checklist_report
-
-    result = run_checklist(config_path, symbol, checklist_output_dir)
-    write_checklist_report(checklist_output_dir, result)
-    return result["final_result"]
+    if not _AUTOMATED_RISK_GATE_IMPLEMENTED:
+        return [
+            "automated risk gate not implemented — "
+            "manual checklist chain removed in PR R4e; "
+            "live submit is blocked until an automated risk gate is in place"
+        ]
+    return []
 
 
 # ---------------------------------------------------------------------------
@@ -162,7 +171,7 @@ def _load_and_select_intent(
     if not intents_csv.exists():
         return None, [
             f"no intent artifacts found at {intents_csv} — "
-            "run live_dry_run_intents (or live_pre_submit_checklist) first"
+            "run live_dry_run_intents first"
         ]
 
     try:
@@ -251,7 +260,7 @@ def main(argv: list[str] | None = None) -> None:
                         help="Directory for plan artifact and checklist sub-artifacts")
     parser.add_argument("--intents-dir", default=None,
                         help="Path to live_dry_run_intents artifacts "
-                             "(default: {output-dir}/live_pre_submit_checklist/live_dry_run_intents)")
+                             "(default: {output-dir}/live_dry_run_intents)")
     args = parser.parse_args(argv)
 
     output_dir     = Path(args.output_dir)
@@ -287,17 +296,16 @@ def main(argv: list[str] | None = None) -> None:
     if safety_errors:
         _fail_many(safety_errors)
 
-    # 4. Pre-submit checklist
-    checklist_dir    = output_dir / "live_pre_submit_checklist"
-    checklist_result = _run_checklist(args.config, symbol, checklist_dir)
-    if checklist_result != "READY":
-        _fail(f"live_pre_submit_checklist: {checklist_result} — all checks must pass before submit")
+    # 4. Automated risk gate
+    gate_errors = _check_automated_risk_gate()
+    if gate_errors:
+        _fail_many(gate_errors)
 
     # 5. Load and select intent
     if args.intents_dir:
         intents_dir = Path(args.intents_dir)
     else:
-        intents_dir = checklist_dir / "live_dry_run_intents"
+        intents_dir = output_dir / "live_dry_run_intents"
 
     intent, intent_errors = _load_and_select_intent(intents_dir, symbol)
     if intent_errors:

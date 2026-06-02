@@ -114,7 +114,6 @@ def _run_main(
     symbol: str = "SPY",
     cfg_mock: MagicMock | None = None,
     cfg_result: dict | None = None,
-    checklist_result: str = "READY",
     intents_dir: Path | None = None,
     intent_rows: list[dict] | None = None,
 ) -> int | None:
@@ -135,10 +134,7 @@ def _run_main(
         "--intents-dir", str(intents_dir),
     ]
 
-    with (
-        patch("src.tools.live_submit._run_checklist", return_value=checklist_result),
-        patch("src.tools.paper_status.check_config", return_value=(cfg_result, cfg_mock)),
-    ):
+    with patch("src.tools.paper_status.check_config", return_value=(cfg_result, cfg_mock)):
         try:
             main(argv)
             return None
@@ -353,26 +349,47 @@ class TestWritePlan:
 
 
 # ---------------------------------------------------------------------------
+# _check_automated_risk_gate
+# ---------------------------------------------------------------------------
+
+class TestCheckAutomatedRiskGate:
+    def test_gate_constant_is_false(self):
+        from src.tools.live_submit import _AUTOMATED_RISK_GATE_IMPLEMENTED
+        assert _AUTOMATED_RISK_GATE_IMPLEMENTED is False
+
+    def test_gate_returns_blocking_error(self):
+        from src.tools.live_submit import _check_automated_risk_gate
+        errors = _check_automated_risk_gate()
+        assert errors
+        assert "automated risk gate not implemented" in errors[0]
+
+    def test_gate_error_mentions_r4e(self):
+        from src.tools.live_submit import _check_automated_risk_gate
+        errors = _check_automated_risk_gate()
+        assert "R4e" in errors[0]
+
+    def test_gate_error_mentions_blocked(self):
+        from src.tools.live_submit import _check_automated_risk_gate
+        errors = _check_automated_risk_gate()
+        assert "blocked" in errors[0].lower()
+
+
+# ---------------------------------------------------------------------------
 # main() integration tests
+#
+# PR R4e removed the manual checklist chain.  live_submit is now
+# fail-closed at the automated risk gate (step 4) until a real automated
+# gate is implemented.  main() therefore always exits 1.
 # ---------------------------------------------------------------------------
 
 class TestMain:
-    def test_happy_path_exits_0(self, tmp_path):
-        code = _run_main(tmp_path)
-        assert code in (0, None)
+    def test_automated_risk_gate_blocks_submit(self, tmp_path):
+        """Gate constant is False → main() always exits 1 regardless of other flags."""
+        assert _run_main(tmp_path) == 1
 
-    def test_happy_path_writes_plan(self, tmp_path):
+    def test_no_plan_written_when_gate_blocks(self, tmp_path):
         _run_main(tmp_path)
-        plan_path = tmp_path / "out" / "live_submit_dry_run_plan.json"
-        assert plan_path.exists()
-
-    def test_plan_has_correct_fields(self, tmp_path):
-        _run_main(tmp_path)
-        data = json.loads((tmp_path / "out" / "live_submit_dry_run_plan.json").read_text())
-        assert data["submit_order_called"] is False
-        assert data["submit_allowed"] is False
-        assert data["live_submit_dry_run"] is True
-        assert data["final_action"] == "DRY_RUN_ONLY_NO_ORDER_SUBMITTED"
+        assert not (tmp_path / "out" / "live_submit_dry_run_plan.json").exists()
 
     def test_submit_order_never_called(self, tmp_path):
         broker = MagicMock()
@@ -384,20 +401,11 @@ class TestMain:
         _run_main(tmp_path)
         broker.cancel_order.assert_not_called()
 
-    def test_no_live_ledger_written(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        _run_main(tmp_path)
-        ledger_files = list(tmp_path.glob("**/*ledger*"))
-        assert ledger_files == []
-
     def test_missing_confirmation_exits_1(self, tmp_path):
         assert _run_main(tmp_path, token="") == 1
 
     def test_wrong_confirmation_exits_1(self, tmp_path):
         assert _run_main(tmp_path, token="WRONG-TOKEN") == 1
-
-    def test_checklist_not_ready_exits_1(self, tmp_path):
-        assert _run_main(tmp_path, checklist_result="NOT READY") == 1
 
     def test_live_trading_enabled_true_exits_1(self, tmp_path):
         assert _run_main(tmp_path, cfg_mock=_mock_cfg(live_trading_enabled=True)) == 1
@@ -413,20 +421,3 @@ class TestMain:
 
     def test_config_fail_exits_1(self, tmp_path):
         assert _run_main(tmp_path, cfg_result=_CFG_FAIL, cfg_mock=None) == 1
-
-    def test_submit_allowed_true_intent_exits_1(self, tmp_path):
-        bad_rows = [_valid_intent_row(submit_allowed="True")]
-        assert _run_main(tmp_path, intent_rows=bad_rows) == 1
-
-    def test_dry_run_only_false_intent_exits_1(self, tmp_path):
-        bad_rows = [_valid_intent_row(dry_run_only="False")]
-        assert _run_main(tmp_path, intent_rows=bad_rows) == 1
-
-    def test_sizing_status_fail_intent_exits_1(self, tmp_path):
-        bad_rows = [_valid_intent_row(sizing_status="FAIL")]
-        assert _run_main(tmp_path, intent_rows=bad_rows) == 1
-
-    def test_no_matching_intent_exits_1(self, tmp_path):
-        # quantity mode — not selected
-        bad_rows = [_valid_intent_row(live_sizing_mode="quantity")]
-        assert _run_main(tmp_path, intent_rows=bad_rows) == 1

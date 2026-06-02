@@ -550,3 +550,36 @@ into `src/reporting/replay_reconciliation.py` and archived the CLI tool.
 - Reconciliation correctness tests remain in `test_replay_order_reconciliation.py`
 - No runtime trading behavior changed
 - No broker calls, no credentials read, no orders.
+
+---
+
+## 13. PR R4e Implementation Record
+
+PR R4e removed `live_submit`'s manual checklist chain dependency and archived both tools.
+
+### Change
+
+| File | Action |
+|------|--------|
+| `src/tools/live_submit.py` | `_run_checklist` replaced by `_check_automated_risk_gate()`; `_AUTOMATED_RISK_GATE_IMPLEMENTED = False` constant added; main() is fail-closed |
+| `src/tools/live_pre_submit_checklist.py` | Archived to `scripts/archive/manual_live_readiness/` |
+| `src/tools/live_dry_run_review.py` | Archived to `scripts/archive/manual_live_readiness/` |
+| `tests/test_live_pre_submit_checklist.py` | Deleted (manual CLI checklist tests only) |
+| `tests/test_live_dry_run_review.py` | Deleted (manual CLI review tests only) |
+| `tests/test_live_submit.py` | `_run_checklist` mock removed; happy-path tests removed; `TestCheckAutomatedRiskGate` added |
+| `tests/test_tools_inventory.py` | `ACTIVE_RUNTIME_CANDIDATE_TOOLS` 24→22; `ACTIVE_TOOLS` 28→26; `ARCHIVED_TOOLS` 12→14 |
+| 5 docs | Updated with R4e record |
+
+### Final post-R4e counts
+
+| Classification | Count |
+|----------------|-------|
+| `ACTIVE_TOOLS` (in `src/tools/`) | 26 |
+| `ARCHIVED_TOOLS` (in `scripts/archive/manual_live_readiness/`) | 14 |
+| `DELETED_TOOLS_R4` | 3 |
+
+### Safety invariants confirmed
+
+- `live_submit` remains fail-closed: `_AUTOMATED_RISK_GATE_IMPLEMENTED = False` blocks all live submit paths
+- No runtime trading behavior changed
+- No broker calls, no credentials read, no orders.

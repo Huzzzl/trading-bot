@@ -395,6 +395,14 @@ no operator-history value).
 - No broker calls, no credentials read, no orders, no trading behavior change
 - Full suite: 4 513 passed
 
+### PR R4e — Decouple live_submit from manual checklist chain
+
+`live_submit._run_checklist` replaced by `_check_automated_risk_gate()`.
+`_AUTOMATED_RISK_GATE_IMPLEMENTED = False` keeps live submit fail-closed.
+`live_pre_submit_checklist.py` and `live_dry_run_review.py` archived.
+`test_live_pre_submit_checklist.py` and `test_live_dry_run_review.py` deleted.
+`ACTIVE_TOOLS`: 28 → 26. `ARCHIVED_TOOLS`: 12 → 14.
+
 ### PR R4d — Extract replay_order_reconciliation library
 
 `src/reporting/replay_reconciliation.py` created. `src/tools/replay_order_reconciliation.py`
