@@ -529,7 +529,26 @@ No live trading behavior changed. No live gates unfrozen. No direct broker/API/c
 access inside state machine. Injected-runner tests are fully offline.
 Full suite: 4 224 passed.
 
-**Next PR: A2-2 — Automated risk gate skeleton.**
+**PR A2-2 — Automated risk gate skeleton — implemented**
+`src/runtime/risk_gate.py` created. `RiskDecision` (APPROVED/BLOCKED) enum,
+`RiskCheckResult` and `RiskGateResult` frozen dataclasses defined.
+`AutomatedRiskGate(*, enabled=False, rules=None)` class: default fail-closed —
+`enabled=False` → `evaluate()` returns `BLOCKED("automated risk gate not enabled")`,
+`__call__()` returns `False`. When `enabled=True`, evaluates deterministic local rules
+against a caller-supplied context dict: `max_order_quantity`, `allowed_symbols`,
+`allowed_sides`. No broker, credential, network, or env access — offline-only.
+`live_trading_allowed` is always `False` in A2-2. `broker_calls_made`,
+`credentials_read`, `network_calls_made` always `False`. `AutomatedRiskGate` is
+callable and can be injected directly into `AutomatedRuntimeStateMachine` as
+`risk_gate`. `tests/test_runtime_risk_gate.py` added: 62 tests across 12 classes
+covering enum/dataclass structure, default fail-closed, safety flags, live trading
+always blocked, enabled approval, all rule types, multiple violations, context/rule
+immutability, determinism, callable interface + state machine integration, and
+no-forbidden-import scan.
+No live trading behavior changed. No live gates unfrozen. No broker/API/credential/env
+access. Fully offline. Full suite: 4 286 passed.
+
+**Next PR: A2-3 — Order lifecycle manager skeleton.**
 
 ### Phase C — Paper trading execution
 

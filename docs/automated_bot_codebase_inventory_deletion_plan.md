@@ -311,7 +311,7 @@ No tests modified. Full suite: 5 701 passed (unchanged from R2).
 | PR | Scope | Priority | Status |
 |----|-------|---------|--------|
 | **A2-1** | Automated runtime state machine skeleton (`src/runtime/state_machine.py`) | High | **Implemented** |
-| **A2-2** | Automated risk gate skeleton (`src/runtime/risk_gate.py`) | High | Pending |
+| **A2-2** | Automated risk gate skeleton (`src/runtime/risk_gate.py`) | High | **Implemented** |
 | **A2-3** | Order lifecycle manager skeleton (`src/runtime/order_lifecycle.py`) | Medium | Pending |
 
 **A2-1 — Automated runtime state machine skeleton — implemented**
@@ -319,6 +319,13 @@ No tests modified. Full suite: 5 701 passed (unchanged from R2).
 `paper_close_runner`. Default fail-closed: no `risk_gate` → BLOCKED.
 No broker/credential/Alpaca access inside state machine.
 57 new tests in `tests/test_runtime_state_machine.py`. Full suite: 4 224 passed.
+
+**A2-2 — Automated risk gate skeleton — implemented**
+`src/runtime/risk_gate.py` created. `AutomatedRiskGate(enabled=False, rules=None)`.
+Default fail-closed: `enabled=False` → BLOCKED. Local rules: `max_order_quantity`,
+`allowed_symbols`, `allowed_sides`. Callable — injectable into state machine.
+`live_trading_allowed` always False. All safety flags always False (offline-only).
+62 new tests in `tests/test_runtime_risk_gate.py`. Full suite: 4 286 passed.
 
 ### Deferred
 
