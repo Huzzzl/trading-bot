@@ -395,6 +395,13 @@ no operator-history value).
 - No broker calls, no credentials read, no orders, no trading behavior change
 - Full suite: 4 513 passed
 
+### PR R4d — Extract replay_order_reconciliation library
+
+`src/reporting/replay_reconciliation.py` created. `src/tools/replay_order_reconciliation.py`
+archived. All callers (`paper_status.py`, `test_paper_ledger.py`, `test_paper_status.py`)
+updated to import from the library. `TestCLIMain` (5 tests) removed.
+`ACTIVE_TOOLS`: 29 → 28. `ARCHIVED_TOOLS`: 11 → 12.
+
 ### PR R4c — Remove paper_smoke_check active dependency
 
 `tests/test_paper_ledger.py`: `TestSmokeCheckDoesNotAppendLedger` rewritten to use

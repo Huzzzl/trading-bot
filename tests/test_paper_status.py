@@ -313,7 +313,7 @@ class TestCheckReplay:
         from src.tools.paper_status import check_replay
         _write_intents_csv(tmp_path / "order_intents.csv")
         _write_results_csv(tmp_path / "order_results.csv")
-        with patch("src.tools.replay_order_reconciliation.replay", side_effect=RuntimeError("boom")):
+        with patch("src.reporting.replay_reconciliation.replay", side_effect=RuntimeError("boom")):
             result = check_replay(tmp_path)
         assert result["status"] == "FAIL"
 

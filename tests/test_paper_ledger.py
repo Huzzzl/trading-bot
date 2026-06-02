@@ -772,7 +772,7 @@ class TestPaperPreviewDoesNotAppendLedger:
 
 class TestReplayDoesNotAppendLedger:
     def test_replay_does_not_call_append_ledger_row(self, tmp_path):
-        from src.tools.replay_order_reconciliation import replay
+        from src.reporting.replay_reconciliation import replay
 
         # Write minimal valid CSVs
         intents_path = tmp_path / "order_intents.csv"

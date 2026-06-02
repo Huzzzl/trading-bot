@@ -1,25 +1,22 @@
 """
-tools/replay_order_reconciliation.py
--------------------------------------
+reporting/replay_reconciliation.py
+------------------------------------
 Offline reconciliation replay for paper execution artifacts.
 
-Usage::
-
-    python -m src.tools.replay_order_reconciliation --output-dir output/paper_submit_BT000035
-
-Reads ``order_intents.csv`` and ``order_results.csv`` from the given directory,
+Reads ``order_intents.csv`` and ``order_results.csv`` from a given directory,
 normalises any Alpaca SDK enum strings in the result side/status columns
-(e.g. ``"OrderSide.BUY"`` → ``"buy"``, ``"OrderStatus.PENDING_NEW"`` → ``"accepted"``),
-recomputes reconciliation, and prints the result as JSON.
+(e.g. ``"OrderSide.BUY"`` → ``"buy"``,
+``"OrderStatus.PENDING_NEW"`` → ``"accepted"``), recomputes reconciliation,
+and returns the result as a dict.
 
 No Alpaca credentials, network calls, or order submissions are made.
+This module is the runtime/research library form of the old
+``src.tools.replay_order_reconciliation`` CLI tool (archived in PR R4d).
 """
 
 from __future__ import annotations
 
-import argparse
 import json
-import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -29,8 +26,7 @@ import pandas as pd
 from src.reporting.reconciliation import build_reconciliation
 
 # ---------------------------------------------------------------------------
-# Normalisation helpers — inlined to keep this tool fully offline (no broker
-# imports, no credentials machinery).
+# Normalisation helpers
 # ---------------------------------------------------------------------------
 
 _STATUS_MAP: dict[str, str] = {
@@ -74,9 +70,7 @@ def _normalize_status(raw: str) -> str:
 
 def _load_intents(path: Path) -> list[SimpleNamespace]:
     if not path.exists():
-        raise FileNotFoundError(
-            f"order_intents.csv not found: {path}"
-        )
+        raise FileNotFoundError(f"order_intents.csv not found: {path}")
     df = pd.read_csv(path)
     out = []
     for _, row in df.iterrows():
@@ -93,9 +87,7 @@ def _load_intents(path: Path) -> list[SimpleNamespace]:
 
 def _load_results(path: Path) -> list[SimpleNamespace]:
     if not path.exists():
-        raise FileNotFoundError(
-            f"order_results.csv not found: {path}"
-        )
+        raise FileNotFoundError(f"order_results.csv not found: {path}")
     df = pd.read_csv(path)
     out = []
     for _, row in df.iterrows():
@@ -112,7 +104,7 @@ def _load_results(path: Path) -> list[SimpleNamespace]:
 
 
 # ---------------------------------------------------------------------------
-# Public replay API
+# Public API
 # ---------------------------------------------------------------------------
 
 def replay(output_dir: Path, write: bool = False) -> dict[str, Any]:
@@ -121,8 +113,7 @@ def replay(output_dir: Path, write: bool = False) -> dict[str, Any]:
     Parameters
     ----------
     output_dir:
-        Directory that contains ``order_intents.csv`` and
-        ``order_results.csv``.
+        Directory containing ``order_intents.csv`` and ``order_results.csv``.
     write:
         When ``True``, write the result to
         ``order_reconciliation_replay.json`` inside *output_dir*.
@@ -137,47 +128,11 @@ def replay(output_dir: Path, write: bool = False) -> dict[str, Any]:
     FileNotFoundError
         If either CSV is absent.
     """
+    output_dir = Path(output_dir)
     intents = _load_intents(output_dir / "order_intents.csv")
     results = _load_results(output_dir / "order_results.csv")
     recon   = build_reconciliation(intents, results)
     if write:
         out_path = output_dir / "order_reconciliation_replay.json"
         out_path.write_text(json.dumps(recon, indent=2), encoding="utf-8")
-        print(f"Wrote: {out_path}")
     return recon
-
-
-# ---------------------------------------------------------------------------
-# CLI entry-point
-# ---------------------------------------------------------------------------
-
-def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(
-        prog="python -m src.tools.replay_order_reconciliation",
-        description=(
-            "Offline replay of paper execution reconciliation. "
-            "No orders are submitted and no Alpaca credentials are required."
-        ),
-    )
-    parser.add_argument(
-        "--output-dir",
-        required=True,
-        help="Directory containing order_intents.csv and order_results.csv",
-    )
-    parser.add_argument(
-        "--write",
-        action="store_true",
-        help="Write order_reconciliation_replay.json to --output-dir",
-    )
-    args = parser.parse_args(argv)
-    output_dir = Path(args.output_dir)
-    try:
-        recon = replay(output_dir, write=args.write)
-    except FileNotFoundError as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        sys.exit(1)
-    print(json.dumps(recon, indent=2))
-
-
-if __name__ == "__main__":
-    main()

@@ -5711,3 +5711,45 @@ PR R4c broke the `test_paper_ledger.py` → `src.tools.paper_smoke_check` import
 > **This milestone does not approve any individual trade.**
 > **No Alpaca endpoint was contacted. No credentials were read.**
 > **Nothing in this repository is financial advice.**
+
+---
+
+## PR R4d Milestone — Extract replay_order_reconciliation Library
+
+**Date:** 2026-06-02
+**Branch:** `claude/hopeful-cray-56Jfr`
+**Full suite:** 4 428 passed (down from 4 440 — 5 CLI tests removed from TestCLIMain; 1 parametrized inventory slot removed; 1 patch target updated in test_paper_status.py)
+
+### Summary
+
+PR R4d extracted reusable reconciliation logic from `src/tools/replay_order_reconciliation.py`
+into `src/reporting/replay_reconciliation.py`, updated all callers, and archived the CLI tool.
+`replay_order_reconciliation` is the second of the 11 legacy tools from the PR R4b plan to be eliminated.
+
+### Changed files
+
+| File | Action |
+|------|--------|
+| `src/reporting/replay_reconciliation.py` | Created — library with `_normalize_side`, `_normalize_status`, `replay()` |
+| `src/tools/replay_order_reconciliation.py` | Archived to `scripts/archive/manual_live_readiness/` |
+| `src/tools/paper_status.py` | `check_replay` lazy import updated to `src.reporting.replay_reconciliation` |
+| `tests/test_paper_ledger.py` | Section 7 import updated to `src.reporting.replay_reconciliation` |
+| `tests/test_paper_status.py` | Stale patch target updated to `src.reporting.replay_reconciliation.replay` |
+| `tests/test_replay_order_reconciliation.py` | Imports updated; `TestCLIMain` (5 tests) removed |
+| `tests/test_tools_inventory.py` | `ACTIVE_RUNTIME_CANDIDATE_TOOLS` 25→24; `ACTIVE_TOOLS` 29→28; `ARCHIVED_TOOLS` 11→12 |
+| 5 docs | Updated with R4d record |
+
+### Safety invariants confirmed
+
+- Reconciliation correctness tests remain in `test_replay_order_reconciliation.py`
+- No `src/backtest/`, `src/strategy/`, `src/risk/`, `src/execution/` runtime files changed
+- No `src/main.py` changed
+- No config, output, data/cache changes
+- No broker calls, no credentials read, no orders, no trading behavior change
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> **Nothing in this repository is financial advice.**

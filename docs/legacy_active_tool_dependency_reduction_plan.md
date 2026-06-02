@@ -231,18 +231,23 @@ primitives directly rather than through the CLI wrapper.
 `test_paper_ledger.py`
 
 **Change:**
-- Extract reconciliation logic into `src/reporting/` or `src/execution/`
-  (exact location TBD in PR R4d design).
-- Update `paper_status` and `test_paper_ledger.py` to import from the new
-  runtime helper location.
-- Archive or delete `src/tools/replay_order_reconciliation.py` if it becomes
-  a thin CLI wrapper with no remaining active consumers.
+- Extracted reconciliation logic into `src/reporting/replay_reconciliation.py`.
+- Updated `paper_status` (`check_replay`) and `test_paper_ledger.py` (Section 7)
+  to import `replay` from `src.reporting.replay_reconciliation`.
+- Updated `test_paper_status.py`: stale patch target
+  `src.tools.replay_order_reconciliation.replay` →
+  `src.reporting.replay_reconciliation.replay`.
+- Archived `src/tools/replay_order_reconciliation.py` to
+  `scripts/archive/manual_live_readiness/replay_order_reconciliation.py`.
+- Removed `TestCLIMain` (5 tests) from `test_replay_order_reconciliation.py`;
+  all library behaviour tests kept.
 
-**Safety invariant:** Reconciliation correctness tests must remain. Only the
-`src/tools/` CLI entry-point is removed; the logic lives on in its new module.
+**Safety invariant:** Reconciliation correctness tests remain. Only the
+`src/tools/` CLI entry-point is archived; the logic lives on in
+`src/reporting/replay_reconciliation.py`.
 
-**Expected outcome:** `replay_order_reconciliation` removed from `ACTIVE_TOOLS`.
-`ACTIVE_TOOLS`: 29 → 28 (after R4c).
+**Actual outcome:** `replay_order_reconciliation` removed from `ACTIVE_TOOLS`.
+`ACTIVE_TOOLS`: 29 → 28. `ARCHIVED_TOOLS`: 11 → 12. Full suite: 4 428 passed.
 
 ---
 
