@@ -143,6 +143,10 @@ class TestMainImport:
         # not bind it at top scope.
         assert not hasattr(_main_mod, "AlpacaBrokerAdapter")
 
+    def test_run_paper_execution_is_not_a_top_level_name(self) -> None:
+        # run_paper_execution is in paper_runner, not exposed at main module level
+        assert not hasattr(_main_mod, "run_paper_execution")
+
 
 # ---------------------------------------------------------------------------
 # TestParseArgs
@@ -324,6 +328,36 @@ class TestMainPaperGate:
 
         with pytest.raises(NotImplementedError):
             _main_mod.main()
+
+    def test_paper_preview_delegates_to_run_paper_execution(self, monkeypatch, tmp_path) -> None:
+        """main() with paper mode + preview_only delegates to run_paper_execution."""
+        import copy
+        cfg = _default_cfg()
+        cfg = copy.deepcopy(cfg)
+        cfg.execution.mode = "paper"
+        cfg.execution.paper_trading_enabled = True
+        cfg.execution.paper_preview_only = True
+
+        calls = []
+        def _fake_run(c, *, output_dir=None, **kw):
+            calls.append(True)
+            from src.execution.paper_runner import PaperRunResult
+            return PaperRunResult(
+                result="PREVIEW_COMPLETE", blocker=None, mode="preview",
+                preview_only=True, orders_submitted=0, intents_generated=0,
+                ledger_rows_written=0, output_dir=str(output_dir) if output_dir else None,
+                broker_calls_made=True, credentials_read=False,
+                order_action_requested=False, network_calls_made=False,
+            )
+
+        import src.execution.paper_runner as _runner_mod
+        monkeypatch.setattr(sys, "argv", ["src.main", "--output-dir", str(tmp_path)])
+        monkeypatch.setattr(_main_mod, "load_config", lambda _: cfg)
+        monkeypatch.setattr(_main_mod, "configure_logging", lambda **kw: None)
+        monkeypatch.setattr(_runner_mod, "run_paper_execution", _fake_run)
+
+        _main_mod.main()
+        assert len(calls) == 1
 
 
 # ---------------------------------------------------------------------------
