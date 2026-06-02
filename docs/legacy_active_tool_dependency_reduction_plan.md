@@ -306,6 +306,8 @@ Full suite: 4 236 passed.
 
 ### PR R4g — Decouple `live_submit_enablement_gate` from v2 approval bundle
 
+**Status: implemented.**
+
 **Scope:** `src/tools/live_submit_enablement_gate.py`,
 `src/tools/live_v2_approvals_review.py`,
 `src/tools/live_v2_executor_readiness_review.py`,
@@ -313,18 +315,39 @@ Full suite: 4 236 passed.
 `src/tools/live_v2_readiness_bundle.py`
 
 **Change:**
-- Remove `live_submit_enablement_gate`'s imports of the v2 review tools.
-- Replace with explicit fail-closed approval state placeholders
-  (e.g., `approval_result = BLOCKED — automated approval not yet implemented`).
-- Archive or delete all four v2 tools if no active references remain.
+- Removed module-level imports of `live_v2_approvals_review` (`_read_json`,
+  `validate_approvals`) and `live_v2_executor_readiness_review`
+  (`parse_blocked_report`, `validate_readiness`) from `live_submit_enablement_gate.py`.
+- Added `_AUTOMATED_SUBMIT_ENABLEMENT_GATE_IMPLEMENTED = False` constant.
+- Inlined `_read_json` as a private module function (bundle and artifact file
+  reading preserved; `TestBundleFailures` and `TestSafetyFlagChecks` remain valid).
+- Replaced `validate_approvals` call with fail-closed stub: adds
+  `"[approvals] automated submit enablement gate not implemented — v2 approval/review
+  bundle removed in PR R4g"` violation; `approvals_valid` stays `False`.
+- Replaced `parse_blocked_report` with direct `_read_json`; replaced
+  `validate_readiness` call with fail-closed stub: adds `"[executor] automated
+  submit enablement gate not implemented — v2 executor readiness validation
+  removed in PR R4g"` violation; `executor_ready` stays `False`.
+- Archived all four v2 tools to `scripts/archive/manual_live_readiness/`
+  (archive headers prepended; not importable as `src.tools.*`).
+- Deleted `tests/test_live_v2_approvals_review.py`,
+  `tests/test_live_v2_executor_readiness_review.py`,
+  `tests/test_live_v2_final_readiness_review.py`,
+  `tests/test_live_v2_readiness_bundle.py`.
+- Updated `tests/test_live_submit_enablement_gate.py`: removed `TestGoHappyPath`
+  (10 tests) and `TestDecisionHardening` (11 tests, used monkeypatch on archived
+  module names); removed 3 executor violation-string tests; added
+  `TestAutomatedSubmitEnablementGate` class (7 tests).
 
-**Safety invariant:** `live_submit_enablement_gate` must remain fail-closed.
-Human approval bundle removal must be replaced by an explicit block, not a
-silent pass.
+**Safety invariant:** `live_submit_enablement_gate` is fail-closed.
+`_AUTOMATED_SUBMIT_ENABLEMENT_GATE_IMPLEMENTED` is `False`; `run_gate()` always
+produces `NO_GO` with explicit gate-not-implemented violations until a real
+automated gate is implemented.
 
-**Expected outcome:** `live_v2_approvals_review`, `live_v2_executor_readiness_review`,
+**Actual outcome:** `live_v2_approvals_review`, `live_v2_executor_readiness_review`,
 `live_v2_final_readiness_review`, `live_v2_readiness_bundle` removed from
-`ACTIVE_TOOLS`. `ACTIVE_TOOLS`: 24 → 20 (after R4c+R4d+R4e+R4f).
+`ACTIVE_TOOLS`. `ACTIVE_TOOLS`: 24 → 20. `ARCHIVED_TOOLS`: 16 → 20.
+Full suite: 4 021 passed.
 
 ---
 
@@ -392,7 +415,7 @@ import chains. Tools in `src/tools/` at R5 entry should all be either:
 | R4d | 28 | `replay_order_reconciliation` |
 | R4e | 26 | `live_pre_submit_checklist`, `live_dry_run_review` |
 | R4f | 24 | `live_shadow_review`, `live_shadow_screen_review` |
-| R4g | 20 | `live_v2_approvals_review`, `live_v2_executor_readiness_review`, `live_v2_final_readiness_review`, `live_v2_readiness_bundle` |
+| R4g ✓ | 20 (actual) | `live_v2_approvals_review`, `live_v2_executor_readiness_review`, `live_v2_final_readiness_review`, `live_v2_readiness_bundle` |
 
 All projections are estimates. Exact counts depend on whether additional active
 references are discovered during each reduction PR's dependency scan.

@@ -1,3 +1,5 @@
+# ARCHIVED in PR R4g. Historical manual v2 readiness bundle tool. Not part of active automated runtime.
+# Moved from src/tools/live_v2_readiness_bundle.py. Not importable as src.tools.live_v2_readiness_bundle.
 """
 tools/live_v2_readiness_bundle.py
 ------------------------------------
