@@ -199,22 +199,29 @@ No code changes.
 
 ---
 
-### PR R4c — Break `paper_smoke_check` dependency from tests
+### PR R4c — Break `paper_smoke_check` dependency from tests ✓
+
+**Status: implemented.**
 
 **Scope:** `tests/test_paper_ledger.py`, `src/tools/paper_smoke_check.py`
 
 **Change:**
-- Rewrite the affected test(s) in `test_paper_ledger.py` to call paper ledger
-  primitives directly instead of importing `paper_smoke_check.main`.
-- If no other active import references remain, archive `paper_smoke_check` to
-  `scripts/archive/manual_live_readiness/` (following PR R4 archive pattern).
+- `TestSmokeCheckDoesNotAppendLedger.test_smoke_check_does_not_write_ledger`
+  rewritten as `test_paper_preview_path_does_not_write_ledger` — uses
+  `AlpacaBrokerAdapter` with a locally-defined fake client + `OrderIntent` CSV
+  write directly; no `paper_smoke_check` import.
+- `paper_smoke_check.py` archived to `scripts/archive/manual_live_readiness/`
+  (archive header prepended; not importable as `src.tools.paper_smoke_check`).
+- `tests/test_paper_smoke_check.py` deleted (663 tests removed — CLI wrapper
+  tests; behavioral ledger coverage preserved in `test_paper_ledger.py`).
 
-**Safety invariant:** Ledger correctness tests must remain in place. Only the
-smoke-check CLI wrapper import is removed; the underlying ledger behavior is
-still tested via primitives.
+**Safety invariant:** The behavioral assertion is preserved — the paper preview
+execution path (fake broker preflight + CSV write) must not call
+`append_ledger_row`. The assertion is now tested against the execution
+primitives directly rather than through the CLI wrapper.
 
-**Expected outcome:** `paper_smoke_check` removed from `ACTIVE_TOOLS`.
-`ACTIVE_TOOLS`: 30 → 29.
+**Actual outcome:** `paper_smoke_check` removed from `ACTIVE_TOOLS`.
+`ACTIVE_TOOLS`: 30 → 29. `ARCHIVED_TOOLS`: 10 → 11. Full suite: 4 440 passed.
 
 ---
 

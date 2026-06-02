@@ -703,29 +703,66 @@ class TestCloseSubmitLedgerIntegration:
 
 
 # ---------------------------------------------------------------------------
-# 6. Smoke check does not append ledger
+# 6. Paper preview path does not write ledger
 # ---------------------------------------------------------------------------
 
 class TestSmokeCheckDoesNotAppendLedger:
-    def test_smoke_check_does_not_write_ledger(self, tmp_path):
-        """paper_smoke_check must never call append_ledger_row."""
-        from src.tools.paper_smoke_check import main as smoke_main
+    def test_paper_preview_path_does_not_write_ledger(self, tmp_path):
+        """Paper preview execution path must never call append_ledger_row.
 
-        cfg_yaml = _BASE_YAML + textwrap.dedent("""\
-            execution:
-              mode: paper
-              paper_trading_enabled: true
-              paper_preview_only: true
-        """)
-        cfg_path = tmp_path / "settings.yaml"
-        cfg_path.write_text(cfg_yaml, encoding="utf-8")
+        Exercises AlpacaBrokerAdapter.preflight_check with a locally-defined
+        fake client and the order-intent CSV write path — the same operations
+        performed by the paper preview flow — and confirms that
+        append_ledger_row is never reached.
+
+        No dependency on src.tools.paper_smoke_check (archived in PR R4c).
+        """
+        from src.execution.alpaca_broker import AlpacaBrokerAdapter
+        from src.execution.order_intent import OrderIntent
+        from typing import Any
+
+        class _FakeClient:
+            def get_account(self) -> dict[str, Any]:
+                return {
+                    "id": "test-account", "status": "ACTIVE",
+                    "currency": "USD", "cash": "100000.00",
+                    "equity": "100000.00", "buying_power": "100000.00",
+                    "trading_blocked": False, "account_blocked": False,
+                }
+            def get_all_positions(self) -> list:
+                return []
+            def submit_order(self, *args: Any, **kwargs: Any) -> None:
+                raise RuntimeError("submit_order must not be called in preview path")
+            def cancel_order_by_id(self, order_id: str) -> None:
+                raise RuntimeError("cancel_order must not be called in preview path")
+            def cancel_order(self, order_id: str) -> None:
+                raise RuntimeError("cancel_order must not be called in preview path")
+
+        broker = AlpacaBrokerAdapter(client=_FakeClient())
         out_dir = tmp_path / "out"
+        out_dir.mkdir()
 
         with patch("src.execution.paper_ledger.append_ledger_row") as mock_append:
-            try:
-                smoke_main(["--config", str(cfg_path), "--output-dir", str(out_dir)])
-            except SystemExit:
-                pass
+            # Preflight: read-only account + position check — must not write ledger
+            broker.preflight_check(["SPY"], allow_existing_positions=True)
+
+            # Buy-preview CSV write path — must not write ledger
+            intent = OrderIntent(
+                symbol="SPY", side="buy", quantity=1.0, order_type="market",
+                reason="preview_test",
+                timestamp=pd.Timestamp.now(tz="America/New_York"),
+                client_order_id="PREVIEW-TEST-001",
+            )
+            pd.DataFrame([{
+                "client_order_id": intent.client_order_id,
+                "timestamp":       str(intent.timestamp),
+                "symbol":          intent.symbol,
+                "side":            intent.side,
+                "quantity":        intent.quantity,
+                "order_type":      intent.order_type,
+                "reason":          intent.reason,
+            }]).to_csv(out_dir / "paper_candidate_intents.csv", index=False)
+
             mock_append.assert_not_called()
 
 

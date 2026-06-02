@@ -1,3 +1,5 @@
+# ARCHIVED in PR R4c. Historical manual/operator tool. Not part of active automated runtime.
+# Moved from src/tools/paper_smoke_check.py. Not importable as src.tools.paper_smoke_check.
 """
 tools/paper_smoke_check.py
 --------------------------

@@ -395,6 +395,13 @@ no operator-history value).
 - No broker calls, no credentials read, no orders, no trading behavior change
 - Full suite: 4 513 passed
 
+### PR R4c — Remove paper_smoke_check active dependency
+
+`tests/test_paper_ledger.py`: `TestSmokeCheckDoesNotAppendLedger` rewritten to use
+`AlpacaBrokerAdapter` with locally-defined fake client and `OrderIntent` CSV write
+directly — no `paper_smoke_check` import. `paper_smoke_check.py` archived.
+`tests/test_paper_smoke_check.py` deleted. `ACTIVE_TOOLS`: 30 → 29.
+
 ### PR R4b — Legacy active tool dependency reduction plan (docs-only)
 
 Adds `docs/legacy_active_tool_dependency_reduction_plan.md`. Documents the 11 tools
