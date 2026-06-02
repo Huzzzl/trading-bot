@@ -312,7 +312,7 @@ No tests modified. Full suite: 5 701 passed (unchanged from R2).
 |----|-------|---------|--------|
 | **A2-1** | Automated runtime state machine skeleton (`src/runtime/state_machine.py`) | High | **Implemented** |
 | **A2-2** | Automated risk gate skeleton (`src/runtime/risk_gate.py`) | High | **Implemented** |
-| **A2-3** | Order lifecycle manager skeleton (`src/runtime/order_lifecycle.py`) | Medium | Pending |
+| **A2-3** | Order lifecycle manager skeleton (`src/runtime/order_lifecycle.py`) | Medium | **Implemented** |
 
 **A2-1 — Automated runtime state machine skeleton — implemented**
 `src/runtime/state_machine.py` created. Injectable `risk_gate`, `paper_buy_runner`,
@@ -326,6 +326,12 @@ Default fail-closed: `enabled=False` → BLOCKED. Local rules: `max_order_quanti
 `allowed_symbols`, `allowed_sides`. Callable — injectable into state machine.
 `live_trading_allowed` always False. All safety flags always False (offline-only).
 62 new tests in `tests/test_runtime_risk_gate.py`. Full suite: 4 286 passed.
+
+**A2-3 — Order lifecycle manager skeleton — implemented**
+`src/runtime/order_lifecycle.py` created. `OrderLifecycleManager` in-memory FSM.
+11 states, 11 events, conservative transition table. Invalid transitions blocked
+without state mutation. All safety flags always False. No I/O or broker access.
+60 new tests in `tests/test_runtime_order_lifecycle.py`. Full suite: 4 346 passed.
 
 ### Deferred
 
