@@ -650,7 +650,7 @@ PR R4f removed `live_readiness_gate`'s manual shadow review chain dependencies a
 |------|--------|
 | `src/execution/paper_runner.py` | Created — two-phase paper buy/submit runner with `PaperRunResult` dataclass and `run_paper_execution()` function; injectable `_broker` and `_data_provider` for offline testing; all guards remain as lazy imports |
 | `src/main.py` | Paper buy/submit block (~320 lines) replaced by 3-line thin dispatch (`from src.execution.paper_runner import run_paper_execution; run_paper_execution(cfg, output_dir=output_dir); return`); `_run_paper_close` and gates unchanged |
-| `tests/test_paper_runner.py` | Created — 11 test classes, fully offline; covers PaperRunResult dataclass, preview mode, submit mode, safety flags, safety constraints, position safety, quantity override, guard delegation, output artifacts, main() delegation |
+| `tests/test_paper_runner.py` | Created — 12 test classes; injected-broker tests are fully offline; covers PaperRunResult dataclass, preview mode, submit mode, safety flags, safety constraints, position safety, quantity override, guard delegation, output artifacts, main() delegation, default-broker-path flag semantics |
 | `tests/test_main_characterization.py` | Added `test_run_paper_execution_is_not_a_top_level_name` to `TestMainImport`; added `test_paper_preview_delegates_to_run_paper_execution` to `TestMainPaperGate` |
 | 2 docs | Updated with R5 record |
 
@@ -659,5 +659,6 @@ PR R4f removed `live_readiness_gate`'s manual shadow review chain dependencies a
 - `src/execution/paper_runner.py` classified `KEEP_RUNTIME` (was `CONVERT_TO_RUNTIME` in Section 3.11)
 - `_run_paper_close` stays in `src/main.py` (R6 scope)
 - No runtime trading behavior changed
-- No broker calls, no credentials read, no orders.
+- No live trading behavior changed. Injected-broker tests remain offline. Default paper AlpacaBrokerAdapter path may read paper credentials and make broker/account/position preflight calls, matching existing behavior. Preview mode submits no orders; submit mode may request exactly one paper order after all guards pass.
 - All guards (kill switch, market hours, daily limits, open orders, ledger) behavior preserved exactly — same lazy import pattern, same check order, same error messages.
+- Full suite: 4 103 passed.

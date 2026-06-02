@@ -480,7 +480,10 @@ preview mode, submit mode, preview/submit safety flags, safety constraints,
 position safety, quantity override, guard delegation, output artifacts, and main()
 delegation. `tests/test_main_characterization.py` updated: 2 new tests in
 `TestMainImport` and `TestMainPaperGate`.
-No runtime trading behavior change. No broker calls, no credentials read, no orders.
+No live trading behavior changed. Injected-broker tests remain offline. Default paper
+AlpacaBrokerAdapter path may read paper credentials and make broker/account/position
+preflight calls, matching existing behavior. Preview mode submits no orders; submit mode
+may request exactly one paper order after all guards pass.
 
 No parameter optimisation or paper/live progression until diagnostics complete.
 
