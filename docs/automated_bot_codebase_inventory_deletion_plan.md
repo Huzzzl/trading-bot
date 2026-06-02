@@ -685,4 +685,4 @@ PR R4f removed `live_readiness_gate`'s manual shadow review chain dependencies a
 - No runtime trading behavior changed
 - No live trading behavior changed. Injected-broker tests remain offline. Default paper AlpacaBrokerAdapter path may read paper credentials and make broker/account/position preflight calls, matching existing behavior. Preview mode submits no orders; submit mode may request exactly one paper order after all guards pass.
 - All guards (kill switch, market hours, daily limits, open orders, ledger) behavior preserved exactly — same lazy import pattern, same check order, same error messages.
-- Full suite: 4 103 + N new tests passed.
+- Full suite: 4 167 passed.

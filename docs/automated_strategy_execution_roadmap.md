@@ -504,7 +504,7 @@ in `TestMainPaperGate`, 1 new test in `TestSourceCharacterization`.
 `tests/test_paper_runner.py` updated: `test_paper_close_path_does_not_call_run_paper_execution`
 now patches `src.execution.paper_close_runner.run_paper_close` instead of
 `src.main._run_paper_close`.
-No live trading behavior changed. Injected-broker tests remain offline.
+No live trading behavior changed. Injected-broker tests remain offline. Default paper AlpacaBrokerAdapter path may read paper credentials and make broker/account/position preflight calls, matching existing behavior. Preview mode submits no orders; submit mode may request exactly one paper close order after all guards pass. Full suite: 4 167 passed.
 
 No parameter optimisation or paper/live progression until diagnostics complete.
 
