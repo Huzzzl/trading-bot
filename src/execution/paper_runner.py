@@ -10,8 +10,9 @@ Two-phase paper buy/submit flow:
 
 This module is the library target for future automated runtime/state-machine code.
 No Alpaca endpoint is called when a FakeBrokerAdapter or mock broker is injected.
-No credentials are read. No orders are submitted in preview mode.
-No live trading. No live gates are modified.
+When the default broker path is used (no _broker injected), AlpacaBrokerAdapter is
+created and preflight_check() reads credentials from env and makes network calls.
+No orders are submitted in preview mode. No live trading. No live gates are modified.
 """
 
 from __future__ import annotations
@@ -43,9 +44,9 @@ class PaperRunResult:
     ledger_rows_written: int  # 0 in preview, 1 in submit
     output_dir: str | None
     broker_calls_made: bool   # True if broker.preflight_check() was called
-    credentials_read: bool    # always False — runner never reads credentials
+    credentials_read: bool    # True when default AlpacaBrokerAdapter is used (reads env creds)
     order_action_requested: bool  # True only if broker.submit_order() was called
-    network_calls_made: bool      # always False — runner delegates network to broker
+    network_calls_made: bool      # True when default AlpacaBrokerAdapter is used (network I/O)
 
 
 def run_paper_execution(
@@ -97,7 +98,9 @@ def run_paper_execution(
         output_dir.mkdir(parents=True, exist_ok=True)
 
     # --- Broker ---
-    if _broker is None:
+    # Track whether caller injected a broker; default path reads credentials + makes network calls.
+    _default_broker_path = _broker is None
+    if _default_broker_path:
         from src.execution.alpaca_broker import AlpacaBrokerAdapter
         _broker = AlpacaBrokerAdapter()
 
@@ -200,9 +203,9 @@ def run_paper_execution(
             ledger_rows_written=0,
             output_dir=str(output_dir) if output_dir else None,
             broker_calls_made=True,
-            credentials_read=False,
+            credentials_read=_default_broker_path,
             order_action_requested=False,
-            network_calls_made=False,
+            network_calls_made=_default_broker_path,
         )
 
     # ---- Phase 2: submit selected intent ----------------------------------------
@@ -445,7 +448,7 @@ def run_paper_execution(
         ledger_rows_written=1,
         output_dir=str(output_dir) if output_dir else None,
         broker_calls_made=True,
-        credentials_read=False,
+        credentials_read=_default_broker_path,
         order_action_requested=True,
-        network_calls_made=False,
+        network_calls_made=_default_broker_path,
     )

@@ -1334,3 +1334,78 @@ class TestMainDelegation:
 
         with pytest.raises(NotImplementedError):
             _main_mod.main()
+
+
+# ---------------------------------------------------------------------------
+# 12. TestDefaultBrokerPath
+# ---------------------------------------------------------------------------
+
+
+class TestDefaultBrokerPath:
+    """When _broker=None, credentials_read and network_calls_made are True."""
+
+    def _run_preview_default_broker(self, monkeypatch, tmp_path) -> PaperRunResult:
+        import src.execution.alpaca_broker as _ab
+
+        intent = _make_intent(coid="BC-DEFAULT-BROKER-001")
+        mock_broker = _make_mock_broker()
+
+        monkeypatch.setattr(_ab, "AlpacaBrokerAdapter", lambda: mock_broker)
+        monkeypatch.setattr(
+            "src.backtest.backtest_runner.run_backtest",
+            lambda config, *, data_provider: _make_backtest_result([intent]),
+        )
+        monkeypatch.setattr(
+            "src.reporting.report_generator.ReportGenerator",
+            lambda **kw: MagicMock(),
+        )
+
+        cfg = _paper_cfg(preview_only=True)
+        # _broker not passed — uses default AlpacaBrokerAdapter path
+        return run_paper_execution(cfg, output_dir=None, _data_provider=MagicMock())
+
+    def test_credentials_read_true_on_default_broker_path_preview(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        result = self._run_preview_default_broker(monkeypatch, tmp_path)
+        assert result.credentials_read is True
+
+    def test_network_calls_made_true_on_default_broker_path_preview(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        result = self._run_preview_default_broker(monkeypatch, tmp_path)
+        assert result.network_calls_made is True
+
+    def test_credentials_read_false_when_broker_injected(self, monkeypatch) -> None:
+        intent = _make_intent(coid="BC-INJECTED-001")
+        monkeypatch.setattr(
+            "src.backtest.backtest_runner.run_backtest",
+            lambda config, *, data_provider: _make_backtest_result([intent]),
+        )
+        monkeypatch.setattr(
+            "src.reporting.report_generator.ReportGenerator",
+            lambda **kw: MagicMock(),
+        )
+        cfg = _paper_cfg(preview_only=True)
+        broker = _make_mock_broker()
+        result = run_paper_execution(
+            cfg, output_dir=None, _broker=broker, _data_provider=MagicMock()
+        )
+        assert result.credentials_read is False
+
+    def test_network_calls_made_false_when_broker_injected(self, monkeypatch) -> None:
+        intent = _make_intent(coid="BC-INJECTED-002")
+        monkeypatch.setattr(
+            "src.backtest.backtest_runner.run_backtest",
+            lambda config, *, data_provider: _make_backtest_result([intent]),
+        )
+        monkeypatch.setattr(
+            "src.reporting.report_generator.ReportGenerator",
+            lambda **kw: MagicMock(),
+        )
+        cfg = _paper_cfg(preview_only=True)
+        broker = _make_mock_broker()
+        result = run_paper_execution(
+            cfg, output_dir=None, _broker=broker, _data_provider=MagicMock()
+        )
+        assert result.network_calls_made is False
