@@ -718,7 +718,45 @@ Overall result: `PASS` if ≥1 candidate passed; `ERROR` if ≥1 error and none 
 No broker/API/credential/env access. Fully offline. No trading approved.
 Full suite: 4 604 passed.
 
-**Next PR: S4 — Metrics mapping validation and walk-forward skeleton.**
+**PR S4 — Metrics mapping validation and walk-forward skeleton — implemented**
+`src/research/metrics_validation.py` and `src/research/walk_forward.py` created.
+Fully offline, no broker/API/credential/env/network access. No order submission.
+No parameter optimization. No live or paper trading approval. No strategy family
+expansion — partial wiring (TREND_BREAKOUT only) from S3 unchanged.
+
+`metrics_validation.py`: `MetricsValidationResult` frozen dataclass.
+`validate_candidate_metrics(metrics)` validates a `REQUIRED_METRIC_KEYS` dict against
+research conventions: all keys present; non-None values are `int` or `float` (not bool);
+all values finite (NaN/Inf rejected); `max_drawdown ≤ 0` (negative decimal convention);
+`total_trades ≥ 0`; `profit_factor ≥ 0`; `win_rate`, `exposure_pct`,
+`session_end_frequency`, `stop_loss_frequency` ∈ [0, 1]. Warnings (informational,
+non-blocking) for fields always None in S3: `worst_month`, `sortino`,
+`median_trade_return`, `slippage_bps`. result="PASS" or "BLOCKED". All safety flags
+always False.
+
+`walk_forward.py`: `WalkForwardSplit` and `WalkForwardResult` frozen dataclasses.
+`build_walk_forward_splits(*, start_date, end_date, train_months, test_months,
+step_months)`: deterministic rolling split generation. Train windows overlap by
+`(train_months − step_months)` months; test windows never overlap. Month arithmetic
+via `_add_months()` (standard library only). Split ID format:
+`WF{n:03d}_{train_start}_{train_end}_{test_start}_{test_end}`.
+`evaluate_walk_forward(candidate, splits, *, split_evaluator=None)`: fail-closed
+by default (no evaluator → BLOCKED); evaluate-all policy (all splits evaluated even
+if earlier ones fail); exceptions per split → ERROR result for that split; aggregation:
+ERROR > BLOCKED > PASS. All safety flags always False.
+
+`tests/test_metrics_validation.py` added: 57 tests across 9 classes.
+`tests/test_research_walk_forward.py` added: 64 tests across 8 classes covering
+dataclasses, validation/raises (including step_months < test_months guard),
+determinism, exact split dates (3-split reference configuration),
+non-overlapping test windows, blocked/pass/error aggregation,
+evaluate-all policy (continues after exception), safety flags, and no-forbidden-imports.
+Note: `tests/test_walk_forward.py` is a pre-existing file testing
+`src/experiments/walk_forward_runner.py` (a different, older module).
+Full suite: 4 725 passed.
+
+**Next PR: S5 — Offline walk-forward evaluation wiring (connect cached runner to walk-forward)**
+or Phase C (paper trading) — to be determined by research findings.
 
 ### Phase C — Paper trading execution
 
