@@ -651,6 +651,39 @@ access. No trading approved.
 
 **Next PR: S2 — Offline candidate evaluation runner.**
 
+### Phase S — Strategy candidate universe and offline discovery (continued)
+
+**PR S2 — Offline candidate evaluation runner — implemented**
+`src/research/__init__.py`, `src/research/candidate_universe.py`, and
+`src/research/candidate_evaluator.py` created. Fully offline, deterministic,
+no broker/API/credential/env/network access.
+`candidate_universe.py`: `StrategyFamily` (4 values: trend_breakout,
+mean_reversion, momentum_continuation, gap_overnight) and `HoldingHorizon`
+(4 values: intraday, one_day, one_to_two_days, three_to_five_days) enums.
+`CandidateSpec` frozen dataclass. `build_initial_candidate_universe()` returns
+a deterministic tuple of **32 candidates** across 7 groups (A–G) following the
+S1 design: Group A — broad ETFs × 60m+1d × trend_breakout × 1–2 days;
+Group B — sector ETFs × 60m × trend_breakout × 1–2 days; Group C — broad
+ETFs × 30m+60m × mean_reversion × intraday/1 day; Group D — mega-caps × 60m
+× momentum × 1–2 days; Group E — high-volume × 30m+60m × momentum ×
+intraday/1 day; Group F — SPY/QQQ × 60m+1d × gap_overnight × 1 day; Group G
+— SPY/QQQ × 1d × trend_breakout × 3–5 days. `filter_candidates()` supports
+filtering by group, symbol, interval, strategy family, and holding horizon.
+`candidate_evaluator.py`: `CandidateEvaluationResult` and `CandidateGateResult`
+frozen dataclasses. 18 `REQUIRED_METRIC_KEYS`. `evaluate_candidate()` fail-closed:
+no injected data_provider/backtest_runner → BLOCKED; with both injected →
+PASS with metrics from runner; exception → ERROR. `evaluate_candidates()` evaluates
+all candidates in order; one failure does not stop others. `apply_candidate_acceptance_gates()`
+blocks on: total_trades < 30 or None, max_drawdown None, average_monthly_return None,
+session_end_frequency > 0.95, low-volatility artifact (exposure_pct < 0.01 + near-zero
+monthly return). All safety flags always False. No parameter optimization.
+`tests/test_candidate_universe.py` added: 55 tests across 6 classes.
+`tests/test_candidate_evaluator.py` added: 42 tests across 8 classes.
+No broker/API/credential/env access. Fully offline. No trading approved.
+Full suite: 4 543 passed.
+
+**Next PR: S3 — Wire evaluator to cached data/backtest path.**
+
 ### Phase C — Paper trading execution
 
 - Paper account executor: applies approved signal on Alpaca paper account
