@@ -5403,9 +5403,11 @@ All `src/` modules classified into six labels:
 | R4 | Archive / delete manual-only tools after dependency scan |
 | R5 | Extract paper execution path → `src/execution/paper_runner.py` |
 | R6 | Extract paper close path → `src/execution/paper_close_runner.py` |
-| A2-1 | Automated state machine skeleton |
-| A2-2 | Automated risk gate skeleton |
-| A2-3 | Order lifecycle manager skeleton |
+| A2-1 | Automated state machine skeleton | **Implemented** |
+| A2-2 | Automated risk gate skeleton | **Implemented** |
+| A2-3 | Order lifecycle manager skeleton | **Implemented** |
+| A2-4 | Runtime context design and wiring | **Implemented** |
+| A2-5 | Fake end-to-end runtime cycle | **Implemented** |
 
 ### Direction guard (enforced from this PR forward)
 
