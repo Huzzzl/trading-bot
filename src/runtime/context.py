@@ -38,3 +38,7 @@ class RuntimeContext:
     allow_order_action: bool = False
     allow_live_trading: bool = False
     metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.allow_live_trading is not False:
+            raise ValueError("allow_live_trading must remain False")

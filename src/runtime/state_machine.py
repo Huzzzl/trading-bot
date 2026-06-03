@@ -319,8 +319,8 @@ class AutomatedRuntimeStateMachine:
                 )
             except (ValueError, TypeError):
                 n_req = 0
-            raw = self._risk_gate(context) if n_req >= 1 else self._risk_gate()
-            approved = bool(raw)
+            gate_result = self._risk_gate(context) if n_req >= 1 else self._risk_gate()
+            approved = getattr(gate_result, "approved", bool(gate_result))
 
         gate_flags = _extract_safety_flags(gate_result)
         if not approved:

@@ -772,6 +772,63 @@ class TestContextPassingToRiskGate:
         sm.step(RuntimeAction.SUBMIT_CLOSE, base_cfg, ctx)
         assert gate.received_context is ctx
 
+    def test_one_arg_callable_returning_result_like_approved_false_blocks(self, base_cfg):
+        called: list = []
+
+        def spy_runner(cfg):
+            called.append(cfg)
+            return _FakeBuyResult()
+
+        def one_arg_gate(context):
+            return _FakeGateResult(approved=False)
+
+        sm = AutomatedRuntimeStateMachine(
+            risk_gate=one_arg_gate,
+            paper_buy_runner=spy_runner,
+        )
+        result = sm.step(RuntimeAction.SUBMIT_BUY, base_cfg, RuntimeContext())
+        assert result.next_state == RuntimeState.BLOCKED
+        assert called == []
+
+    def test_one_arg_callable_returning_result_like_safety_flags_included(self, base_cfg):
+        gate_result = _FakeGateResult(
+            approved=True,
+            broker_calls_made=False,
+            credentials_read=False,
+            network_calls_made=False,
+        )
+
+        def one_arg_gate(context):
+            return gate_result
+
+        order = RuntimeOrderContext(client_order_id="coid-flags")
+        sm = AutomatedRuntimeStateMachine(
+            risk_gate=one_arg_gate,
+            paper_buy_runner=_fake_buy_runner,
+        )
+        result = sm.step(RuntimeAction.SUBMIT_BUY, base_cfg, RuntimeContext(order=order))
+        assert result.next_state == RuntimeState.PAPER_SUBMITTED
+        assert "broker_calls_made" in result.safety_flags
+
+    def test_one_arg_callable_returning_result_like_approved_true_proceeds(self, base_cfg):
+        called: list = []
+
+        def spy_runner(cfg):
+            called.append(cfg)
+            return _FakeBuyResult()
+
+        def one_arg_gate(context):
+            return _FakeGateResult(approved=True)
+
+        order = RuntimeOrderContext(client_order_id="coid-proceed")
+        sm = AutomatedRuntimeStateMachine(
+            risk_gate=one_arg_gate,
+            paper_buy_runner=spy_runner,
+        )
+        result = sm.step(RuntimeAction.SUBMIT_BUY, base_cfg, RuntimeContext(order=order))
+        assert result.next_state == RuntimeState.PAPER_SUBMITTED
+        assert len(called) == 1
+
 
 # ---------------------------------------------------------------------------
 # Fake lifecycle manager helpers (A2-4)

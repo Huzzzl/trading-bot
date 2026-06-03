@@ -107,6 +107,14 @@ class TestRuntimeContextDataclass:
         ctx = RuntimeContext(allow_live_trading=False)
         assert ctx.allow_live_trading is False
 
+    def test_allow_live_trading_true_raises_value_error(self):
+        with pytest.raises(ValueError, match="allow_live_trading must remain False"):
+            RuntimeContext(allow_live_trading=True)
+
+    def test_allow_live_trading_false_explicit_does_not_raise(self):
+        ctx = RuntimeContext(allow_live_trading=False)
+        assert ctx.allow_live_trading is False
+
     def test_order_field_accepts_runtime_order_context(self):
         order = RuntimeOrderContext(client_order_id="coid-X", symbol="SPY")
         ctx = RuntimeContext(order=order)
