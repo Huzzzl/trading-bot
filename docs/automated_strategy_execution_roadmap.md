@@ -548,7 +548,28 @@ no-forbidden-import scan.
 No live trading behavior changed. No live gates unfrozen. No broker/API/credential/env
 access. Fully offline. Full suite: 4 286 passed.
 
-**Next PR: A2-3 — Order lifecycle manager skeleton.**
+**PR A2-3 — Order lifecycle manager skeleton — implemented**
+`src/runtime/order_lifecycle.py` created. `OrderLifecycleState` (11 states:
+CREATED, RISK_APPROVED, SUBMIT_REQUESTED, SUBMITTED, ACKNOWLEDGED, FILLED,
+PARTIALLY_FILLED, CANCELED, REJECTED, FAILED, CLOSED) and `OrderLifecycleEvent`
+(11 events: CREATE through CLOSE) enums defined. `OrderLifecycleRecord` and
+`OrderLifecycleTransition` frozen dataclasses defined. `OrderLifecycleManager`
+in-memory manager: `create_order()`, `apply_event()`, `get()`, `all_orders()`.
+Deterministic finite-state transition table: invalid transitions return
+`OrderLifecycleTransition(allowed=False)` without mutating state. Terminal states
+(FILLED, CANCELED, REJECTED, FAILED, CLOSED) block forward submit events.
+MARK_REJECTED and MARK_FAILED allowed from any non-terminal state. No broker,
+credential, env, or network access. No file I/O. No order submission, cancellation,
+replacement, or closure performed. All safety flags always False.
+`tests/test_runtime_order_lifecycle.py` added: 60 tests across 15 classes covering
+enums, dataclasses, create_order, duplicate ID blocking, happy path CREATED→CLOSED,
+partial fill path, cancel path, rejected/failed paths, invalid transitions, event
+history, get/all_orders, multiple order isolation, safety flags, determinism, and
+no-forbidden-import scan.
+No live trading behavior changed. No live gates unfrozen. No order action performed.
+Full suite: 4 346 passed.
+
+**Next PR: A2-4 — Runtime context design and wiring (state machine + risk gate + lifecycle).**
 
 ### Phase C — Paper trading execution
 
