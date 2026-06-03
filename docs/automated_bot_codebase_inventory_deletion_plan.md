@@ -313,6 +313,7 @@ No tests modified. Full suite: 5 701 passed (unchanged from R2).
 | **A2-1** | Automated runtime state machine skeleton (`src/runtime/state_machine.py`) | High | **Implemented** |
 | **A2-2** | Automated risk gate skeleton (`src/runtime/risk_gate.py`) | High | **Implemented** |
 | **A2-3** | Order lifecycle manager skeleton (`src/runtime/order_lifecycle.py`) | Medium | **Implemented** |
+| **A2-4** | Runtime context design and wiring (`src/runtime/context.py`, state machine update) | High | **Implemented** |
 
 **A2-1 — Automated runtime state machine skeleton — implemented**
 `src/runtime/state_machine.py` created. Injectable `risk_gate`, `paper_buy_runner`,
@@ -332,6 +333,14 @@ Default fail-closed: `enabled=False` → BLOCKED. Local rules: `max_order_quanti
 11 states, 11 events, conservative transition table. Invalid transitions blocked
 without state mutation. All safety flags always False. No I/O or broker access.
 60 new tests in `tests/test_runtime_order_lifecycle.py`. Full suite: 4 346 passed.
+
+**A2-4 — Runtime context design and wiring — implemented**
+`src/runtime/context.py` created: `RuntimeOrderContext` and `RuntimeContext` frozen
+dataclasses. `src/runtime/state_machine.py` updated: `lifecycle_manager` parameter,
+`step(context=None)` optional context, three-protocol risk gate evaluation (evaluate/
+one-arg/zero-arg), full lifecycle wiring for submit actions. `tests/test_runtime_context.py`
+added (25 tests). `tests/test_runtime_state_machine.py` updated (26 new tests).
+Full suite: 4 397 passed.
 
 ### Deferred
 
