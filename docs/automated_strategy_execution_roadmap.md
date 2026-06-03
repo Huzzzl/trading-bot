@@ -569,7 +569,34 @@ no-forbidden-import scan.
 No live trading behavior changed. No live gates unfrozen. No order action performed.
 Full suite: 4 346 passed.
 
-**Next PR: A2-4 — Runtime context design and wiring (state machine + risk gate + lifecycle).**
+**PR A2-4 — Runtime context design and wiring — implemented**
+`src/runtime/context.py` created: `RuntimeOrderContext` and `RuntimeContext` frozen
+dataclasses. `RuntimeOrderContext` carries `client_order_id`, `symbol`, `side`,
+`quantity`, `action`, `metadata`. `RuntimeContext` carries `order`, `mode`, `allow_order_action`,
+`allow_live_trading` (always `False`), `metadata`. Both are frozen, deterministic,
+no file I/O, no broker/API/env access.
+`src/runtime/state_machine.py` updated: `lifecycle_manager=None` constructor parameter
+added. `step()` gains optional `context=None` — backward compatible. `_evaluate_risk_gate(context)`
+replaces `_check_risk_gate()` and supports three calling protocols: (1) object with
+`evaluate(context)` method, (2) one-arg callable, (3) zero-arg callable (backward compat).
+`_lc_pre_submit`, `_lc_post_submit`, `_lc_on_error`, `_lc_coid` lifecycle helpers with
+lazy imports added. Lifecycle wiring for SUBMIT_BUY/SUBMIT_CLOSE: requires
+`context.order.client_order_id`; blocks if absent. Applies `RISK_APPROVE` and
+`REQUEST_SUBMIT` before runner call; applies `MARK_SUBMITTED` after runner if
+`order_action_requested=True`; applies `MARK_FAILED` on runner exception if lifecycle
+record exists. Preview actions never use lifecycle manager.
+`tests/test_runtime_context.py` added: 25 tests across 3 classes covering
+`RuntimeOrderContext` and `RuntimeContext` frozen dataclass fields, defaults, equality,
+mutation rejection, and source scan (no broker/env/network imports).
+`tests/test_runtime_state_machine.py` updated: 26 new tests across 5 new classes
+covering context passing to risk gate (Protocol-1 evaluate, Protocol-2 one-arg,
+backward-compat zero-arg), safety flag merging, lifecycle wiring for SUBMIT_BUY
+and SUBMIT_CLOSE, missing `client_order_id` blocks, `MARK_FAILED` on runner exception,
+preview actions not calling lifecycle, and `_NO_COID_BLOCKER` constant import.
+No live trading behavior changed. No live gates unfrozen. No broker/API/credential access.
+Fully offline. Full suite: 4 397 passed.
+
+**Next PR: A2-5 — (TBD).**
 
 ### Phase C — Paper trading execution
 

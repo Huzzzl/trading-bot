@@ -1,7 +1,7 @@
 """
 tests/test_runtime_state_machine.py
 -------------------------------------
-Tests for src/runtime/state_machine.py (PR A2-1).
+Tests for src/runtime/state_machine.py (PR A2-1, updated A2-4).
 
 All tests use fake/injected runners — no real Alpaca calls, no real paper runners.
 No live gates unfrozen. No live trading. No broker/API/credential access.
@@ -10,17 +10,20 @@ No live gates unfrozen. No live trading. No broker/API/credential access.
 from __future__ import annotations
 
 import inspect
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 import pytest
 
 from src.config.loader import load_config
+from src.runtime.context import RuntimeContext, RuntimeOrderContext
 from src.runtime.state_machine import (
     AutomatedRuntimeStateMachine,
     RuntimeAction,
     RuntimeDecision,
     RuntimeState,
     RuntimeStepResult,
+    _NO_COID_BLOCKER,
     _NO_RISK_GATE_BLOCKER,
     _extract_safety_flags,
 )
@@ -648,3 +651,479 @@ class TestExtractSafetyFlags:
         flags = _extract_safety_flags(_Partial())
         assert flags["order_action_requested"] is False
         assert "credentials_read" not in flags
+
+
+# ---------------------------------------------------------------------------
+# TestContextPassingToRiskGate (A2-4)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class _FakeGateResult:
+    approved: bool
+    order_action_requested: bool = False
+    credentials_read: bool = False
+    network_calls_made: bool = False
+    broker_calls_made: bool = False
+
+
+class _ObjectGate:
+    """Protocol-1 gate: has evaluate(context) method."""
+    def __init__(self, approve: bool):
+        self._approve = approve
+        self.received_context = None
+
+    def evaluate(self, context):
+        self.received_context = context
+        return _FakeGateResult(approved=self._approve)
+
+
+class _OneArgGate:
+    """Protocol-2 gate: callable(context)."""
+    def __init__(self, approve: bool):
+        self._approve = approve
+        self.received_context = None
+
+    def __call__(self, context):
+        self.received_context = context
+        return self._approve
+
+
+class TestContextPassingToRiskGate:
+    def test_evaluate_method_receives_context(self, base_cfg):
+        gate = _ObjectGate(approve=True)
+        order = RuntimeOrderContext(client_order_id="coid-1", symbol="SPY")
+        ctx = RuntimeContext(order=order)
+        sm = AutomatedRuntimeStateMachine(
+            risk_gate=gate,
+            paper_buy_runner=_fake_buy_runner,
+        )
+        sm.step(RuntimeAction.SUBMIT_BUY, base_cfg, ctx)
+        assert gate.received_context is ctx
+
+    def test_one_arg_gate_receives_context(self, base_cfg):
+        gate = _OneArgGate(approve=True)
+        order = RuntimeOrderContext(client_order_id="coid-1", symbol="SPY")
+        ctx = RuntimeContext(order=order)
+        sm = AutomatedRuntimeStateMachine(
+            risk_gate=gate,
+            paper_buy_runner=_fake_buy_runner,
+        )
+        sm.step(RuntimeAction.SUBMIT_BUY, base_cfg, ctx)
+        assert gate.received_context is ctx
+
+    def test_evaluate_method_rejecting_blocks(self, base_cfg):
+        gate = _ObjectGate(approve=False)
+        ctx = RuntimeContext()
+        sm = AutomatedRuntimeStateMachine(
+            risk_gate=gate,
+            paper_buy_runner=_fake_buy_runner,
+        )
+        result = sm.step(RuntimeAction.SUBMIT_BUY, base_cfg, ctx)
+        assert result.next_state == RuntimeState.BLOCKED
+
+    def test_one_arg_gate_rejecting_blocks(self, base_cfg):
+        gate = _OneArgGate(approve=False)
+        ctx = RuntimeContext()
+        sm = AutomatedRuntimeStateMachine(
+            risk_gate=gate,
+            paper_buy_runner=_fake_buy_runner,
+        )
+        result = sm.step(RuntimeAction.SUBMIT_BUY, base_cfg, ctx)
+        assert result.next_state == RuntimeState.BLOCKED
+
+    def test_gate_result_safety_flags_merged_into_step_flags(self, base_cfg):
+        gate = _ObjectGate(approve=True)
+        order = RuntimeOrderContext(client_order_id="coid-2")
+        ctx = RuntimeContext(order=order)
+        buy_result = _FakeBuyResult(order_action_requested=True)
+        sm = AutomatedRuntimeStateMachine(
+            risk_gate=gate,
+            paper_buy_runner=lambda cfg: buy_result,
+        )
+        result = sm.step(RuntimeAction.SUBMIT_BUY, base_cfg, ctx)
+        assert result.next_state == RuntimeState.PAPER_SUBMITTED
+        assert "order_action_requested" in result.safety_flags
+
+    def test_context_none_is_backward_compatible_with_zero_arg_gate(self, base_cfg):
+        sm = AutomatedRuntimeStateMachine(
+            risk_gate=_approving_risk_gate,
+            paper_buy_runner=_fake_buy_runner,
+        )
+        result = sm.step(RuntimeAction.SUBMIT_BUY, base_cfg)
+        assert result.next_state == RuntimeState.PAPER_SUBMITTED
+
+    def test_zero_arg_gate_ignores_context(self, base_cfg):
+        ctx = RuntimeContext(mode="paper")
+        sm = AutomatedRuntimeStateMachine(
+            risk_gate=_approving_risk_gate,
+            paper_buy_runner=_fake_buy_runner,
+        )
+        result = sm.step(RuntimeAction.SUBMIT_BUY, base_cfg, ctx)
+        assert result.next_state == RuntimeState.PAPER_SUBMITTED
+
+    def test_evaluate_close_receives_context(self, base_cfg):
+        gate = _ObjectGate(approve=True)
+        order = RuntimeOrderContext(client_order_id="coid-3")
+        ctx = RuntimeContext(order=order)
+        sm = AutomatedRuntimeStateMachine(
+            risk_gate=gate,
+            paper_close_runner=_fake_close_runner,
+        )
+        sm.step(RuntimeAction.SUBMIT_CLOSE, base_cfg, ctx)
+        assert gate.received_context is ctx
+
+    def test_one_arg_callable_returning_result_like_approved_false_blocks(self, base_cfg):
+        called: list = []
+
+        def spy_runner(cfg):
+            called.append(cfg)
+            return _FakeBuyResult()
+
+        def one_arg_gate(context):
+            return _FakeGateResult(approved=False)
+
+        sm = AutomatedRuntimeStateMachine(
+            risk_gate=one_arg_gate,
+            paper_buy_runner=spy_runner,
+        )
+        result = sm.step(RuntimeAction.SUBMIT_BUY, base_cfg, RuntimeContext())
+        assert result.next_state == RuntimeState.BLOCKED
+        assert called == []
+
+    def test_one_arg_callable_returning_result_like_safety_flags_included(self, base_cfg):
+        gate_result = _FakeGateResult(
+            approved=True,
+            broker_calls_made=False,
+            credentials_read=False,
+            network_calls_made=False,
+        )
+
+        def one_arg_gate(context):
+            return gate_result
+
+        order = RuntimeOrderContext(client_order_id="coid-flags")
+        sm = AutomatedRuntimeStateMachine(
+            risk_gate=one_arg_gate,
+            paper_buy_runner=_fake_buy_runner,
+        )
+        result = sm.step(RuntimeAction.SUBMIT_BUY, base_cfg, RuntimeContext(order=order))
+        assert result.next_state == RuntimeState.PAPER_SUBMITTED
+        assert "broker_calls_made" in result.safety_flags
+
+    def test_one_arg_callable_returning_result_like_approved_true_proceeds(self, base_cfg):
+        called: list = []
+
+        def spy_runner(cfg):
+            called.append(cfg)
+            return _FakeBuyResult()
+
+        def one_arg_gate(context):
+            return _FakeGateResult(approved=True)
+
+        order = RuntimeOrderContext(client_order_id="coid-proceed")
+        sm = AutomatedRuntimeStateMachine(
+            risk_gate=one_arg_gate,
+            paper_buy_runner=spy_runner,
+        )
+        result = sm.step(RuntimeAction.SUBMIT_BUY, base_cfg, RuntimeContext(order=order))
+        assert result.next_state == RuntimeState.PAPER_SUBMITTED
+        assert len(called) == 1
+
+
+# ---------------------------------------------------------------------------
+# Fake lifecycle manager helpers (A2-4)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class _FakeTransition:
+    allowed: bool
+    blocker: str | None = None
+    previous_state: str = "CREATED"
+    next_state: str = "RISK_APPROVED"
+    event: str = "RISK_APPROVE"
+    broker_calls_made: bool = False
+    credentials_read: bool = False
+    network_calls_made: bool = False
+    order_action_requested: bool = False
+    live_trading_allowed: bool = False
+
+
+class _FakeLifecycleManager:
+    """Fake lifecycle manager for state machine wiring tests."""
+
+    def __init__(self, *, allow_risk_approve=True, allow_request_submit=True):
+        self._allow_risk_approve = allow_risk_approve
+        self._allow_request_submit = allow_request_submit
+        self.created: list[str] = []
+        self.events: list[tuple[str, Any]] = []
+        self._records: dict[str, object] = {}
+
+    def create_order(self, coid, *, symbol=None, side=None, quantity=None, metadata=None):
+        self.created.append(coid)
+        self._records[coid] = object()
+        return _FakeTransition(allowed=True)
+
+    def apply_event(self, coid, event):
+        self.events.append((coid, event))
+        from src.runtime.order_lifecycle import OrderLifecycleEvent as _OLE
+        if event == _OLE.RISK_APPROVE:
+            return _FakeTransition(allowed=self._allow_risk_approve,
+                                   blocker=None if self._allow_risk_approve else "risk_approve blocked")
+        if event == _OLE.REQUEST_SUBMIT:
+            return _FakeTransition(allowed=self._allow_request_submit,
+                                   blocker=None if self._allow_request_submit else "request_submit blocked")
+        return _FakeTransition(allowed=True)
+
+    def get(self, coid):
+        return self._records.get(coid)
+
+
+# ---------------------------------------------------------------------------
+# TestLifecycleWiringSubmitBuy (A2-4)
+# ---------------------------------------------------------------------------
+
+class TestLifecycleWiringSubmitBuy:
+    def test_missing_coid_blocks_submit_buy(self, base_cfg):
+        lm = _FakeLifecycleManager()
+        sm = AutomatedRuntimeStateMachine(
+            risk_gate=_approving_risk_gate,
+            paper_buy_runner=_fake_buy_runner,
+            lifecycle_manager=lm,
+        )
+        ctx = RuntimeContext(order=RuntimeOrderContext())
+        result = sm.step(RuntimeAction.SUBMIT_BUY, base_cfg, ctx)
+        assert result.next_state == RuntimeState.BLOCKED
+        assert _NO_COID_BLOCKER in result.blocker
+
+    def test_missing_context_blocks_submit_buy(self, base_cfg):
+        lm = _FakeLifecycleManager()
+        sm = AutomatedRuntimeStateMachine(
+            risk_gate=_approving_risk_gate,
+            paper_buy_runner=_fake_buy_runner,
+            lifecycle_manager=lm,
+        )
+        result = sm.step(RuntimeAction.SUBMIT_BUY, base_cfg)
+        assert result.next_state == RuntimeState.BLOCKED
+
+    def test_lifecycle_risk_approve_event_applied(self, base_cfg):
+        from src.runtime.order_lifecycle import OrderLifecycleEvent as _OLE
+        lm = _FakeLifecycleManager()
+        order = RuntimeOrderContext(client_order_id="coid-buy-1")
+        ctx = RuntimeContext(order=order)
+        sm = AutomatedRuntimeStateMachine(
+            risk_gate=_approving_risk_gate,
+            paper_buy_runner=_fake_buy_runner,
+            lifecycle_manager=lm,
+        )
+        sm.step(RuntimeAction.SUBMIT_BUY, base_cfg, ctx)
+        event_names = [e for _, e in lm.events]
+        assert _OLE.RISK_APPROVE in event_names
+
+    def test_lifecycle_request_submit_event_applied(self, base_cfg):
+        from src.runtime.order_lifecycle import OrderLifecycleEvent as _OLE
+        lm = _FakeLifecycleManager()
+        order = RuntimeOrderContext(client_order_id="coid-buy-2")
+        ctx = RuntimeContext(order=order)
+        sm = AutomatedRuntimeStateMachine(
+            risk_gate=_approving_risk_gate,
+            paper_buy_runner=_fake_buy_runner,
+            lifecycle_manager=lm,
+        )
+        sm.step(RuntimeAction.SUBMIT_BUY, base_cfg, ctx)
+        event_names = [e for _, e in lm.events]
+        assert _OLE.REQUEST_SUBMIT in event_names
+
+    def test_lifecycle_mark_submitted_applied_when_action_requested(self, base_cfg):
+        from src.runtime.order_lifecycle import OrderLifecycleEvent as _OLE
+        lm = _FakeLifecycleManager()
+        order = RuntimeOrderContext(client_order_id="coid-buy-3")
+        ctx = RuntimeContext(order=order)
+        buy_result = _FakeBuyResult(order_action_requested=True)
+        sm = AutomatedRuntimeStateMachine(
+            risk_gate=_approving_risk_gate,
+            paper_buy_runner=lambda cfg: buy_result,
+            lifecycle_manager=lm,
+        )
+        sm.step(RuntimeAction.SUBMIT_BUY, base_cfg, ctx)
+        event_names = [e for _, e in lm.events]
+        assert _OLE.MARK_SUBMITTED in event_names
+
+    def test_lifecycle_mark_submitted_not_applied_when_no_action(self, base_cfg):
+        from src.runtime.order_lifecycle import OrderLifecycleEvent as _OLE
+        lm = _FakeLifecycleManager()
+        order = RuntimeOrderContext(client_order_id="coid-buy-4")
+        ctx = RuntimeContext(order=order)
+        buy_result = _FakeBuyResult(order_action_requested=False)
+        sm = AutomatedRuntimeStateMachine(
+            risk_gate=_approving_risk_gate,
+            paper_buy_runner=lambda cfg: buy_result,
+            lifecycle_manager=lm,
+        )
+        sm.step(RuntimeAction.SUBMIT_BUY, base_cfg, ctx)
+        event_names = [e for _, e in lm.events]
+        assert _OLE.MARK_SUBMITTED not in event_names
+
+    def test_lifecycle_risk_approve_blocked_blocks_submit(self, base_cfg):
+        lm = _FakeLifecycleManager(allow_risk_approve=False)
+        order = RuntimeOrderContext(client_order_id="coid-buy-5")
+        ctx = RuntimeContext(order=order)
+        sm = AutomatedRuntimeStateMachine(
+            risk_gate=_approving_risk_gate,
+            paper_buy_runner=_fake_buy_runner,
+            lifecycle_manager=lm,
+        )
+        result = sm.step(RuntimeAction.SUBMIT_BUY, base_cfg, ctx)
+        assert result.next_state == RuntimeState.BLOCKED
+
+    def test_lifecycle_request_submit_blocked_blocks_submit(self, base_cfg):
+        lm = _FakeLifecycleManager(allow_request_submit=False)
+        order = RuntimeOrderContext(client_order_id="coid-buy-6")
+        ctx = RuntimeContext(order=order)
+        sm = AutomatedRuntimeStateMachine(
+            risk_gate=_approving_risk_gate,
+            paper_buy_runner=_fake_buy_runner,
+            lifecycle_manager=lm,
+        )
+        result = sm.step(RuntimeAction.SUBMIT_BUY, base_cfg, ctx)
+        assert result.next_state == RuntimeState.BLOCKED
+
+    def test_create_order_called_for_new_coid(self, base_cfg):
+        lm = _FakeLifecycleManager()
+        order = RuntimeOrderContext(client_order_id="coid-new-1")
+        ctx = RuntimeContext(order=order)
+        sm = AutomatedRuntimeStateMachine(
+            risk_gate=_approving_risk_gate,
+            paper_buy_runner=_fake_buy_runner,
+            lifecycle_manager=lm,
+        )
+        sm.step(RuntimeAction.SUBMIT_BUY, base_cfg, ctx)
+        assert "coid-new-1" in lm.created
+
+
+# ---------------------------------------------------------------------------
+# TestLifecycleWiringSubmitClose (A2-4)
+# ---------------------------------------------------------------------------
+
+class TestLifecycleWiringSubmitClose:
+    def test_missing_coid_blocks_submit_close(self, base_cfg):
+        lm = _FakeLifecycleManager()
+        sm = AutomatedRuntimeStateMachine(
+            risk_gate=_approving_risk_gate,
+            paper_close_runner=_fake_close_runner,
+            lifecycle_manager=lm,
+        )
+        ctx = RuntimeContext(order=RuntimeOrderContext())
+        result = sm.step(RuntimeAction.SUBMIT_CLOSE, base_cfg, ctx)
+        assert result.next_state == RuntimeState.BLOCKED
+        assert _NO_COID_BLOCKER in result.blocker
+
+    def test_lifecycle_events_applied_for_close(self, base_cfg):
+        from src.runtime.order_lifecycle import OrderLifecycleEvent as _OLE
+        lm = _FakeLifecycleManager()
+        order = RuntimeOrderContext(client_order_id="coid-close-1")
+        ctx = RuntimeContext(order=order)
+        sm = AutomatedRuntimeStateMachine(
+            risk_gate=_approving_risk_gate,
+            paper_close_runner=_fake_close_runner,
+            lifecycle_manager=lm,
+        )
+        sm.step(RuntimeAction.SUBMIT_CLOSE, base_cfg, ctx)
+        event_names = [e for _, e in lm.events]
+        assert _OLE.RISK_APPROVE in event_names
+        assert _OLE.REQUEST_SUBMIT in event_names
+
+    def test_lifecycle_mark_submitted_applied_for_close_action(self, base_cfg):
+        from src.runtime.order_lifecycle import OrderLifecycleEvent as _OLE
+        lm = _FakeLifecycleManager()
+        order = RuntimeOrderContext(client_order_id="coid-close-2")
+        ctx = RuntimeContext(order=order)
+        close_result = _FakeCloseResult(order_action_requested=True)
+        sm = AutomatedRuntimeStateMachine(
+            risk_gate=_approving_risk_gate,
+            paper_close_runner=lambda cfg: close_result,
+            lifecycle_manager=lm,
+        )
+        sm.step(RuntimeAction.SUBMIT_CLOSE, base_cfg, ctx)
+        event_names = [e for _, e in lm.events]
+        assert _OLE.MARK_SUBMITTED in event_names
+
+    def test_preview_close_does_not_use_lifecycle(self, base_cfg):
+        lm = _FakeLifecycleManager()
+        sm = AutomatedRuntimeStateMachine(
+            paper_close_runner=_fake_close_runner,
+            lifecycle_manager=lm,
+        )
+        result = sm.step(RuntimeAction.PREVIEW_CLOSE, base_cfg)
+        assert result.next_state == RuntimeState.PAPER_CLOSE_PREVIEW
+        assert lm.events == []
+
+
+# ---------------------------------------------------------------------------
+# TestErrorAppliesMarkFailed (A2-4)
+# ---------------------------------------------------------------------------
+
+class TestErrorAppliesMarkFailed:
+    def test_runner_exception_applies_mark_failed(self, base_cfg):
+        from src.runtime.order_lifecycle import OrderLifecycleEvent as _OLE
+        lm = _FakeLifecycleManager()
+        order = RuntimeOrderContext(client_order_id="coid-err-1")
+        ctx = RuntimeContext(order=order)
+
+        def exploding_runner(cfg):
+            raise RuntimeError("runner exploded")
+
+        sm = AutomatedRuntimeStateMachine(
+            risk_gate=_approving_risk_gate,
+            paper_buy_runner=exploding_runner,
+            lifecycle_manager=lm,
+        )
+        result = sm.step(RuntimeAction.SUBMIT_BUY, base_cfg, ctx)
+        assert result.next_state == RuntimeState.ERROR
+        event_names = [e for _, e in lm.events]
+        assert _OLE.MARK_FAILED in event_names
+
+    def test_runner_exception_no_lifecycle_still_errors(self, base_cfg):
+        def exploding_runner(cfg):
+            raise RuntimeError("no lifecycle")
+
+        sm = AutomatedRuntimeStateMachine(
+            risk_gate=_approving_risk_gate,
+            paper_buy_runner=exploding_runner,
+        )
+        result = sm.step(RuntimeAction.SUBMIT_BUY, base_cfg)
+        assert result.next_state == RuntimeState.ERROR
+
+    def test_preview_runner_exception_no_mark_failed_without_lifecycle(self, base_cfg):
+        def exploding_runner(cfg):
+            raise RuntimeError("preview exploded")
+
+        sm = AutomatedRuntimeStateMachine(paper_buy_runner=exploding_runner)
+        result = sm.step(RuntimeAction.PREVIEW_BUY, base_cfg)
+        assert result.next_state == RuntimeState.ERROR
+
+
+# ---------------------------------------------------------------------------
+# TestPreviewActionsDoNotUseLifecycle (A2-4)
+# ---------------------------------------------------------------------------
+
+class TestPreviewActionsDoNotUseLifecycle:
+    def test_preview_buy_does_not_call_lifecycle(self, base_cfg):
+        lm = _FakeLifecycleManager()
+        sm = AutomatedRuntimeStateMachine(
+            paper_buy_runner=_fake_buy_runner,
+            lifecycle_manager=lm,
+        )
+        result = sm.step(RuntimeAction.PREVIEW_BUY, base_cfg)
+        assert result.next_state == RuntimeState.PAPER_PREVIEW
+        assert lm.events == []
+        assert lm.created == []
+
+    def test_preview_close_does_not_call_lifecycle(self, base_cfg):
+        lm = _FakeLifecycleManager()
+        sm = AutomatedRuntimeStateMachine(
+            paper_close_runner=_fake_close_runner,
+            lifecycle_manager=lm,
+        )
+        result = sm.step(RuntimeAction.PREVIEW_CLOSE, base_cfg)
+        assert result.next_state == RuntimeState.PAPER_CLOSE_PREVIEW
+        assert lm.events == []
