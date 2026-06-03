@@ -682,7 +682,43 @@ monthly return). All safety flags always False. No parameter optimization.
 No broker/API/credential/env access. Fully offline. No trading approved.
 Full suite: 4 543 passed.
 
-**Next PR: S3 — Wire evaluator to cached data/backtest path.**
+**PR S3 — Wire candidate evaluator to cached backtest path — implemented**
+`src/research/cached_candidate_runner.py` created. Fully offline, no broker/API/
+credential/env/network access. No order submission. No live or paper trading approval.
+`CachedCandidateRunResult` frozen dataclass: `result`, `blocker`, `candidates_requested`,
+`candidates_evaluated`, `candidates_passed`, `candidates_blocked`, `candidates_error`,
+`results` (tuple of `CandidateEvaluationResult`), and 5 safety flags (all always False).
+`run_cached_candidate_evaluation(candidates, *, cache_dir, max_candidates,
+_data_provider, _backtest_runner)` injects an offline data loader and backtest runner
+into the candidate evaluator via two-phase dispatch:
+(1) Strategy family pre-check: `TREND_BREAKOUT` → `"trend_following"` (S3 partial wiring);
+all other families → `BLOCKED("strategy family not yet wired: {family}")`.
+(2) Cache file lookup via glob `{symbol}_*_{interval}.(parquet|csv)` — BLOCKED if no match.
+(3) Load first matching file via `_load_cache_file()` (parquet then csv); BLOCKED on load error
+or empty file.
+(4) Build `_DataFrameProvider` + real backtest runner closure; call `evaluate_candidate()`.
+Real backtest runner: extracts date range from DataFrame index; uses daily-bar guard
+(`force_exit_time=None` for 1d/1day/daily intervals); calls `run_backtest()` with
+`_TREND_PARAMS`; calls `trade_summary_diagnostics()`; maps to `REQUIRED_METRIC_KEYS`
+format (percentage → decimal conversion for cagr, max_drawdown, win_rate,
+average_trade_return, exposure_pct; None for worst_month, sortino, median_trade_return,
+slippage_bps; exit_reason_counts used to compute session_end_frequency and
+stop_loss_frequency; average_monthly_return derived from CAGR; calmar derived from
+cagr/|max_drawdown|; trades_per_month from n/months).
+Injection mode: when both `_data_provider` and `_backtest_runner` are non-None, cache
+lookup is skipped and injected providers are passed directly to `evaluate_candidate()`.
+Strategy family check always runs regardless of injection.
+Overall result: `PASS` if ≥1 candidate passed; `ERROR` if ≥1 error and none passed;
+`BLOCKED` otherwise.
+`tests/test_cached_candidate_runner.py` added: 61 tests across 9 classes:
+`TestCachedCandidateRunResultDataclass` (5), `TestRunCachedCandidateEvaluationBasics` (7),
+`TestStrategyFamilyWiring` (8), `TestCachePreCheck` (7), `TestInjectedProviders` (8),
+`TestCounters` (7), `TestOverallResult` (5), `TestSafetyFlags` (4),
+`TestMetricsFromInjectedRunner` (4), `TestNoForbiddenImports` (6).
+No broker/API/credential/env access. Fully offline. No trading approved.
+Full suite: 4 604 passed.
+
+**Next PR: S4 — Metrics mapping validation and walk-forward skeleton.**
 
 ### Phase C — Paper trading execution
 
