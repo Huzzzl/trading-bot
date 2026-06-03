@@ -620,6 +620,37 @@ Full suite: 4 446 passed.
 
 **Next PR: S1 candidate universe design (unless code review shows A2-5 needs cleanup).**
 
+### Phase S — Strategy candidate universe and offline discovery
+
+**PR S1 — Strategy candidate universe design — implemented**
+`docs/strategy_candidate_universe_design.md` created. Docs-only. Defines the
+candidate universe for offline strategy discovery. Covers 8 research questions
+(symbol movement, tradable intervals, strategy families, return target framing,
+drawdown constraints, out-of-sample stability). Candidate dimensions: symbol
+buckets (broad ETFs: SPY/QQQ/IWM/DIA; sector ETFs: XLK/XLF/XLE/XLY/XLV/XLI/XLP/XLU;
+liquid mega-caps: AAPL/MSFT/NVDA/AMZN/META/GOOGL/TSLA; volatility/defensive deferred);
+intervals (15m, 30m, 60m, 1d); holding horizons (intraday, 1-day, 1–2-day, 3–5-day
+comparison); strategy families (trend following/breakout, mean reversion, volatility
+contraction/expansion, momentum continuation, gap/overnight, ensemble deferred).
+Initial candidate matrix: 7 groups (A–G) covering broad ETFs, sector ETFs, mega-caps
+across 30m/60m/1d. Evaluation metrics: return (CAGR, average/distribution monthly
+return, worst month), risk (Sharpe, Sortino, max drawdown, Calmar), trade quality
+(win rate, profit factor, exposure, trades per month, average/median trade return),
+execution quality (stop-loss frequency, session-end frequency, slippage sensitivity).
+Acceptance gates: train/test split, walk-forward stability, out-of-sample period, post-cost
+positive, no daily 1d session_end artifact, no low-volatility Sharpe artifact, sufficient
+trade count, drawdown tolerance, liquidity check, no over-fit. Return target framing:
+1%–2% average monthly return is a research objective not a promise; distribution
+over months matters more than mean; broader symbol inclusion justified because
+SPY/QQQ alone may not meet the target under realistic risk constraints. Data
+requirements: cached historical data only; no live dependency; train/test time split;
+no raw data committed. Next step: S2 offline candidate evaluation runner
+(`src/research/candidate_universe.py`, `src/research/candidate_evaluator.py`).
+No src/tests/scripts/config/output/data changes. No broker/API/credential/env
+access. No trading approved.
+
+**Next PR: S2 — Offline candidate evaluation runner.**
+
 ### Phase C — Paper trading execution
 
 - Paper account executor: applies approved signal on Alpaca paper account

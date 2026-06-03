@@ -5408,6 +5408,7 @@ All `src/` modules classified into six labels:
 | A2-3 | Order lifecycle manager skeleton | **Implemented** |
 | A2-4 | Runtime context design and wiring | **Implemented** |
 | A2-5 | Fake end-to-end runtime cycle | **Implemented** |
+| S1 | Strategy candidate universe design | **Implemented** |
 
 ### Direction guard (enforced from this PR forward)
 
