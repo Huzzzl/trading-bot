@@ -2,7 +2,7 @@
 
 Current operational status of the live-readiness gate baseline.
 Last updated: 2026-06-03. Full pre-submit pipeline complete through PR #98.
-Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. PR 10E cache checker (42 tests, 41 tools). PR 10F Yahoo fetch gate design. PR 10G Yahoo fetch tool (43 tests, 42 tools). PR 10H local fetch runbook. PR 10I cached real-data backtest checker (53 tests, 43 tools). PR 10J first real-data results snapshot (docs-only). PR 10K backtest metrics diagnostics (67 tests). PR 10L Sharpe diagnostics in cached checker (61 tests). PR 10N calibrate Sharpe diagnostic low-vol threshold (72 tests). PR 10O calibrated-diagnostics rerun snapshot (docs-only). PR 10M TrendFollowing default param comparison (29 tests). PR 10P trade summary diagnostics design (docs-only). PR 10Q Trade schema characterization tests (60 tests). PR 10R trade_summary_diagnostics helper (78 tests). PR 10S trade diagnostics in cached checker (86 tests). PR 10T trade diagnostics real-data snapshot (docs-only). PR 10U daily-bar session_end policy design (docs-only). PR 10V daily-bar session_end characterization tests (62 tests). PR 10W Phase 1 daily-bar guard (5 780 tests). PR 10X post-Phase-1 snapshot (docs-only). PR 10Y 60m-only evaluation scope design (docs-only). PR 10Z 60m-only cached checker runbook (docs-only). PR R1 codebase inventory and deletion plan (docs-only). PR R2 tool inventory active-vs-archive refactor (384 tests in test_tools_inventory.py; 5 701 full suite). PR R3 archive superseded snapshot docs (5 docs moved to docs/archive/snapshots/; no test changes; 5 701 full suite). PR R4 archive manual tools and delete stubs (10 tools archived, 3 deleted, 13 test files removed, test_tools_inventory.py rewritten to 310 tests; 4 513 full suite). PR R4b legacy active tool dependency reduction plan (docs-only; adds legacy_active_tool_dependency_reduction_plan.md; defines R4c–R4g cluster reduction chain; no test changes; 4 513 full suite). PR R4c remove paper_smoke_check active dependency (test_paper_ledger.py rewritten to use primitives; paper_smoke_check archived; test_paper_smoke_check.py deleted; ACTIVE_TOOLS 30→29; 4 440 full suite). PR S1 strategy candidate universe design (docs-only). PR S2 offline candidate evaluation runner (97 tests; 4 543 full suite). PR S3 wire candidate evaluator to cached backtest path (61 tests; partial wiring: TREND_BREAKOUT only; 4 604 full suite). Test baseline: 4 604 passed.
+Refactor PRs 1–9 complete. PR 10A snapshot. PR 10B scenario design. PR 10C scenario tests (72). PR 10D real-data gate design. PR 10E cache checker (42 tests, 41 tools). PR 10F Yahoo fetch gate design. PR 10G Yahoo fetch tool (43 tests, 42 tools). PR 10H local fetch runbook. PR 10I cached real-data backtest checker (53 tests, 43 tools). PR 10J first real-data results snapshot (docs-only). PR 10K backtest metrics diagnostics (67 tests). PR 10L Sharpe diagnostics in cached checker (61 tests). PR 10N calibrate Sharpe diagnostic low-vol threshold (72 tests). PR 10O calibrated-diagnostics rerun snapshot (docs-only). PR 10M TrendFollowing default param comparison (29 tests). PR 10P trade summary diagnostics design (docs-only). PR 10Q Trade schema characterization tests (60 tests). PR 10R trade_summary_diagnostics helper (78 tests). PR 10S trade diagnostics in cached checker (86 tests). PR 10T trade diagnostics real-data snapshot (docs-only). PR 10U daily-bar session_end policy design (docs-only). PR 10V daily-bar session_end characterization tests (62 tests). PR 10W Phase 1 daily-bar guard (5 780 tests). PR 10X post-Phase-1 snapshot (docs-only). PR 10Y 60m-only evaluation scope design (docs-only). PR 10Z 60m-only cached checker runbook (docs-only). PR R1 codebase inventory and deletion plan (docs-only). PR R2 tool inventory active-vs-archive refactor (384 tests in test_tools_inventory.py; 5 701 full suite). PR R3 archive superseded snapshot docs (5 docs moved to docs/archive/snapshots/; no test changes; 5 701 full suite). PR R4 archive manual tools and delete stubs (10 tools archived, 3 deleted, 13 test files removed, test_tools_inventory.py rewritten to 310 tests; 4 513 full suite). PR R4b legacy active tool dependency reduction plan (docs-only; adds legacy_active_tool_dependency_reduction_plan.md; defines R4c–R4g cluster reduction chain; no test changes; 4 513 full suite). PR R4c remove paper_smoke_check active dependency (test_paper_ledger.py rewritten to use primitives; paper_smoke_check archived; test_paper_smoke_check.py deleted; ACTIVE_TOOLS 30→29; 4 440 full suite). PR S1 strategy candidate universe design (docs-only). PR S2 offline candidate evaluation runner (97 tests; 4 543 full suite). PR S3 wire candidate evaluator to cached backtest path (61 tests; partial wiring: TREND_BREAKOUT only; 4 604 full suite). PR S4 metrics validation and walk-forward skeleton (121 tests; 57 in test_metrics_validation.py, 64 in test_research_walk_forward.py; 4 725 full suite). Test baseline: 4 725 passed.
 
 ---
 
@@ -5835,6 +5835,69 @@ is set to `True` by a real automated runtime state/risk gate.
 - No `src/backtest/`, `src/strategy/`, `src/risk/`, `src/execution/` runtime files changed
 - No `src/main.py` changed; no config, output, data/cache changes
 - No broker calls, no credentials read, no orders, no trading behavior change
+
+### Warning
+
+> **This milestone does not approve automated live trading.**
+> **This milestone does not approve any individual trade.**
+> **No Alpaca endpoint was contacted. No credentials were read.**
+> **Nothing in this repository is financial advice.**
+
+---
+
+## PR S4 Milestone — Metrics Mapping Validation and Walk-Forward Skeleton
+
+**Date:** 2026-06-03
+**Branch:** `claude/hopeful-cray-56Jfr`
+**Full suite:** 4 725 passed (up from 4 604 — 121 new tests: 57 in test_metrics_validation.py, 64 in test_research_walk_forward.py)
+
+### Summary
+
+PR S4 adds two new offline research modules: `metrics_validation.py` (validates
+a `REQUIRED_METRIC_KEYS` dict against S3/S4 research metric conventions) and
+`walk_forward.py` (deterministic rolling walk-forward split generation + fail-closed
+evaluation skeleton). No strategy families added, no parameters optimized, no live
+or paper trading approved, no broker/API/credential/env access.
+
+### Changed files
+
+| File | Action |
+|------|--------|
+| `src/research/metrics_validation.py` | Created — `MetricsValidationResult` dataclass + `validate_candidate_metrics()` |
+| `src/research/walk_forward.py` | Created — `WalkForwardSplit`, `WalkForwardResult` dataclasses + `build_walk_forward_splits()`, `evaluate_walk_forward()` |
+| `tests/test_metrics_validation.py` | Created — 57 tests across 9 classes |
+| `tests/test_research_walk_forward.py` | Created — 64 tests across 8 classes |
+| `docs/automated_strategy_execution_roadmap.md` | PR S4 section added |
+| `docs/live_readiness_status.md` | PR S4 milestone added (this file) |
+
+### Metric conventions enforced by validate_candidate_metrics()
+
+- `max_drawdown ≤ 0` (negative decimal convention; positive value rejected)
+- `total_trades ≥ 0`, `profit_factor ≥ 0`
+- `win_rate`, `exposure_pct`, `session_end_frequency`, `stop_loss_frequency` ∈ [0, 1]
+- All non-None values must be `int` or `float` (not bool), and must be finite
+- Warnings (non-blocking) for always-None S3 fields: `worst_month`, `sortino`, `median_trade_return`, `slippage_bps`
+
+### Walk-forward split design (rolling)
+
+- `train_end = train_start + train_months` (month arithmetic via `_add_months()`)
+- `test_start = train_end + 1 day`
+- `test_end = test_start + test_months − 1 day`
+- Stop when `test_end > end_date`
+- Split ID: `WF{n:03d}_{train_start}_{train_end}_{test_start}_{test_end}`
+- Train windows may overlap; test windows never overlap
+- No evaluator injected → BLOCKED (fail-closed default)
+
+### Safety invariants confirmed
+
+- No `src/backtest/`, `src/strategy/`, `src/risk/`, `src/execution/`, `src/runtime/`, `src/tools` changes
+- No `src/main.py` changed
+- No config, output, data/cache changes
+- No broker calls, no credentials read, no orders, no trading behavior change
+- No strategy families added; TREND_BREAKOUT partial wiring from S3 unchanged
+- No parameter optimization
+- All safety flags always False in all new dataclasses
+- Source scans confirm no `AlpacaBrokerAdapter`, `os.environ`, `requests`, `live_submit` in new files
 
 ### Warning
 
