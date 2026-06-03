@@ -314,6 +314,7 @@ No tests modified. Full suite: 5 701 passed (unchanged from R2).
 | **A2-2** | Automated risk gate skeleton (`src/runtime/risk_gate.py`) | High | **Implemented** |
 | **A2-3** | Order lifecycle manager skeleton (`src/runtime/order_lifecycle.py`) | Medium | **Implemented** |
 | **A2-4** | Runtime context design and wiring (`src/runtime/context.py`, state machine update) | High | **Implemented** |
+| **A2-5** | Fake end-to-end runtime cycle (`src/runtime/fake_cycle.py`) | High | **Implemented** |
 
 **A2-1 — Automated runtime state machine skeleton — implemented**
 `src/runtime/state_machine.py` created. Injectable `risk_gate`, `paper_buy_runner`,
@@ -339,8 +340,17 @@ without state mutation. All safety flags always False. No I/O or broker access.
 dataclasses. `src/runtime/state_machine.py` updated: `lifecycle_manager` parameter,
 `step(context=None)` optional context, three-protocol risk gate evaluation (evaluate/
 one-arg/zero-arg), full lifecycle wiring for submit actions. `tests/test_runtime_context.py`
-added (25 tests). `tests/test_runtime_state_machine.py` updated (26 new tests).
-Full suite: 4 397 passed.
+added (27 tests). `tests/test_runtime_state_machine.py` updated (29 new tests).
+Full suite: 4 402 passed.
+
+**A2-5 — Fake end-to-end runtime cycle — implemented**
+`src/runtime/fake_cycle.py` created: `FakeRuntimeCycleResult` frozen dataclass.
+`run_fake_paper_cycle()` wires AutomatedRiskGate, OrderLifecycleManager, fake runners,
+and AutomatedRuntimeStateMachine into a deterministic four-step offline cycle.
+Halts early on BLOCKED/ERROR. All safety flags always False except
+`order_action_requested` for submit steps. `live_trading_allowed` always False.
+`tests/test_runtime_fake_cycle.py` added: 44 tests across 8 classes.
+Full suite: 4 446 passed.
 
 ### Deferred
 

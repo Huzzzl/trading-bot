@@ -596,7 +596,29 @@ preview actions not calling lifecycle, and `_NO_COID_BLOCKER` constant import.
 No live trading behavior changed. No live gates unfrozen. No broker/API/credential access.
 Fully offline. Full suite: 4 397 passed.
 
-**Next PR: A2-5 — (TBD).**
+**PR A2-5 — Fake end-to-end runtime cycle — implemented**
+`src/runtime/fake_cycle.py` created. `FakeRuntimeCycleResult` frozen dataclass.
+`run_fake_paper_cycle(config, *, symbol, quantity, buy_coid, close_coid,
+_paper_buy_runner, _paper_close_runner)` wires `AutomatedRiskGate(enabled=True,
+rules={max_order_quantity:1, allowed_symbols:["SPY"], allowed_sides:["buy","sell"]})`,
+`OrderLifecycleManager`, local fake paper runners, and `AutomatedRuntimeStateMachine`
+into a deterministic four-step cycle: PREVIEW_BUY → SUBMIT_BUY → PREVIEW_CLOSE →
+SUBMIT_CLOSE. Halts early on BLOCKED or ERROR. `_AdaptedGate` bridges
+`RuntimeContext` to `AutomatedRiskGate.evaluate()` (which expects a Mapping).
+All broker/credential/network flags always False. `order_action_requested` is True
+for fake submit steps. `live_trading_allowed` always False. No file I/O, no broker
+or API access, no env vars, no network.
+`tests/test_runtime_fake_cycle.py` added: 44 tests across 8 classes covering
+result dataclass, happy-path PASS (4 steps, 2 lifecycle records reaching SUBMITTED),
+safety flags, risk gate blocking by quantity/symbol, missing coid blocking, fake runner
+exception → ERROR + MARK_FAILED lifecycle state, context guard (allow_live_trading=True
+raises), `_context_to_risk_dict` helper, no-forbidden-import scan, and determinism.
+No live trading behavior changed. No live gates unfrozen. No broker/API/credential/env
+access. Fully offline. This validates runtime skeleton integration only; it does not
+approve paper or live automation.
+Full suite: 4 446 passed.
+
+**Next PR: S1 candidate universe design (unless code review shows A2-5 needs cleanup).**
 
 ### Phase C — Paper trading execution
 
