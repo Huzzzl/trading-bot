@@ -808,7 +808,7 @@ rows. "Not yet implemented" wording removed from all docstrings.
 `TestDateRangeSlicingWiring` verifying date wiring from split to runner,
 BLOCKED propagation on empty window, per-split unique dates, and stale-wording
 removal. Total: 49 tests.
-Full suite: 4 800 passed.
+Full suite: 4 789 passed.
 
 **Next PR: S6 — Offline research report schema/snapshot.**
 

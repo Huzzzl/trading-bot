@@ -851,6 +851,27 @@ class TestSliceCachedDf:
         out, _ = _slice_cached_df(df, "2020-01-01", "2020-12-31", "SPY", "1d")
         assert out is not df
 
+    def test_invalid_start_date_returns_error(self):
+        df = self._df()
+        out, err = _slice_cached_df(df, "not-a-date", None, "SPY", "1d")
+        assert err is not None
+        assert "invalid date range" in err
+        assert "SPY" in err
+        assert "1d" in err
+
+    def test_invalid_end_date_returns_error(self):
+        df = self._df()
+        out, err = _slice_cached_df(df, None, "2020-13-45", "SPY", "1d")
+        assert err is not None
+        assert "invalid date range" in err
+
+    def test_invalid_date_no_exception_escapes(self):
+        df = self._df()
+        try:
+            _slice_cached_df(df, "bad", "also-bad", "SPY", "1d")
+        except Exception as exc:
+            pytest.fail(f"_slice_cached_df raised unexpectedly: {exc}")
+
 
 # ---------------------------------------------------------------------------
 # TestDateRangeSlicingIntegration
@@ -943,3 +964,52 @@ class TestDateRangeSlicingIntegration:
         )
         # Must not BLOCKED on "no cached rows" (there are rows in that range)
         assert "no cached rows in requested date range" not in (r.results[0].blocker or "")
+
+    def test_invalid_start_date_gives_blocked(self, tmp_path):
+        self._make_csv(tmp_path)
+        spec = _make_trend_spec(interval="1d")
+        r = run_cached_candidate_evaluation(
+            [spec],
+            cache_dir=tmp_path,
+            _start_date="not-a-date",
+        )
+        assert r.result == "BLOCKED"
+        assert r.results[0].result == "BLOCKED"
+        assert "invalid date range" in (r.results[0].blocker or "")
+
+    def test_invalid_end_date_gives_blocked(self, tmp_path):
+        self._make_csv(tmp_path)
+        spec = _make_trend_spec(interval="1d")
+        r = run_cached_candidate_evaluation(
+            [spec],
+            cache_dir=tmp_path,
+            _end_date="2020-99-99",
+        )
+        assert r.result == "BLOCKED"
+        assert r.results[0].result == "BLOCKED"
+        assert "invalid date range" in (r.results[0].blocker or "")
+
+    def test_invalid_date_no_exception_escapes_integration(self, tmp_path):
+        self._make_csv(tmp_path)
+        spec = _make_trend_spec(interval="1d")
+        try:
+            run_cached_candidate_evaluation(
+                [spec],
+                cache_dir=tmp_path,
+                _start_date="bad-date",
+                _end_date="also-bad",
+            )
+        except Exception as exc:
+            pytest.fail(f"run_cached_candidate_evaluation raised unexpectedly: {exc}")
+
+    def test_invalid_date_blocked_result_has_required_metric_keys(self, tmp_path):
+        self._make_csv(tmp_path)
+        spec = _make_trend_spec(interval="1d")
+        r = run_cached_candidate_evaluation(
+            [spec],
+            cache_dir=tmp_path,
+            _start_date="not-a-date",
+        )
+        assert r.results[0].result == "BLOCKED"
+        for key in REQUIRED_METRIC_KEYS:
+            assert key in r.results[0].metrics

@@ -175,16 +175,19 @@ def _slice_cached_df(
             f"cached data has no DatetimeIndex for date slicing ({symbol}/{interval})"
         )
     index_dates = df.index.date
-    if start_date is not None and end_date is not None:
-        s = datetime.date.fromisoformat(start_date)
-        e = datetime.date.fromisoformat(end_date)
-        mask = (index_dates >= s) & (index_dates <= e)
-    elif start_date is not None:
-        s = datetime.date.fromisoformat(start_date)
-        mask = index_dates >= s
-    else:
-        e = datetime.date.fromisoformat(end_date)
-        mask = index_dates <= e
+    try:
+        if start_date is not None and end_date is not None:
+            s = datetime.date.fromisoformat(start_date)
+            e = datetime.date.fromisoformat(end_date)
+            mask = (index_dates >= s) & (index_dates <= e)
+        elif start_date is not None:
+            s = datetime.date.fromisoformat(start_date)
+            mask = index_dates >= s
+        else:
+            e = datetime.date.fromisoformat(end_date)
+            mask = index_dates <= e
+    except ValueError as exc:
+        return df, f"invalid date range for {symbol}/{interval}: {exc}"
     return df.loc[mask].copy(), None
 
 
