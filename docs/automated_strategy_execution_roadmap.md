@@ -778,10 +778,6 @@ that calls `run_cached_candidate_evaluation([candidate], max_candidates=1)`.
 (6) Aggregates: ERROR > BLOCKED > PASS. A PASS split with validation BLOCKED
 contributes BLOCKED to the aggregate without mutating the original frozen result.
 
-Split-date slicing NOT yet implemented in S5. The default evaluator runs the
-full cached backtest for every split regardless of train/test boundaries.
-S5b or S6 will add per-split date filtering when needed.
-
 `tests/test_cached_walk_forward_runner.py` added: 45 tests across 10 classes
 covering `CachedWalkForwardRunResult` dataclass, invalid walk-forward config,
 no splits, injected evaluator (call count, order, candidate_id, split counts),
@@ -791,8 +787,30 @@ default path (cache miss → BLOCKED, unsupported family → BLOCKED), safety
 flags (always False), determinism, and no-forbidden-imports.
 Full suite: 4 770 passed.
 
-**Next PR: S5b — Add per-split date slicing to cached walk-forward evaluator**
-or S6 — Offline research report schema/snapshot.
+**PR S5b — Add per-split date slicing to cached walk-forward evaluator — implemented**
+`src/research/cached_candidate_runner.py` extended. `_slice_cached_df()` helper
+added: slices a DatetimeIndex DataFrame to `[start_date, end_date]` inclusive
+by `.date` comparison. Non-DatetimeIndex → BLOCKED. Empty result → BLOCKED.
+`run_cached_candidate_evaluation()` gains `_start_date`/`_end_date` params
+(ISO-8601 strings, both optional). Slicing applied after cache-file load (step
+4.5); injection mode (`_data_provider` + `_backtest_runner` both provided)
+bypasses slicing entirely.
+
+`src/research/cached_walk_forward_runner.py` updated. Default split evaluator
+now passes `_start_date=split.test_start` and `_end_date=split.test_end` into
+`run_cached_candidate_evaluation()` so each split evaluates only its test-window
+rows. "Not yet implemented" wording removed from all docstrings.
+
+`tests/test_cached_candidate_runner.py`: 15 tests added across 2 new classes
+(`TestSliceCachedDf` — direct helper tests; `TestDateRangeSlicingIntegration`
+— end-to-end via tmp_path CSV files). Total: 76 tests.
+`tests/test_cached_walk_forward_runner.py`: 4 tests added in
+`TestDateRangeSlicingWiring` verifying date wiring from split to runner,
+BLOCKED propagation on empty window, per-split unique dates, and stale-wording
+removal. Total: 49 tests.
+Full suite: 4 800 passed.
+
+**Next PR: S6 — Offline research report schema/snapshot.**
 
 ### Phase C — Paper trading execution
 

@@ -16,6 +16,14 @@ Cache miss policy:
   If no matching .parquet or .csv file exists under cache_dir for a
   (symbol, interval) pair → BLOCKED("no cache file found for {symbol}/{interval}")
 
+Date-range slicing (S5b):
+  Optional _start_date / _end_date parameters slice the loaded DataFrame to
+  the requested window before building providers and running the backtest.
+  Requires a DatetimeIndex; if absent → BLOCKED.
+  If no rows remain after slicing → BLOCKED.
+  Injection mode (both _data_provider and _backtest_runner provided) bypasses
+  cache entirely; date-range slicing does not apply.
+
 Safety flags:
   broker_calls_made, credentials_read, network_calls_made,
   order_action_requested, live_trading_allowed — all always False.
@@ -26,6 +34,7 @@ network libraries, or execution layers. No order submission. No live gates.
 
 from __future__ import annotations
 
+import datetime
 import logging
 import pathlib
 import re
@@ -145,6 +154,38 @@ def _load_cache_file(path: pathlib.Path) -> pd.DataFrame:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
     return df
+
+
+def _slice_cached_df(
+    df: pd.DataFrame,
+    start_date: str | None,
+    end_date: str | None,
+    symbol: str,
+    interval: str,
+) -> tuple[pd.DataFrame, str | None]:
+    """Slice df to [start_date, end_date] inclusive by DatetimeIndex dates.
+
+    Returns (sliced_df, None) on success, (df, error_msg) on failure.
+    Does not mutate df.
+    """
+    if start_date is None and end_date is None:
+        return df, None
+    if not isinstance(df.index, pd.DatetimeIndex):
+        return df, (
+            f"cached data has no DatetimeIndex for date slicing ({symbol}/{interval})"
+        )
+    index_dates = df.index.date
+    if start_date is not None and end_date is not None:
+        s = datetime.date.fromisoformat(start_date)
+        e = datetime.date.fromisoformat(end_date)
+        mask = (index_dates >= s) & (index_dates <= e)
+    elif start_date is not None:
+        s = datetime.date.fromisoformat(start_date)
+        mask = index_dates >= s
+    else:
+        e = datetime.date.fromisoformat(end_date)
+        mask = index_dates <= e
+    return df.loc[mask].copy(), None
 
 
 # ---------------------------------------------------------------------------
@@ -317,6 +358,8 @@ def run_cached_candidate_evaluation(
     max_candidates: int | None = None,
     _data_provider=None,
     _backtest_runner=None,
+    _start_date: str | None = None,
+    _end_date: str | None = None,
 ) -> CachedCandidateRunResult:
     """Evaluate candidates against locally cached market data.
 
@@ -336,6 +379,14 @@ def run_cached_candidate_evaluation(
     _backtest_runner:
         Test injection: callable(data, candidate) → metrics dict.
         Only active when _data_provider is also non-None.
+    _start_date:
+        Optional ISO-8601 date string. When provided along with cache lookup
+        (not injection mode), the loaded DataFrame is sliced to rows on or
+        after this date.
+    _end_date:
+        Optional ISO-8601 date string. When provided along with cache lookup
+        (not injection mode), the loaded DataFrame is sliced to rows on or
+        before this date.
 
     Returns
     -------
@@ -349,6 +400,10 @@ def run_cached_candidate_evaluation(
     Strategy family wiring is partial (S3 scope):
       TREND_BREAKOUT → "trend_following".
       All other families → BLOCKED immediately.
+
+    Date-range slicing applies to the cache path only. When both
+    _data_provider and _backtest_runner are provided (injection mode),
+    slicing is bypassed entirely.
 
     This function never reads credentials, contacts brokers, makes network
     calls, or submits orders.
@@ -420,6 +475,24 @@ def run_cached_candidate_evaluation(
                 _make_blocked_result(candidate, "cache file contains no rows")
             )
             continue
+
+        # 4.5. Apply date-range slicing if requested.
+        if _start_date is not None or _end_date is not None:
+            df, slice_err = _slice_cached_df(
+                df, _start_date, _end_date, candidate.symbol, candidate.interval
+            )
+            if slice_err is not None:
+                all_results.append(_make_blocked_result(candidate, slice_err))
+                continue
+            if len(df) == 0:
+                all_results.append(
+                    _make_blocked_result(
+                        candidate,
+                        f"no cached rows in requested date range for"
+                        f" {candidate.symbol}/{candidate.interval}",
+                    )
+                )
+                continue
 
         # 5. Build real data/backtest providers from the loaded DataFrame
         real_dp, real_br = _build_real_providers(df, strategy_name, candidate.interval)
