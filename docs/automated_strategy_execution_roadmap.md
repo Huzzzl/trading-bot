@@ -755,8 +755,44 @@ Note: `tests/test_walk_forward.py` is a pre-existing file testing
 `src/experiments/walk_forward_runner.py` (a different, older module).
 Full suite: 4 725 passed.
 
-**Next PR: S5 — Offline walk-forward evaluation wiring (connect cached runner to walk-forward)**
-or Phase C (paper trading) — to be determined by research findings.
+**PR S5 — Wire walk-forward skeleton to cached candidate evaluation — implemented**
+`src/research/cached_walk_forward_runner.py` created. Fully offline, no broker/
+API/credential/env/network access. No order submission. No parameter optimization.
+No strategy family expansion — TREND_BREAKOUT partial wiring from S3 unchanged.
+
+`CachedWalkForwardRunResult` frozen dataclass: `result`, `blocker`, `candidate_id`,
+`splits_requested`, `splits_evaluated`, `split_results`
+(tuple of `CandidateEvaluationResult`), `validation_results`
+(tuple of `MetricsValidationResult`), and 5 safety flags (all always False).
+
+`run_cached_walk_forward_evaluation(candidate, *, start_date, end_date,
+train_months, test_months, step_months, cache_dir, _split_evaluator)`:
+(1) Calls `build_walk_forward_splits()` — ValueError (e.g. `step_months <
+test_months`) → BLOCKED("invalid walk-forward configuration: ...").
+(2) No splits generated → BLOCKED("no walk-forward splits generated ...").
+(3) Resolves split evaluator: injected `_split_evaluator` or default closure
+that calls `run_cached_candidate_evaluation([candidate], max_candidates=1)`.
+(4) Calls `evaluate_walk_forward()` — evaluate-all policy; exceptions per split
+→ ERROR for that split; all safety flags always False.
+(5) Validates each split result's metrics with `validate_candidate_metrics()`.
+(6) Aggregates: ERROR > BLOCKED > PASS. A PASS split with validation BLOCKED
+contributes BLOCKED to the aggregate without mutating the original frozen result.
+
+Split-date slicing NOT yet implemented in S5. The default evaluator runs the
+full cached backtest for every split regardless of train/test boundaries.
+S5b or S6 will add per-split date filtering when needed.
+
+`tests/test_cached_walk_forward_runner.py` added: 45 tests across 10 classes
+covering `CachedWalkForwardRunResult` dataclass, invalid walk-forward config,
+no splits, injected evaluator (call count, order, candidate_id, split counts),
+aggregation (PASS/BLOCKED/ERROR/evaluate-all), metrics validation (invalid
+metrics → BLOCKED, validation count matches splits, None metrics → PASS),
+default path (cache miss → BLOCKED, unsupported family → BLOCKED), safety
+flags (always False), determinism, and no-forbidden-imports.
+Full suite: 4 770 passed.
+
+**Next PR: S5b — Add per-split date slicing to cached walk-forward evaluator**
+or S6 — Offline research report schema/snapshot.
 
 ### Phase C — Paper trading execution
 
