@@ -14,8 +14,14 @@ import inspect
 
 import pytest
 
+import datetime
+import pathlib
+
+import pandas as pd
+
 from src.research.cached_candidate_runner import (
     CachedCandidateRunResult,
+    _slice_cached_df,
     run_cached_candidate_evaluation,
 )
 from src.research.candidate_evaluator import REQUIRED_METRIC_KEYS
@@ -737,3 +743,273 @@ class TestNoForbiddenImports:
 
     def test_no_broker_calls_true(self):
         assert "broker_calls_made=True" not in self._src()
+
+
+# ---------------------------------------------------------------------------
+# Helpers for S5b tests
+# ---------------------------------------------------------------------------
+
+def _make_tz_aware_df(dates: list[str]) -> pd.DataFrame:
+    """Build a minimal OHLCV DataFrame with a tz-aware DatetimeIndex."""
+    idx = pd.to_datetime(dates, utc=True).tz_convert("America/New_York")
+    return pd.DataFrame(
+        {
+            "open": [100.0] * len(dates),
+            "high": [105.0] * len(dates),
+            "low": [95.0] * len(dates),
+            "close": [102.0] * len(dates),
+            "volume": [1000] * len(dates),
+        },
+        index=idx,
+    )
+
+
+def _write_csv(tmp_path: pathlib.Path, symbol: str, interval: str, df: pd.DataFrame) -> pathlib.Path:
+    path = tmp_path / f"{symbol}_2020-01-01_{interval}.csv"
+    df.to_csv(path)
+    return path
+
+
+# ---------------------------------------------------------------------------
+# TestSliceCachedDf
+# ---------------------------------------------------------------------------
+
+class TestSliceCachedDf:
+    """Direct unit tests for _slice_cached_df()."""
+
+    def _df(self) -> pd.DataFrame:
+        dates = [
+            "2020-01-02", "2020-02-03", "2020-03-04",
+            "2020-04-01", "2020-05-01",
+        ]
+        return _make_tz_aware_df(dates)
+
+    def test_no_dates_returns_original(self):
+        df = self._df()
+        out, err = _slice_cached_df(df, None, None, "SPY", "1d")
+        assert err is None
+        assert len(out) == len(df)
+
+    def test_start_date_only(self):
+        df = self._df()
+        out, err = _slice_cached_df(df, "2020-03-01", None, "SPY", "1d")
+        assert err is None
+        assert len(out) == 3  # 2020-03-04, 2020-04-01, 2020-05-01
+
+    def test_start_date_only_count(self):
+        df = self._df()
+        # "2020-04-01" UTC → "2020-03-31" NY date; only "2020-05-01" UTC
+        # (NY date 2020-04-30) satisfies >= 2020-04-01
+        out, err = _slice_cached_df(df, "2020-04-01", None, "SPY", "1d")
+        assert err is None
+        assert len(out) == 1
+
+    def test_end_date_only(self):
+        df = self._df()
+        out, err = _slice_cached_df(df, None, "2020-02-28", "SPY", "1d")
+        assert err is None
+        assert len(out) == 2  # 2020-01-02, 2020-02-03
+
+    def test_start_and_end(self):
+        df = self._df()
+        # UTC dates shift to NY: "2020-02-03" UTC → NY 2020-02-02,
+        # "2020-03-04" UTC → NY 2020-03-03, "2020-04-01" UTC → NY 2020-03-31.
+        # All three NY dates fall in [2020-02-01, 2020-03-31].
+        out, err = _slice_cached_df(df, "2020-02-01", "2020-03-31", "SPY", "1d")
+        assert err is None
+        assert len(out) == 3
+
+    def test_inclusive_boundaries(self):
+        df = self._df()
+        # "2020-01-02" UTC → NY date 2020-01-01; slice on that NY date.
+        out, err = _slice_cached_df(df, "2020-01-01", "2020-01-01", "SPY", "1d")
+        assert err is None
+        assert len(out) == 1
+
+    def test_empty_result_no_error(self):
+        df = self._df()
+        out, err = _slice_cached_df(df, "2030-01-01", "2030-12-31", "SPY", "1d")
+        assert err is None
+        assert len(out) == 0
+
+    def test_non_datetimeindex_returns_error(self):
+        df = pd.DataFrame({"close": [1.0, 2.0]}, index=[0, 1])
+        out, err = _slice_cached_df(df, "2020-01-01", None, "SPY", "1d")
+        assert err is not None
+        assert "DatetimeIndex" in err
+        assert "SPY" in err
+        assert "1d" in err
+
+    def test_does_not_mutate_original(self):
+        df = self._df()
+        original_len = len(df)
+        _slice_cached_df(df, "2020-04-01", "2020-12-31", "SPY", "1d")
+        assert len(df) == original_len
+
+    def test_returns_copy(self):
+        df = self._df()
+        out, _ = _slice_cached_df(df, "2020-01-01", "2020-12-31", "SPY", "1d")
+        assert out is not df
+
+    def test_invalid_start_date_returns_error(self):
+        df = self._df()
+        out, err = _slice_cached_df(df, "not-a-date", None, "SPY", "1d")
+        assert err is not None
+        assert "invalid date range" in err
+        assert "SPY" in err
+        assert "1d" in err
+
+    def test_invalid_end_date_returns_error(self):
+        df = self._df()
+        out, err = _slice_cached_df(df, None, "2020-13-45", "SPY", "1d")
+        assert err is not None
+        assert "invalid date range" in err
+
+    def test_invalid_date_no_exception_escapes(self):
+        df = self._df()
+        try:
+            _slice_cached_df(df, "bad", "also-bad", "SPY", "1d")
+        except Exception as exc:
+            pytest.fail(f"_slice_cached_df raised unexpectedly: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# TestDateRangeSlicingIntegration
+# ---------------------------------------------------------------------------
+
+class TestDateRangeSlicingIntegration:
+    """Integration tests: _start_date/_end_date flow through run_cached_candidate_evaluation()."""
+
+    def _make_csv(self, tmp_path: pathlib.Path) -> pathlib.Path:
+        dates = [
+            "2020-01-02", "2020-01-03", "2020-02-03",
+            "2020-03-02", "2020-04-01", "2020-05-01",
+        ]
+        df = _make_tz_aware_df(dates)
+        return _write_csv(tmp_path, "SPY", "1d", df)
+
+    def test_no_slice_no_date_params_uses_full_df(self, tmp_path):
+        # When no _start_date/_end_date given, no slicing occurs.
+        # We verify the run completes (BLOCKED on strategy/data, not on slicing).
+        self._make_csv(tmp_path)
+        spec = _make_trend_spec(interval="1d")
+        r = run_cached_candidate_evaluation([spec], cache_dir=tmp_path)
+        # Result is whatever the real backtest returns; slicing blocker must not appear.
+        for res in r.results:
+            assert "no cached rows in requested date range" not in (res.blocker or "")
+
+    def test_date_range_outside_cache_gives_blocked(self, tmp_path):
+        self._make_csv(tmp_path)
+        spec = _make_trend_spec(interval="1d")
+        r = run_cached_candidate_evaluation(
+            [spec],
+            cache_dir=tmp_path,
+            _start_date="2025-01-01",
+            _end_date="2025-12-31",
+        )
+        assert r.result == "BLOCKED"
+        assert r.results[0].result == "BLOCKED"
+        assert "no cached rows in requested date range" in (r.results[0].blocker or "")
+        assert "SPY" in (r.results[0].blocker or "")
+
+    def test_injection_mode_ignores_dates(self):
+        """With both _data_provider and _backtest_runner, date params are ignored."""
+        called = []
+
+        def dp(symbol, iv):
+            called.append("dp")
+            return _fake_data_provider(symbol, iv)
+
+        def runner(data, candidate):
+            called.append("runner")
+            return _fake_backtest_runner(data, candidate)
+
+        spec = _make_trend_spec()
+        r = run_cached_candidate_evaluation(
+            [spec],
+            _data_provider=dp,
+            _backtest_runner=runner,
+            _start_date="2020-01-01",
+            _end_date="2020-06-30",
+        )
+        assert "dp" in called
+        assert "runner" in called
+        assert r.result == "PASS"
+
+    def test_slicing_does_not_affect_safety_flags(self, tmp_path):
+        self._make_csv(tmp_path)
+        spec = _make_trend_spec(interval="1d")
+        r = run_cached_candidate_evaluation(
+            [spec],
+            cache_dir=tmp_path,
+            _start_date="2025-01-01",
+            _end_date="2025-12-31",
+        )
+        assert r.broker_calls_made is False
+        assert r.credentials_read is False
+        assert r.network_calls_made is False
+        assert r.order_action_requested is False
+        assert r.live_trading_allowed is False
+
+    def test_date_range_with_partial_overlap(self, tmp_path):
+        # Slice to a window that includes some (but not all) rows.
+        self._make_csv(tmp_path)
+        spec = _make_trend_spec(interval="1d")
+        # The CSV has NY dates: 2020-01-01, 2020-01-02, 2020-02-02, 2020-03-01, 2020-03-31, 2020-04-30
+        # Slice to include only NY dates >= 2020-03-01
+        r = run_cached_candidate_evaluation(
+            [spec],
+            cache_dir=tmp_path,
+            _start_date="2020-03-01",
+        )
+        # Must not BLOCKED on "no cached rows" (there are rows in that range)
+        assert "no cached rows in requested date range" not in (r.results[0].blocker or "")
+
+    def test_invalid_start_date_gives_blocked(self, tmp_path):
+        self._make_csv(tmp_path)
+        spec = _make_trend_spec(interval="1d")
+        r = run_cached_candidate_evaluation(
+            [spec],
+            cache_dir=tmp_path,
+            _start_date="not-a-date",
+        )
+        assert r.result == "BLOCKED"
+        assert r.results[0].result == "BLOCKED"
+        assert "invalid date range" in (r.results[0].blocker or "")
+
+    def test_invalid_end_date_gives_blocked(self, tmp_path):
+        self._make_csv(tmp_path)
+        spec = _make_trend_spec(interval="1d")
+        r = run_cached_candidate_evaluation(
+            [spec],
+            cache_dir=tmp_path,
+            _end_date="2020-99-99",
+        )
+        assert r.result == "BLOCKED"
+        assert r.results[0].result == "BLOCKED"
+        assert "invalid date range" in (r.results[0].blocker or "")
+
+    def test_invalid_date_no_exception_escapes_integration(self, tmp_path):
+        self._make_csv(tmp_path)
+        spec = _make_trend_spec(interval="1d")
+        try:
+            run_cached_candidate_evaluation(
+                [spec],
+                cache_dir=tmp_path,
+                _start_date="bad-date",
+                _end_date="also-bad",
+            )
+        except Exception as exc:
+            pytest.fail(f"run_cached_candidate_evaluation raised unexpectedly: {exc}")
+
+    def test_invalid_date_blocked_result_has_required_metric_keys(self, tmp_path):
+        self._make_csv(tmp_path)
+        spec = _make_trend_spec(interval="1d")
+        r = run_cached_candidate_evaluation(
+            [spec],
+            cache_dir=tmp_path,
+            _start_date="not-a-date",
+        )
+        assert r.results[0].result == "BLOCKED"
+        for key in REQUIRED_METRIC_KEYS:
+            assert key in r.results[0].metrics

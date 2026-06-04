@@ -1,17 +1,16 @@
 """
 research/cached_walk_forward_runner.py
 ----------------------------------------
-S5: Wire walk-forward skeleton to cached candidate evaluation.
+S5/S5b: Wire walk-forward skeleton to cached candidate evaluation with
+per-split date slicing.
 
 Connects CandidateSpec, WalkForwardSplit, evaluate_walk_forward(),
 run_cached_candidate_evaluation(), and validate_candidate_metrics()
 through an injected per-split evaluator.
 
-Split-date slicing is NOT yet implemented in S5. The default split
-evaluator calls run_cached_candidate_evaluation() with the full cached
-file for each split; the backtest runs over the entire cached date range
-regardless of train/test boundaries. A follow-on PR (S5b or S6) will
-add per-split date filtering.
+The default split evaluator passes split.test_start and split.test_end
+as date-range bounds to run_cached_candidate_evaluation(), so each split
+evaluates only the rows within its test window.
 
 Safety flags:
   broker_calls_made, credentials_read, network_calls_made,
@@ -109,9 +108,8 @@ def _make_blocked_eval_result(
 def _make_default_split_evaluator(cache_dir: pathlib.Path | None):
     """Return a per-split evaluator backed by run_cached_candidate_evaluation().
 
-    The evaluator delegates to the S3 cached runner for each split.
-    Split-date slicing is not yet implemented: the full cached file is used
-    for every split regardless of train/test boundaries.
+    Passes split.test_start and split.test_end as date-range bounds so each
+    split evaluates only its test window rows from the cached file.
     """
     def evaluator(
         candidate: CandidateSpec,
@@ -121,6 +119,8 @@ def _make_default_split_evaluator(cache_dir: pathlib.Path | None):
             [candidate],
             cache_dir=cache_dir,
             max_candidates=1,
+            _start_date=split.test_start,
+            _end_date=split.test_end,
         )
         if run_result.results:
             return run_result.results[0]
@@ -193,8 +193,9 @@ def run_cached_walk_forward_evaluation(
 
     Aggregation priority: ERROR > BLOCKED > PASS.
 
-    Split-date slicing is not yet implemented (S5 scope). The default
-    evaluator runs the full cached backtest for every split.
+    The default split evaluator passes split.test_start and split.test_end
+    to run_cached_candidate_evaluation() so each split uses only its test
+    window rows from the cached file.
 
     This function never reads credentials, contacts brokers, makes network
     calls, submits orders, or writes files.

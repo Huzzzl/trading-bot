@@ -21,6 +21,10 @@ import inspect
 
 import pytest
 
+import pathlib
+
+import pandas as pd
+
 from src.research.candidate_evaluator import REQUIRED_METRIC_KEYS, CandidateEvaluationResult
 from src.research.candidate_universe import (
     CandidateSpec,
@@ -29,9 +33,11 @@ from src.research.candidate_universe import (
 )
 from src.research.cached_walk_forward_runner import (
     CachedWalkForwardRunResult,
+    _make_default_split_evaluator,
     run_cached_walk_forward_evaluation,
 )
 from src.research.metrics_validation import MetricsValidationResult
+from src.research.walk_forward import WalkForwardSplit
 
 
 # ---------------------------------------------------------------------------
@@ -607,3 +613,152 @@ class TestNoForbiddenImports:
 
     def test_no_optimize(self):
         assert "optimize" not in self._src()
+
+
+# ---------------------------------------------------------------------------
+# TestDateRangeSlicingWiring
+# ---------------------------------------------------------------------------
+
+def _make_tz_df(dates: list[str]) -> pd.DataFrame:
+    idx = pd.to_datetime(dates, utc=True).tz_convert("America/New_York")
+    return pd.DataFrame(
+        {
+            "open": [100.0] * len(dates),
+            "high": [105.0] * len(dates),
+            "low": [95.0] * len(dates),
+            "close": [102.0] * len(dates),
+            "volume": [1000] * len(dates),
+        },
+        index=idx,
+    )
+
+
+def _make_split(test_start: str, test_end: str) -> WalkForwardSplit:
+    return WalkForwardSplit(
+        split_id="WF001_2019-01-01_2019-12-31_2020-01-01_2020-03-31",
+        train_start="2019-01-01",
+        train_end="2019-12-31",
+        test_start=test_start,
+        test_end=test_end,
+    )
+
+
+class TestDateRangeSlicingWiring:
+    """Verify the default split evaluator wires split dates into the cached runner."""
+
+    def test_split_evaluator_passes_test_dates(self):
+        """_make_default_split_evaluator passes split.test_start and test_end."""
+        received_starts = []
+        received_ends = []
+
+        original_runner = __import__(
+            "src.research.cached_candidate_runner",
+            fromlist=["run_cached_candidate_evaluation"],
+        ).run_cached_candidate_evaluation
+
+        import src.research.cached_walk_forward_runner as _mod
+
+        captured = {}
+
+        def fake_run(candidates, *, cache_dir=None, max_candidates=None,
+                     _data_provider=None, _backtest_runner=None,
+                     _start_date=None, _end_date=None):
+            captured["start"] = _start_date
+            captured["end"] = _end_date
+            spec = list(candidates)[0]
+            from src.research.cached_candidate_runner import CachedCandidateRunResult
+            from src.research.candidate_evaluator import CandidateEvaluationResult, REQUIRED_METRIC_KEYS
+            eval_result = CandidateEvaluationResult(
+                candidate_id=spec.candidate_id,
+                symbol=spec.symbol,
+                interval=spec.interval,
+                strategy_family=spec.strategy_family.value,
+                result="BLOCKED",
+                blocker="fake",
+                metrics={k: None for k in REQUIRED_METRIC_KEYS},
+                broker_calls_made=False,
+                credentials_read=False,
+                network_calls_made=False,
+                order_action_requested=False,
+                live_trading_allowed=False,
+            )
+            return CachedCandidateRunResult(
+                result="BLOCKED",
+                blocker="fake",
+                candidates_requested=1,
+                candidates_evaluated=0,
+                candidates_passed=0,
+                candidates_blocked=1,
+                candidates_error=0,
+                results=(eval_result,),
+                broker_calls_made=False,
+                credentials_read=False,
+                network_calls_made=False,
+                order_action_requested=False,
+                live_trading_allowed=False,
+            )
+
+        original = _mod.run_cached_candidate_evaluation
+        _mod.run_cached_candidate_evaluation = fake_run
+        try:
+            evaluator = _make_default_split_evaluator(None)
+            split = _make_split("2020-01-01", "2020-03-31")
+            spec = _make_spec()
+            evaluator(spec, split)
+            assert captured.get("start") == "2020-01-01"
+            assert captured.get("end") == "2020-03-31"
+        finally:
+            _mod.run_cached_candidate_evaluation = original
+
+    def test_default_split_evaluator_blocked_on_empty_window(self, tmp_path):
+        """Default split evaluator propagates BLOCKED when no rows in test window."""
+        dates = ["2020-01-02", "2020-01-03", "2020-02-03"]
+        df = _make_tz_df(dates)
+        path = tmp_path / "SPY_2020-01-01_1d.csv"
+        df.to_csv(path)
+
+        spec = CandidateSpec(
+            candidate_id="SPY_1d_trend_breakout_one_to_two_days",
+            symbol="SPY",
+            interval="1d",
+            strategy_family=StrategyFamily.TREND_BREAKOUT,
+            holding_horizon=HoldingHorizon.ONE_TO_TWO_DAYS,
+            group="A",
+        )
+        evaluator = _make_default_split_evaluator(tmp_path)
+        # Split window with no matching data
+        split = _make_split("2025-01-01", "2025-03-31")
+        result = evaluator(spec, split)
+        assert result.result == "BLOCKED"
+        assert "no cached rows in requested date range" in (result.blocker or "")
+
+    def test_run_cached_walk_forward_split_dates_injected(self):
+        """Each split injected evaluator receives split-specific dates."""
+        received_splits = []
+
+        def split_evaluator(candidate, split):
+            received_splits.append((split.test_start, split.test_end))
+            return _make_pass_result(candidate)
+
+        spec = _make_spec()
+        r = run_cached_walk_forward_evaluation(
+            spec,
+            start_date="2020-01-01",
+            end_date="2021-12-31",
+            train_months=12,
+            test_months=3,
+            step_months=3,
+            _split_evaluator=split_evaluator,
+        )
+        # 3 splits expected (based on _SPLIT_KWARGS in existing tests)
+        assert len(received_splits) == r.splits_evaluated
+        # Dates must differ between splits
+        starts = [s[0] for s in received_splits]
+        assert len(set(starts)) == len(starts), "split test_start dates should be unique"
+
+    def test_no_split_date_slicing_not_yet_implemented_text(self):
+        """Ensure stale 'not yet implemented' wording is removed from module."""
+        import src.research.cached_walk_forward_runner as _mod
+        src_text = inspect.getsource(_mod)
+        assert "not yet implemented" not in src_text.lower()
+        assert "NOT yet implemented" not in src_text
