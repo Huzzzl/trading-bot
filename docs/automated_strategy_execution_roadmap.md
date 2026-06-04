@@ -801,14 +801,15 @@ now passes `_start_date=split.test_start` and `_end_date=split.test_end` into
 `run_cached_candidate_evaluation()` so each split evaluates only its test-window
 rows. "Not yet implemented" wording removed from all docstrings.
 
-`tests/test_cached_candidate_runner.py`: 15 tests added across 2 new classes
-(`TestSliceCachedDf` — direct helper tests; `TestDateRangeSlicingIntegration`
-— end-to-end via tmp_path CSV files). Total: 76 tests.
+`tests/test_cached_candidate_runner.py`: 22 tests added across 2 new classes
+(`TestSliceCachedDf` — direct helper tests including invalid-date cases;
+`TestDateRangeSlicingIntegration` — end-to-end via tmp_path CSV including
+invalid-date BLOCKED and metric-key assertions). Total: 83 tests.
 `tests/test_cached_walk_forward_runner.py`: 4 tests added in
 `TestDateRangeSlicingWiring` verifying date wiring from split to runner,
 BLOCKED propagation on empty window, per-split unique dates, and stale-wording
 removal. Total: 49 tests.
-Full suite: 4 789 passed.
+Full suite: 4 796 passed.
 
 **Next PR: S6 — Offline research report schema/snapshot.**
 
