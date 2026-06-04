@@ -850,7 +850,45 @@ If any safety flag is True, a note is appended automatically; result unchanged.
 `TestResearchReportToJson`, `TestNoForbiddenImports`).
 Full suite: 4 872 passed.
 
-**Next PR: S7 — Offline report snapshot runner, or S6b if schema issues remain.**
+**PR S7 — Offline report snapshot runner — implemented**
+`src/research/report_snapshot_runner.py` created. Fully offline; no broker/
+API/credential/env/network access. No order submission. No parameter
+optimization. No files written or committed.
+
+Wires `CandidateSpec`, `run_cached_walk_forward_evaluation`, and
+`build_research_report` into a single entry point:
+  `run_offline_report_snapshot(candidates, *, start_date, end_date,
+  train_months, test_months, step_months, cache_dir, max_candidates,
+  include_json, generated_at_utc, _walk_forward_runner)`
+
+Returns `ReportSnapshotRunResult` (frozen dataclass):
+  result, blocker, candidates_requested, reports_created,
+  reports (tuple[ResearchReport, ...]), json_reports (tuple[str, ...]),
+  and five safety flags OR'd across all individual report safety dicts.
+
+Aggregate result rule:
+  ERROR  — if any report's summary.result is "ERROR".
+  PASS   — if ≥1 report's summary.result is "PASS" and none are ERROR.
+  BLOCKED — all BLOCKED, or no candidates requested.
+
+Exception handling: if walk-forward runner raises for a candidate, a
+synthetic ERROR `CachedWalkForwardRunResult` is built (via
+`_make_error_wf_result()`); remaining candidates still evaluated.
+Exception logged as WARNING.
+
+`include_json=True` serialises each report to a deterministic JSON string
+via `research_report_to_json()`; no files written.
+`_walk_forward_runner` is injectable for deterministic tests.
+`generated_at_utc` is injectable for deterministic tests.
+
+`tests/test_report_snapshot_runner.py` added: 46 tests across 4 classes
+(`TestReportSnapshotRunResultDataclass`, `TestRunOfflineReportSnapshot`,
+`TestSafetyFlagAggregation`, `TestNoForbiddenImports`).
+Full suite: 4 918 passed.
+
+**Next PR: S8 — Offline research pipeline orchestrator (multi-candidate batch
+runner with configurable candidate filters, result persistence, and summary
+reporting), or S7b if snapshot runner issues remain.**
 
 ### Phase C — Paper trading execution
 
