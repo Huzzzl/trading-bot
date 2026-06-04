@@ -811,7 +811,46 @@ BLOCKED propagation on empty window, per-split unique dates, and stale-wording
 removal. Total: 49 tests.
 Full suite: 4 796 passed.
 
-**Next PR: S6 — Offline research report schema/snapshot.**
+**PR S6 — Offline research report schema — implemented**
+`src/research/report_schema.py` created. Fully offline; no broker/API/
+credential/env/network access. No order submission. No parameter optimization.
+No report files written or committed. Schema is deterministic and JSON-
+serializable with `sort_keys=True`.
+
+Four frozen dataclasses:
+  `ResearchReportCandidate` — candidate metadata snapshot (id, group, symbol,
+  interval, strategy_family, holding_horizon).
+  `ResearchReportSplit` — per-split result with train/test dates (None when
+  WalkForwardSplit not supplied), result, blocker, metrics dict, and metrics
+  validation result/blocker.
+  `ResearchReportSummary` — aggregate counts (splits_passed/blocked/error,
+  validations_passed/blocked) and numeric aggregates
+  (average_monthly_return_mean/min, max_drawdown_worst, total_trades_sum).
+  `ResearchReport` — top-level record: schema_version ("S6/1.0"),
+  generated_at_utc (injectable), candidate, summary, splits tuple, safety
+  Mapping, notes tuple.
+
+Builders:
+  `build_research_report(candidate, walk_forward_result, *, generated_at_utc,
+  notes, splits)` — assembles all sub-records; generated_at_utc injectable for
+  deterministic tests (defaults to current UTC ISO timestamp); optional splits
+  param (tuple[WalkForwardSplit, ...]) enriches split records with date metadata.
+  `research_report_to_dict(report)` → plain JSON-serializable dict.
+  `research_report_to_json(report)` → deterministic JSON string (sort_keys=True).
+
+Aggregation: only splits where both split result == "PASS" and metrics
+validation result == "PASS" contribute to numeric aggregates.
+max_drawdown_worst uses the minimum (most negative) value, consistent with
+the S4 convention (max_drawdown ≤ 0).
+If any safety flag is True, a note is appended automatically; result unchanged.
+
+`tests/test_research_report_schema.py` added: 76 tests across 7 classes
+(`TestResearchReportDataclasses`, `TestBuildResearchReport`,
+`TestSummaryAggregation`, `TestSafetyFlags`, `TestResearchReportToDict`,
+`TestResearchReportToJson`, `TestNoForbiddenImports`).
+Full suite: 4 872 passed.
+
+**Next PR: S7 — Offline report snapshot runner, or S6b if schema issues remain.**
 
 ### Phase C — Paper trading execution
 
