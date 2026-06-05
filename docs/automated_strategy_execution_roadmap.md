@@ -1133,6 +1133,46 @@ paper or live trading approval).
 `TestSafetyFlagsOnResult`, `TestNoForbiddenImports`).
 Full suite: 5 192 passed.
 
+**PR S15 — Paper-candidate manual review workflow design — implemented (docs-only)**
+`docs/paper_candidate_manual_review_workflow.md` added. No source code added or
+changed. No test files added or changed. No persistence implemented. No output
+artifacts written or committed. No broker/API/credential/env/network/order/live/
+paper access. No paper or live trading approved.
+
+Defines the manual review workflow that follows an S14 PAPER_CANDIDATE_ELIGIBLE
+classification:
+
+Inputs: S10/S11 manifest, pipeline_summary, candidate report JSON, S14
+CandidatePromotionResult, manifest git SHA, per-split ResearchReport metrics,
+candidate universe metadata, reviewer notes.
+
+Manual review checklist (§4): promotion status verification; schema and
+provenance (git SHA traceable to reviewed merged commit, no manual edits);
+safety flag verification (all five flags false in manifest, report, and S14
+result); performance metrics inspection (returns, drawdown, trade count,
+per-split consistency); artifact anomaly inspection (session_end_frequency,
+low-exposure Sharpe, blocked/error splits); overfitting risk assessment (symbol
+concentration, recency bias, curve-fit risk, horizon/interval alignment);
+evidence sufficiency (≥12 months OOS data, ≥3 non-blocked splits, economic
+rationale, reproducibility); reviewer record (name, date, decision, risk notes,
+limitations, evidence bundle reference).
+
+Review decisions (5): APPROVED_FOR_PAPER_CONFIG_DESIGN, NEEDS_MORE_RESEARCH,
+REJECTED_MANUAL_REVIEW, BLOCKED_SAFETY_REVIEW, BLOCKED_PROVENANCE.
+
+APPROVED_FOR_PAPER_CONFIG_DESIGN authorises only a future docs-only paper
+configuration design PR (S16). It does not approve paper trading, live trading,
+any broker/API/order/credential/network access, or any runtime/execution change.
+Paper and live trading remain not enabled.
+
+Required evidence bundle: manifest, pipeline_summary, candidate report, S14
+result, completed checklist, reviewer record, git SHA verification. Bundle
+retained locally only; no files committed to repository.
+
+S16 plan: docs-only paper configuration design (`docs/paper_trading_config_design.md`);
+still no broker/API/credential/order/live implementation; no execution path changes.
+Full suite: 5 192 passed (unchanged — docs-only).
+
 ### Phase C — Paper trading execution
 
 - Paper account executor: applies approved signal on Alpaca paper account
