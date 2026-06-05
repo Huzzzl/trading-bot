@@ -925,8 +925,38 @@ without calling the snapshot runner.
 `TestSafetyFlagAggregation`, `TestNoForbiddenImports`).
 Full suite: 4 969 passed.
 
-**Next PR: S9 — Controlled report persistence design (docs-only), or S8b
-if pipeline orchestrator issues remain.**
+**PR S9 — Controlled report persistence design — implemented (docs-only)**
+`docs/controlled_report_persistence_design.md` added. No source code
+added or changed. No test files added or changed. No persistence
+implemented. No output artifacts written or committed. No broker/API/
+credential/env/network access. No order submission. No live/paper
+trading approval.
+
+Defines design for future controlled persistence of `ResearchReport`
+objects produced by the S8 pipeline orchestrator:
+
+Artifact structure (future S10 implementation):
+  `<output_dir>/<run_id>/manifest.json` — run metadata, counts, safety
+  flags, git commit SHA, file inventory.
+  `<output_dir>/<run_id>/pipeline_summary.json` — compact PipelineSummary.
+  `<output_dir>/<run_id>/reports/<candidate_id>.json` — one ResearchReport
+  per candidate.
+  `<output_dir>/<run_id>/summary.md` — optional human-readable summary.
+
+Safety gates for future implementation: explicit output directory required;
+refuse unsafe paths; refuse overwrite by default; refuse if any safety flag
+is True; atomic write (temp dir → rename); no credentials; no network; no
+order action.
+
+Validation plan for S10: no writes by default, deterministic filenames,
+manifest consistency, safety flag refusal, forbidden-import scans.
+
+Relationship to S10: S10 may implement persistence only after S9 is merged;
+S10 still must not approve paper/live trading or add broker/API/credential/
+env/network/order access.
+
+**Next PR: S10 — Controlled local report persistence implementation, or S9b
+if design issues remain.**
 
 ### Phase C — Paper trading execution
 
