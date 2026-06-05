@@ -955,8 +955,41 @@ Relationship to S10: S10 may implement persistence only after S9 is merged;
 S10 still must not approve paper/live trading or add broker/API/credential/
 env/network/order access.
 
-**Next PR: S10 — Controlled local report persistence implementation, or S9b
-if design issues remain.**
+**PR S10 — Controlled local report persistence implementation — implemented**
+`src/research/report_persistence.py` created. Fully offline; no broker/
+API/credential/env/network/order/live/paper access. No live/paper trading
+approved. No parameter optimisation. No automatic file writes.
+
+Implements the persistence design from S9:
+  `persist_pipeline_run_result(pipeline_result, *, output_dir, generated_at_utc,
+  git_commit_sha, include_markdown, allow_overwrite, allow_unsafe_path)`
+  → `ReportPersistenceResult` (frozen dataclass).
+
+Fail-closed: returns BLOCKED (writes nothing) when output_dir is None or
+empty; any safety flag on the pipeline result is True; output_dir resolves
+into data/ or output/; absolute path without allow_unsafe_path=True; run
+directory already exists without allow_overwrite=True.
+
+Atomic write: all files written to a temp sibling directory first; renamed
+to the final run directory only after all files are prepared; temp directory
+cleaned up on any failure.
+
+Artifact structure: `<output_dir>/<run_id>/manifest.json` (schema "S9/1.0"),
+`pipeline_summary.json`, `reports/<candidate_id>.json` (one per candidate,
+via research_report_to_dict()), optional `summary.md` if include_markdown=True.
+
+`ReportPersistenceResult` safety flags are always False — they represent
+actions taken by the persistence function itself, which never contacts
+brokers, credentials, network, or orders.
+
+`tests/test_report_persistence.py` added: 48 tests across 7 classes
+(`TestReportPersistenceResultDataclass`, `TestOutputDirValidation`,
+`TestSafetyFlagRefusal`, `TestOverwriteBehavior`,
+`TestSuccessfulPersistence`, `TestAtomicWrite`, `TestNoForbiddenImports`).
+Full suite: 5 017 passed.
+
+**Next PR: S11 — Controlled persistence CLI command (offline research runner
+that persists to a local directory), or S10b if persistence issues remain.**
 
 ### Phase C — Paper trading execution
 
