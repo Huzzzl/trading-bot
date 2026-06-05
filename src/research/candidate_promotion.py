@@ -304,14 +304,12 @@ def evaluate_candidate_for_promotion(
 
     checked.append("manifest.inventory")
     manifest_reports: Any = _get(manifest_dict, "files", "reports")
-    inventory_ok = True
-    if candidate_id is not None and isinstance(manifest_reports, list):
-        expected_filename = f"{candidate_id}.json"
-        if expected_filename not in manifest_reports:
+    if not isinstance(manifest_reports, list):
+        # Missing files block or non-list reports field is a hard failure.
+        failed.append("manifest.inventory")
+    elif candidate_id is not None:
+        if f"{candidate_id}.json" not in manifest_reports:
             failed.append("manifest.inventory")
-            inventory_ok = False
-    elif isinstance(manifest_reports, list) and candidate_id is None:
-        inventory_ok = False
 
     checked.append("manifest.git_commit_sha")
     git_sha = _get(manifest_dict, "git_commit_sha")
@@ -347,7 +345,19 @@ def evaluate_candidate_for_promotion(
     if total_trades is None or total_trades < _MIN_TOTAL_TRADES:
         failed.append("summary.total_trades_sum")
 
-    # 4e. summary.average_monthly_return_mean (None → NEEDS_MORE_DATA; ≤ 0 → REJECTED)
+    # 4e. summary.splits_requested (required; negative values → REJECTED)
+    checked.append("summary.splits_requested")
+    splits_requested = _int_or_none(summary.get("splits_requested") if isinstance(summary, dict) else None)
+    if splits_requested is None or splits_requested < 0:
+        failed.append("summary.splits_requested")
+
+    # 4f. summary.splits_blocked (required; negative values → REJECTED)
+    checked.append("summary.splits_blocked")
+    splits_blocked_count = _int_or_none(summary.get("splits_blocked") if isinstance(summary, dict) else None)
+    if splits_blocked_count is None or splits_blocked_count < 0:
+        failed.append("summary.splits_blocked")
+
+    # 4g. summary.average_monthly_return_mean (None → NEEDS_MORE_DATA; ≤ 0 → REJECTED)
     checked.append("summary.average_monthly_return_mean")
     avg_monthly_return = _float_or_none(summary.get("average_monthly_return_mean") if isinstance(summary, dict) else None)
     avg_return_missing = avg_monthly_return is None
@@ -355,7 +365,7 @@ def evaluate_candidate_for_promotion(
         # Non-null but non-positive is a hard failure → REJECTED
         failed.append("summary.average_monthly_return_mean")
 
-    # 4f. summary.max_drawdown_worst
+    # 4h. summary.max_drawdown_worst
     checked.append("summary.max_drawdown_worst")
     max_drawdown = _float_or_none(summary.get("max_drawdown_worst") if isinstance(summary, dict) else None)
     if max_drawdown is None or max_drawdown < _MAX_DRAWDOWN_FLOOR:
@@ -387,7 +397,10 @@ def evaluate_candidate_for_promotion(
         if not isinstance(metrics, dict):
             continue
         exposure = _float_or_none(metrics.get("exposure_pct"))
-        sharpe = _float_or_none(metrics.get("sharpe_ratio"))
+        # Prefer "sharpe" (project metric key); fall back to "sharpe_ratio".
+        sharpe = _float_or_none(
+            metrics["sharpe"] if "sharpe" in metrics else metrics.get("sharpe_ratio")
+        )
         if (
             exposure is not None
             and exposure < _LOW_EXPOSURE_THRESHOLD
@@ -398,10 +411,8 @@ def evaluate_candidate_for_promotion(
             break
 
     # -----------------------------------------------------------------------
-    # 6. Majority-blocked-splits soft failure
+    # 6. Majority-blocked-splits soft failure (uses validated values from 4e/4f)
     # -----------------------------------------------------------------------
-    splits_requested = _int_or_none(summary.get("splits_requested") if isinstance(summary, dict) else None)
-    splits_blocked_count = _int_or_none(summary.get("splits_blocked") if isinstance(summary, dict) else None)
     majority_blocked = (
         splits_requested is not None
         and splits_requested > 0

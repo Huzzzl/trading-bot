@@ -399,13 +399,6 @@ class TestRejected:
         assert r.status is PromotionStatus.REJECTED
         assert "candidate_id.present" in r.criteria_failed
 
-    def test_manifest_inventory_mismatch(self):
-        manifest = _make_manifest()
-        manifest["files"]["reports"] = ["other_candidate.json"]
-        r = _run(manifest=manifest)
-        assert r.status is PromotionStatus.REJECTED
-        assert "manifest.inventory" in r.criteria_failed
-
     def test_missing_git_commit_sha(self):
         manifest = _make_manifest(git_commit_sha=None)
         r = _run(manifest=manifest)
@@ -417,6 +410,98 @@ class TestRejected:
         r = _run(manifest=manifest)
         assert r.status is PromotionStatus.REJECTED
         assert "manifest.git_commit_sha" in r.criteria_failed
+
+
+# ---------------------------------------------------------------------------
+# TestManifestInventory
+# ---------------------------------------------------------------------------
+
+class TestManifestInventory:
+    def test_missing_files_key_rejected(self):
+        manifest = _make_manifest()
+        del manifest["files"]
+        r = _run(manifest=manifest)
+        assert r.status is PromotionStatus.REJECTED
+        assert "manifest.inventory" in r.criteria_failed
+
+    def test_missing_reports_key_rejected(self):
+        manifest = _make_manifest()
+        del manifest["files"]["reports"]
+        r = _run(manifest=manifest)
+        assert r.status is PromotionStatus.REJECTED
+        assert "manifest.inventory" in r.criteria_failed
+
+    def test_reports_not_list_rejected(self):
+        manifest = _make_manifest()
+        manifest["files"]["reports"] = "not-a-list"
+        r = _run(manifest=manifest)
+        assert r.status is PromotionStatus.REJECTED
+        assert "manifest.inventory" in r.criteria_failed
+
+    def test_reports_none_rejected(self):
+        manifest = _make_manifest()
+        manifest["files"]["reports"] = None
+        r = _run(manifest=manifest)
+        assert r.status is PromotionStatus.REJECTED
+        assert "manifest.inventory" in r.criteria_failed
+
+    def test_existing_mismatch_still_rejected(self):
+        manifest = _make_manifest()
+        manifest["files"]["reports"] = ["other_candidate.json"]
+        r = _run(manifest=manifest)
+        assert r.status is PromotionStatus.REJECTED
+        assert "manifest.inventory" in r.criteria_failed
+
+    def test_valid_inventory_passes(self):
+        r = _run()
+        assert r.status is PromotionStatus.PAPER_CANDIDATE_ELIGIBLE
+        assert "manifest.inventory" not in r.criteria_failed
+
+
+# ---------------------------------------------------------------------------
+# TestRequiredSplitCounts
+# ---------------------------------------------------------------------------
+
+class TestRequiredSplitCounts:
+    def test_missing_splits_requested_rejected(self):
+        r = _run(_patch_summary(_make_report(), splits_requested=None))
+        assert r.status is PromotionStatus.REJECTED
+        assert "summary.splits_requested" in r.criteria_failed
+
+    def test_missing_splits_blocked_rejected(self):
+        r = _run(_patch_summary(_make_report(), splits_blocked=None))
+        assert r.status is PromotionStatus.REJECTED
+        assert "summary.splits_blocked" in r.criteria_failed
+
+    def test_nonnumeric_splits_requested_rejected(self):
+        r = _run(_patch_summary(_make_report(), splits_requested="four"))
+        assert r.status is PromotionStatus.REJECTED
+        assert "summary.splits_requested" in r.criteria_failed
+
+    def test_nonnumeric_splits_blocked_rejected(self):
+        r = _run(_patch_summary(_make_report(), splits_blocked="three"))
+        assert r.status is PromotionStatus.REJECTED
+        assert "summary.splits_blocked" in r.criteria_failed
+
+    def test_negative_splits_requested_rejected(self):
+        r = _run(_patch_summary(_make_report(), splits_requested=-1))
+        assert r.status is PromotionStatus.REJECTED
+        assert "summary.splits_requested" in r.criteria_failed
+
+    def test_negative_splits_blocked_rejected(self):
+        r = _run(_patch_summary(_make_report(), splits_blocked=-1))
+        assert r.status is PromotionStatus.REJECTED
+        assert "summary.splits_blocked" in r.criteria_failed
+
+    def test_zero_splits_requested_passes_no_majority_check(self):
+        # splits_requested=0 is valid; majority-blocked ratio check is skipped.
+        r = _run(_patch_summary(_make_report(), splits_requested=0, splits_blocked=0))
+        assert r.status is PromotionStatus.PAPER_CANDIDATE_ELIGIBLE
+
+    def test_criteria_checked_includes_both_names(self):
+        r = _run()
+        assert "summary.splits_requested" in r.criteria_checked
+        assert "summary.splits_blocked" in r.criteria_checked
 
 
 # ---------------------------------------------------------------------------
@@ -482,6 +567,32 @@ class TestNeedsMoreData:
         r = _run(report)
         assert r.status is PromotionStatus.PAPER_CANDIDATE_ELIGIBLE
 
+    def test_low_exposure_extreme_sharpe_primary_key(self):
+        # Project metric key is "sharpe" (not "sharpe_ratio")
+        report = _make_report(splits=[
+            {"metrics": {"exposure_pct": 0.005, "sharpe": 8.0}}
+        ])
+        r = _run(report)
+        assert r.status is PromotionStatus.NEEDS_MORE_DATA
+        assert "splits.low_exposure_sharpe" in r.criteria_failed
+
+    def test_low_exposure_extreme_sharpe_alias_key(self):
+        # "sharpe_ratio" retained as backward-compatible alias
+        report = _make_report(splits=[
+            {"metrics": {"exposure_pct": 0.005, "sharpe_ratio": 7.0}}
+        ])
+        r = _run(report)
+        assert r.status is PromotionStatus.NEEDS_MORE_DATA
+
+    def test_primary_key_takes_precedence_over_alias(self):
+        # "sharpe" present → alias "sharpe_ratio" ignored
+        report = _make_report(splits=[
+            {"metrics": {"exposure_pct": 0.005, "sharpe": 2.0, "sharpe_ratio": 8.0}}
+        ])
+        # "sharpe"=2.0 is moderate → no artifact
+        r = _run(report)
+        assert r.status is PromotionStatus.PAPER_CANDIDATE_ELIGIBLE
+
 
 # ---------------------------------------------------------------------------
 # TestCriteriaTracking
@@ -507,6 +618,8 @@ class TestCriteriaTracking:
             "summary.result",
             "summary.splits_error",
             "summary.validations_blocked",
+            "summary.splits_requested",
+            "summary.splits_blocked",
             "summary.total_trades_sum",
             "summary.average_monthly_return_mean",
             "summary.max_drawdown_worst",

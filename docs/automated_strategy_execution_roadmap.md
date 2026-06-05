@@ -1125,13 +1125,13 @@ paper or live trading approval).
 
 15 stable criterion names tracked in criteria_checked / criteria_failed.
 
-`tests/test_candidate_promotion.py` added: 79 tests across 9 classes
+`tests/test_candidate_promotion.py` added: 95 tests across 11 classes
 (`TestPromotionStatusEnum`, `TestCandidatePromotionResultDataclass`,
 `TestFullyEligibleCandidate`, `TestSchemaBlocking`, `TestSafetyFlagBlocking`,
-`TestRejected`, `TestNeedsMoreData`, `TestCriteriaTracking`,
-`TestPurityAndImmutability`, `TestSafetyFlagsOnResult`,
-`TestNoForbiddenImports`).
-Full suite: 5 176 passed.
+`TestRejected`, `TestManifestInventory`, `TestRequiredSplitCounts`,
+`TestNeedsMoreData`, `TestCriteriaTracking`, `TestPurityAndImmutability`,
+`TestSafetyFlagsOnResult`, `TestNoForbiddenImports`).
+Full suite: 5 192 passed.
 
 ### Phase C — Paper trading execution
 
