@@ -988,8 +988,40 @@ brokers, credentials, network, or orders.
 `TestSuccessfulPersistence`, `TestAtomicWrite`, `TestNoForbiddenImports`).
 Full suite: 5 017 passed.
 
-**Next PR: S11 — Controlled persistence CLI command (offline research runner
-that persists to a local directory), or S10b if persistence issues remain.**
+**PR S11 — Controlled offline research snapshot command — implemented**
+`src/research/offline_snapshot_command.py` created. Fully offline; no
+broker/API/credential/env/network/order/live/paper access. No live/paper
+trading approved. No default output path. No files written unless output_dir
+explicitly supplied. No parameter optimisation.
+
+Wires `run_offline_research_pipeline()` (S8) and
+`persist_pipeline_run_result()` (S10) into:
+  `run_controlled_offline_snapshot(*, candidate_filter, start_date, end_date,
+  train_months, test_months, step_months, cache_dir, output_dir,
+  include_json, include_markdown, generated_at_utc, git_commit_sha,
+  allow_overwrite, allow_unsafe_path, _pipeline_runner, _persistence_runner)`
+  → `OfflineSnapshotCommandResult` (frozen dataclass).
+
+Fail-closed: returns BLOCKED without calling pipeline or persistence when
+output_dir is None/empty. Returns ERROR when pipeline errors. Returns BLOCKED
+when persistence blocks. Any True safety flag forces result to BLOCKED.
+Pipeline ERROR does not call persistence. Persistence exceptions return ERROR.
+
+Aggregate result: PASS when pipeline ran (PASS or BLOCKED) and persistence
+PASS and no safety flags set; BLOCKED when output_dir missing or persistence
+blocked; ERROR when pipeline errored or persistence raised.
+
+Safety flags OR'd from pipeline and persistence sub-results; expected all
+False for fully offline operation.
+
+`tests/test_offline_snapshot_command.py` added: 42 tests across 7 classes
+(`TestOfflineSnapshotCommandResultDataclass`, `TestOutputDirValidation`,
+`TestPipelineRunnerCallthrough`, `TestPersistenceCallthrough`,
+`TestAggregateResult`, `TestSafetyFlagAggregation`, `TestNoForbiddenImports`).
+Full suite: 5 059 passed.
+
+**Next PR: S12 — Offline research snapshot integration test or design review,
+or S11b if command issues remain.**
 
 ### Phase C — Paper trading execution
 
