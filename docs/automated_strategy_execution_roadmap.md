@@ -1020,8 +1020,43 @@ False for fully offline operation.
 `TestAggregateResult`, `TestSafetyFlagAggregation`, `TestNoForbiddenImports`).
 Full suite: 5 059 passed.
 
-**Next PR: S12 — Offline research snapshot integration test or design review,
-or S11b if command issues remain.**
+**PR S12 — Offline research snapshot integration tests — implemented**
+`tests/test_offline_snapshot_integration.py` added. Integration-style tests for
+the offline research snapshot chain: `CandidateFilter` → `run_controlled_offline_snapshot()`
+→ `run_offline_research_pipeline()` (injected fake) → `persist_pipeline_run_result()`
+(real, writes to tmp_path). Fake pipeline returns a real `ResearchReport` object
+(schema_version "S6/1.0", candidate_id "A_SPY_60m_trend_breakout_1to2d") so that
+integration tests verify actual report JSON output through real persistence.
+No real backtests. No market data required. No broker/API/credential/env/network/
+order/live/paper access.
+
+38 tests across 8 classes:
+  `TestEndToEndPass` (8) — PASS pipeline writes manifest, pipeline_summary,
+  report JSON; deterministic run_id from fixed timestamp; manifest file-inventory
+  cross-check including report files; include_markdown true/false; all safety flags
+  false; files_written count ≥ 3 (manifest + pipeline_summary + report).
+  `TestEndToEndBlocked` (3) — BLOCKED pipeline still persists; command result is PASS
+  (persistence succeeded); run_id contains "BLOCKED".
+  `TestEndToEndNoPersist` (4) — output_dir None/empty returns BLOCKED without writing;
+  ERROR pipeline does not persist; no default output path.
+  `TestOverwrite` (2) — allow_overwrite=False blocks second run; allow_overwrite=True
+  replaces (same run_id).
+  `TestCandidateFilterPropagation` (2) — filter appears in pipeline_summary.json;
+  filter is passed to the pipeline runner.
+  `TestSafetyFlagIntegration` (2) — any True safety flag prevents PASS; all flags
+  False in clean run.
+  `TestReportJsonOutput` (8) — verifies real ResearchReport JSON through real
+  persistence: report_paths has length 1; report file exists; filename is
+  candidate_id + ".json"; JSON has schema_version "S6/1.0"; JSON candidate_id
+  matches; manifest["files"]["reports"] contains the filename; manifest
+  inventory matches disk including report; BLOCKED pipeline also writes report JSON.
+  `TestNoForbiddenImports` (9) — scans `offline_snapshot_command` and
+  `report_persistence` source for forbidden imports/patterns.
+`tests/test_offline_snapshot_command.py` updated: `test_empty_string_output_dir_returns_blocked`
+replaced weak `files_written_count()` assertion with explicit assertions for
+result=="BLOCKED", blocker contains "output_dir", pipeline/persistence/output_dir
+are None, and all five safety flags are False.
+Full suite: 5 097 passed.
 
 ### Phase C — Paper trading execution
 
