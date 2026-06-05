@@ -1173,6 +1173,46 @@ S16 plan: docs-only paper configuration design (`docs/paper_trading_config_desig
 still no broker/API/credential/order/live implementation; no execution path changes.
 Full suite: 5 192 passed (unchanged — docs-only).
 
+**PR S16 — Paper trading configuration design — implemented (docs-only)**
+`docs/paper_trading_config_design.md` added. No source code added or changed.
+No test files added or changed. No real config file created. No persistence
+implemented. No output artifacts written or committed. No broker/API/credential/
+env/network/order/live/paper access. No paper or live trading approved.
+
+Defines the paper trading configuration artifact schema as a proposal for a
+future operator-managed JSON file (stored outside the repository):
+
+Preconditions: S14 PAPER_CANDIDATE_ELIGIBLE + S15 APPROVED_FOR_PAPER_CONFIG_DESIGN.
+These preconditions do not approve paper trading; they only permit authoring a
+paper config schema.
+
+Proposed schema "PC/1.0" (4 field groups): provenance (config_schema_version,
+candidate_id, run_id, source_git_sha); strategy identity (symbol, interval,
+strategy_family, holding_horizon); paper account (paper_account_label — label
+only, no credentials); risk limits (max_notional_per_position,
+max_position_fraction ≤ 0.10, max_daily_loss, max_drawdown_stop,
+max_orders_per_day, min_cash_buffer); execution assumptions
+(allowed_order_types, allowed_session, slippage_bps_assumption,
+commission_bps_assumption); review fields (risk_review_notes, reviewer_name,
+review_date_utc, approval_status).
+
+Explicitly forbidden config fields: broker API/secret keys, account credentials,
+live account IDs, env var names containing secrets, direct order instructions,
+market data subscription credentials, any field enabling live trading.
+
+Config approval statuses (6): DRAFT, READY_FOR_PAPER_CONFIG_REVIEW,
+APPROVED_FOR_PAPER_SIMULATION_DESIGN, REJECTED_CONFIG_REVIEW,
+BLOCKED_RISK_LIMITS, BLOCKED_PROVENANCE. APPROVED_FOR_PAPER_SIMULATION_DESIGN
+authorises only a future docs-only paper simulation design PR; it does not
+approve paper trading, live trading, or any broker/API/order/credential access.
+
+S17 validation rules: schema version, provenance cross-check, risk limit bounds
+(max_position_fraction ≤ 0.10, max_orders_per_day ≤ conservative cap), allowed
+order type allowlist, forbidden field credential scan, reviewer field presence.
+S17 will be a pure offline `validate_paper_config(config_dict)` → frozen
+dataclass; no file I/O, no broker/credential/network/env access; no paper runner.
+Full suite: 5 192 passed (unchanged — docs-only).
+
 ### Phase C — Paper trading execution
 
 - Paper account executor: applies approved signal on Alpaca paper account
