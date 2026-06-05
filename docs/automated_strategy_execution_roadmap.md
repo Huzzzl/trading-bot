@@ -886,9 +886,47 @@ via `research_report_to_json()`; no files written.
 `TestSafetyFlagAggregation`, `TestNoForbiddenImports`).
 Full suite: 4 918 passed.
 
-**Next PR: S8 — Offline research pipeline orchestrator (multi-candidate batch
-runner with configurable candidate filters, result persistence, and summary
-reporting), or S7b if snapshot runner issues remain.**
+**PR S8 — Offline research pipeline orchestrator — implemented**
+`src/research/pipeline_orchestrator.py` created. Fully offline; no broker/
+API/credential/env/network access. No order submission. No parameter
+optimisation. No files written or committed. No result persistence in S8.
+No paper/live trading approved.
+
+Provides `run_offline_research_pipeline(*, candidate_filter, start_date,
+end_date, train_months, test_months, step_months, cache_dir, include_json,
+generated_at_utc, _snapshot_runner)` as a higher-level entry point above
+`run_offline_report_snapshot()`.
+
+Three new frozen dataclasses:
+  `CandidateFilter` — multi-value dimension filter (groups, symbols,
+  intervals, strategy_families, holding_horizons, max_candidates).
+  Each non-empty dimension is an OR filter; dimensions AND-combined.
+  strategy_families and holding_horizons match enum .value strings.
+  `PipelineSummary` — compact aggregate: counts (candidates_selected,
+  reports_created/passed/blocked/error), best_candidate_id (highest
+  average_monthly_return_mean among PASS reports; lexicographic tie-break),
+  best_average_monthly_return, worst_max_drawdown (most negative across
+  all reports with numeric value), total_trades_sum (sum across all
+  reports with numeric value).
+  `PipelineRunResult` — top-level result: result/blocker, filter,
+  summary, snapshot (ReportSnapshotRunResult), and five safety flags
+  mirrored from the snapshot.
+
+Candidate selection always starts from `build_initial_candidate_universe()`.
+No candidates selected → BLOCKED("no candidates selected") returned
+without calling the snapshot runner.
+`_snapshot_runner` injectable for deterministic tests.
+`generated_at_utc` injectable for deterministic tests.
+
+`tests/test_pipeline_orchestrator.py` added: 51 tests across 7 classes
+(`TestCandidateFilterDataclass`, `TestPipelineSummaryDataclass`,
+`TestPipelineRunResultDataclass`, `TestCandidateFiltering`,
+`TestPipelineIntegration`, `TestPipelineSummaryComputation`,
+`TestSafetyFlagAggregation`, `TestNoForbiddenImports`).
+Full suite: 4 969 passed.
+
+**Next PR: S9 — Controlled report persistence design (docs-only), or S8b
+if pipeline orchestrator issues remain.**
 
 ### Phase C — Paper trading execution
 
