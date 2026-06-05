@@ -1020,8 +1020,33 @@ False for fully offline operation.
 `TestAggregateResult`, `TestSafetyFlagAggregation`, `TestNoForbiddenImports`).
 Full suite: 5 059 passed.
 
-**Next PR: S12 — Offline research snapshot integration test or design review,
-or S11b if command issues remain.**
+**PR S12 — Offline research snapshot integration tests — implemented**
+`tests/test_offline_snapshot_integration.py` added. Integration-style tests for
+the offline research snapshot chain: `CandidateFilter` → `run_controlled_offline_snapshot()`
+→ `run_offline_research_pipeline()` (injected fake) → `persist_pipeline_run_result()`
+(real, writes to tmp_path). Uses real persistence with injected fake pipeline runners.
+No real backtests. No market data required. No broker/API/credential/env/network/
+order/live/paper access.
+
+30 tests across 7 classes:
+  `TestEndToEndPass` (8) — PASS pipeline writes manifest, pipeline_summary, optional
+  summary.md; deterministic run_id from fixed timestamp; manifest file-inventory
+  cross-check; include_markdown true/false; all safety flags false.
+  `TestEndToEndBlocked` (3) — BLOCKED pipeline still persists; command result is PASS
+  (persistence succeeded); run_id contains "BLOCKED".
+  `TestEndToEndNoPersist` (4) — output_dir None/empty returns BLOCKED without writing;
+  ERROR pipeline does not persist; no default output path.
+  `TestOverwrite` (2) — allow_overwrite=False blocks second run; allow_overwrite=True
+  replaces (same run_id).
+  `TestCandidateFilterPropagation` (2) — filter appears in pipeline_summary.json;
+  filter is passed to the pipeline runner.
+  `TestSafetyFlagIntegration` (2) — any True safety flag prevents PASS; all flags
+  False in clean run.
+  `TestNoForbiddenImports` (9) — scans `offline_snapshot_command` and
+  `report_persistence` source for forbidden imports/patterns.
+`tests/test_offline_snapshot_command.py` updated: `test_empty_string_output_dir_returns_blocked`
+strengthened to assert pipeline/persistence are None and all safety flags False.
+Full suite: 5 089 passed.
 
 ### Phase C — Paper trading execution
 
