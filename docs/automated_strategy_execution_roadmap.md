@@ -1058,6 +1058,42 @@ result=="BLOCKED", blocker contains "output_dir", pipeline/persistence/output_di
 are None, and all five safety flags are False.
 Full suite: 5 097 passed.
 
+**PR S13 — Offline candidate promotion design — implemented (docs-only)**
+`docs/offline_candidate_promotion_design.md` added. No source code added or
+changed. No test files added or changed. No persistence implemented. No output
+artifacts written or committed. No broker/API/credential/env/network/order/live/
+paper access. No paper or live trading approved.
+
+Defines design for future S14 implementation of a pure offline promotion
+evaluator that classifies persisted S10/S11 research run artifacts:
+
+Inputs: manifest.json (schema "S9/1.0"), pipeline_summary.json, and
+per-candidate reports/<candidate_id>.json (schema "S6/1.0").
+
+Eligibility criteria: result==PASS; all five safety flags false; total_trades_sum
+≥ 30; average_monthly_return_mean > 0.0; max_drawdown_worst ≥ −0.25; zero
+validations_blocked; zero splits_error; no session_end artifact (frequency > 0.95
+disqualifies); no low-exposure Sharpe artifact; schema versions supported;
+manifest file inventory consistent.
+
+Disqualification criteria: any safety flag true → BLOCKED_SAFETY; unsupported
+schema → BLOCKED_SCHEMA; result not PASS, any split error, any validation
+blocked, too few trades, unacceptable drawdown, session_end dominance, candidate_id
+mismatch, manifest inventory inconsistency, missing git SHA → REJECTED; null return,
+majority blocked splits, low-exposure artifact → NEEDS_MORE_DATA.
+
+Promotion statuses (6): NOT_REVIEWED, PAPER_CANDIDATE_ELIGIBLE, NEEDS_MORE_DATA,
+REJECTED, BLOCKED_SAFETY, BLOCKED_SCHEMA. PAPER_CANDIDATE_ELIGIBLE still requires
+manual human review before any paper trading decision; it is not paper or live
+trading approval; no automated execution follows.
+
+S14 implementation plan: `src/research/candidate_promotion.py` with
+`CandidatePromotionResult` frozen dataclass, `PromotionStatus` enum, and
+`evaluate_candidate_for_promotion(report_dict, *, manifest_dict)` pure function
+(no file I/O, no broker/credential/network/env/order/live access); corresponding
+`tests/test_candidate_promotion.py`.
+Full suite: 5 097 passed (unchanged — docs-only).
+
 ### Phase C — Paper trading execution
 
 - Paper account executor: applies approved signal on Alpaca paper account
