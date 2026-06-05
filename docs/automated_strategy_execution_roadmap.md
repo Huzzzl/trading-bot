@@ -1094,6 +1094,45 @@ S14 implementation plan: `src/research/candidate_promotion.py` with
 `tests/test_candidate_promotion.py`.
 Full suite: 5 097 passed (unchanged — docs-only).
 
+**PR S14 — Pure offline candidate promotion evaluator — implemented**
+`src/research/candidate_promotion.py` created. Fully offline; no file I/O;
+no broker/API/credential/env/network/order/live/paper access. No trading
+approved. Pure function: same inputs → same output. No parameter optimisation.
+
+`PromotionStatus` (str, Enum) with 6 values: NOT_REVIEWED,
+PAPER_CANDIDATE_ELIGIBLE, NEEDS_MORE_DATA, REJECTED, BLOCKED_SAFETY,
+BLOCKED_SCHEMA.
+
+`CandidatePromotionResult` frozen dataclass: result, blocker, candidate_id,
+run_id, status, criteria_checked, criteria_failed, and 5 safety flags (always
+False — evaluator makes no broker/credential/network/order/live calls).
+
+`evaluate_candidate_for_promotion(report_dict, *, manifest_dict)`:
+(1) Schema check — report schema_version must be "S6/1.0"; manifest
+schema_version must be "S9/1.0"; unsupported or missing → BLOCKED_SCHEMA.
+(2) Safety flags — all five flags in report["safety"] and manifest["safety"]
+must be False; any True → BLOCKED_SAFETY.
+(3) Candidate identity — candidate_id must be present; manifest["files"]["reports"]
+must contain "<candidate_id>.json"; manifest git_commit_sha must be non-empty.
+(4) Summary thresholds — result=="PASS"; splits_error==0;
+validations_blocked==0; total_trades_sum≥30; average_monthly_return_mean>0.0;
+max_drawdown_worst≥−0.25; session_end_frequency≤0.95 in all splits.
+Hard failures → REJECTED. average_monthly_return_mean None → NEEDS_MORE_DATA.
+(5) Soft failures — splits_blocked/splits_requested>0.5 or low-exposure
+Sharpe artifact (exposure_pct<0.01 and |sharpe_ratio|≥5.0) → NEEDS_MORE_DATA.
+(6) All pass → PAPER_CANDIDATE_ELIGIBLE (research classification only; not
+paper or live trading approval).
+
+15 stable criterion names tracked in criteria_checked / criteria_failed.
+
+`tests/test_candidate_promotion.py` added: 79 tests across 9 classes
+(`TestPromotionStatusEnum`, `TestCandidatePromotionResultDataclass`,
+`TestFullyEligibleCandidate`, `TestSchemaBlocking`, `TestSafetyFlagBlocking`,
+`TestRejected`, `TestNeedsMoreData`, `TestCriteriaTracking`,
+`TestPurityAndImmutability`, `TestSafetyFlagsOnResult`,
+`TestNoForbiddenImports`).
+Full suite: 5 176 passed.
+
 ### Phase C — Paper trading execution
 
 - Paper account executor: applies approved signal on Alpaca paper account
