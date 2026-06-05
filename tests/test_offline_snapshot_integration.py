@@ -31,6 +31,11 @@ from src.research.pipeline_orchestrator import (
     PipelineRunResult,
     PipelineSummary,
 )
+from src.research.report_schema import (
+    ResearchReport,
+    ResearchReportCandidate,
+    ResearchReportSummary,
+)
 from src.research.report_snapshot_runner import ReportSnapshotRunResult
 
 # ---------------------------------------------------------------------------
@@ -54,13 +59,59 @@ _SNAP_KWARGS: dict[str, Any] = dict(
 # Fake pipeline runner builders
 # ---------------------------------------------------------------------------
 
+_FAKE_CANDIDATE_ID = "A_SPY_60m_trend_breakout_1to2d"
+
+
+def _make_fake_report(result: str = "PASS") -> ResearchReport:
+    candidate = ResearchReportCandidate(
+        candidate_id=_FAKE_CANDIDATE_ID,
+        group="A",
+        symbol="SPY",
+        interval="60m",
+        strategy_family="trend_breakout",
+        holding_horizon="one_to_two_days",
+    )
+    summary = ResearchReportSummary(
+        result=result,
+        blocker=None if result == "PASS" else "test-blocker",
+        candidate_id=_FAKE_CANDIDATE_ID,
+        splits_requested=1,
+        splits_evaluated=1,
+        splits_passed=1 if result == "PASS" else 0,
+        splits_blocked=0 if result == "PASS" else 1,
+        splits_error=0,
+        validations_passed=1 if result == "PASS" else 0,
+        validations_blocked=0,
+        average_monthly_return_mean=0.05 if result == "PASS" else None,
+        average_monthly_return_min=0.03 if result == "PASS" else None,
+        max_drawdown_worst=-0.10 if result == "PASS" else None,
+        total_trades_sum=10 if result == "PASS" else None,
+    )
+    return ResearchReport(
+        schema_version="S6/1.0",
+        generated_at_utc=_FIXED_TS,
+        candidate=candidate,
+        summary=summary,
+        splits=(),
+        safety=dict(
+            broker_calls_made=False,
+            credentials_read=False,
+            network_calls_made=False,
+            order_action_requested=False,
+            live_trading_allowed=False,
+        ),
+        notes=(),
+    )
+
+
 def _make_fake_snapshot(result: str = "PASS") -> ReportSnapshotRunResult:
+    reports = (_make_fake_report(result),) if result != "ERROR" else ()
     return ReportSnapshotRunResult(
         result=result,
         blocker=None if result == "PASS" else "test-blocker",
         candidates_requested=1,
-        reports_created=1,
-        reports=(),
+        reports_created=1 if result != "ERROR" else 0,
+        reports=reports,
         json_reports=(),
         broker_calls_made=False,
         credentials_read=False,
@@ -161,10 +212,10 @@ class TestEndToEndPass:
         assert pathlib.Path(result.persistence.pipeline_summary_path).exists()
 
     def test_pass_run_writes_report_json_for_each_candidate(self, tmp_path: pathlib.Path):
-        # Fake pipeline returns no reports (snapshot.reports is empty tuple).
         result = _run(tmp_path)
-        # files_written must include at least manifest and pipeline_summary.
-        assert len(result.persistence.files_written) >= 2
+        # manifest + pipeline_summary + 1 report = at least 3 files written.
+        assert len(result.persistence.files_written) >= 3
+        assert len(result.persistence.report_paths) == 1
 
     def test_include_markdown_true_writes_summary_md(self, tmp_path: pathlib.Path):
         result = _run(tmp_path, include_markdown=True)
@@ -306,6 +357,53 @@ class TestSafetyFlagIntegration:
         assert not result.network_calls_made
         assert not result.order_action_requested
         assert not result.live_trading_allowed
+
+
+class TestReportJsonOutput:
+    """Verify that real ResearchReport objects are written as JSON through persist_pipeline_run_result."""
+
+    def test_pass_run_has_one_report_path(self, tmp_path: pathlib.Path):
+        result = _run(tmp_path)
+        assert len(result.persistence.report_paths) == 1
+
+    def test_pass_run_report_file_exists(self, tmp_path: pathlib.Path):
+        result = _run(tmp_path)
+        report_path = pathlib.Path(result.persistence.report_paths[0])
+        assert report_path.exists()
+
+    def test_pass_run_report_filename_matches_candidate_id(self, tmp_path: pathlib.Path):
+        result = _run(tmp_path)
+        report_path = pathlib.Path(result.persistence.report_paths[0])
+        assert report_path.name == f"{_FAKE_CANDIDATE_ID}.json"
+
+    def test_pass_run_report_json_schema_version(self, tmp_path: pathlib.Path):
+        result = _run(tmp_path)
+        data = json.loads(pathlib.Path(result.persistence.report_paths[0]).read_text())
+        assert data["schema_version"] == "S6/1.0"
+
+    def test_pass_run_report_json_candidate_id(self, tmp_path: pathlib.Path):
+        result = _run(tmp_path)
+        data = json.loads(pathlib.Path(result.persistence.report_paths[0]).read_text())
+        assert data["candidate"]["candidate_id"] == _FAKE_CANDIDATE_ID
+
+    def test_manifest_reports_list_contains_report_filename(self, tmp_path: pathlib.Path):
+        result = _run(tmp_path)
+        manifest = json.loads(pathlib.Path(result.persistence.manifest_path).read_text())
+        assert f"{_FAKE_CANDIDATE_ID}.json" in manifest["files"]["reports"]
+
+    def test_manifest_reports_file_exists_on_disk(self, tmp_path: pathlib.Path):
+        result = _run(tmp_path)
+        manifest_path = pathlib.Path(result.persistence.manifest_path)
+        manifest = json.loads(manifest_path.read_text())
+        run_dir = manifest_path.parent
+        for fname in manifest["files"]["reports"]:
+            assert (run_dir / "reports" / fname).exists()
+
+    def test_blocked_pipeline_also_writes_report_json(self, tmp_path: pathlib.Path):
+        result = _run(tmp_path, pipeline_result="BLOCKED")
+        assert result.result == "PASS"
+        assert len(result.persistence.report_paths) == 1
+        assert pathlib.Path(result.persistence.report_paths[0]).exists()
 
 
 class TestNoForbiddenImports:

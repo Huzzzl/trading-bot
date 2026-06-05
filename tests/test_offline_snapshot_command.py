@@ -217,7 +217,15 @@ class TestOutputDirValidation:
     def test_empty_string_output_dir_returns_blocked(self):
         result = _run(output_dir="")
         assert result.result == "BLOCKED"
-        assert result.files_written_count() if hasattr(result, "files_written_count") else True
+        assert "output_dir" in result.blocker.lower()
+        assert result.pipeline is None
+        assert result.persistence is None
+        assert result.output_dir is None
+        assert not result.broker_calls_made
+        assert not result.credentials_read
+        assert not result.network_calls_made
+        assert not result.order_action_requested
+        assert not result.live_trading_allowed
 
     def test_none_does_not_call_pipeline(self):
         calls: list = []
