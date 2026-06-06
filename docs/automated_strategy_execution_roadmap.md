@@ -1269,6 +1269,52 @@ No real config file added. No file I/O. No broker/API/credential/env/network/
 order/live/paper access. All 5 safety flags always False.
 Full suite: 5 319 passed.
 
+**PR S18 — Paper simulation design — implemented (docs-only)**
+`docs/paper_simulation_design.md` added. No source code added or changed.
+No test files added or changed. No real config file created. No simulation
+runner implemented. No output artifacts written or committed. No broker/API/
+credential/env/network/order/live/paper access. No paper or live trading
+approved.
+
+Defines the paper simulation layer that follows S17 config validation:
+
+Preconditions: S14 PAPER_CANDIDATE_ELIGIBLE + S15
+APPROVED_FOR_PAPER_CONFIG_DESIGN + S16 config schema + S17
+`validate_paper_config()` returning PASS. These preconditions do not approve
+paper trading; they only permit designing a future simulation implementation.
+
+Proposed simulation inputs: already-validated config dict, offline cached bars
+only, start/end dates. No broker account state, no live market data, no
+credentials, no env vars.
+
+Proposed simulation outputs (all in-memory, no file writes): simulation summary
+dict (result, blocker, provenance, metrics, 5 safety flags always False),
+simulated trades list (entry/exit bar indices, price assumptions with slippage,
+simulated P&L, exit reason), simulated daily equity curve, simulated risk limit
+events.
+
+Simulation safety model: fail-closed — BLOCKED if config validation is not
+PASS, any safety flag is True, bars are empty/wrong interval, or date range is
+out of bounds. All 5 safety flags always False on simulation result. No broker
+calls, no order submission, no paper account connection, no live data, no live
+gate changes.
+
+Simulation status vocabulary (6): NOT_RUN, PASS, BLOCKED_CONFIG,
+BLOCKED_SAFETY, BLOCKED_DATA, ERROR_SIMULATION. PASS authorises only review
+of simulation outputs as additional evidence; it does not approve paper trading,
+live trading, or any broker/API/order/credential access.
+
+S19 implementation plan: `run_paper_simulation(config_dict, bars, *, ...)` →
+`PaperSimulationResult` frozen dataclass; pure offline function; injectable
+signal provider and fill model for deterministic tests; no file I/O; no
+broker/API/credential/env/network/order access; no runtime/execution changes;
+no paper/live trading approval.
+
+`APPROVED_FOR_PAPER_SIMULATION_DESIGN` is a config classification only.
+Simulation PASS is an offline research finding only. Neither authorises paper
+trading, live trading, or any order submission.
+Full suite: 5 319 passed (unchanged — docs-only).
+
 ### Phase C — Paper trading execution
 
 - Paper account executor: applies approved signal on Alpaca paper account
