@@ -1209,9 +1209,65 @@ approve paper trading, live trading, or any broker/API/order/credential access.
 S17 validation rules: schema version, provenance cross-check, risk limit bounds
 (max_position_fraction ≤ 0.10, max_orders_per_day ≤ conservative cap), allowed
 order type allowlist, forbidden field credential scan, reviewer field presence.
-S17 will be a pure offline `validate_paper_config(config_dict)` → frozen
-dataclass; no file I/O, no broker/credential/network/env access; no paper runner.
 Full suite: 5 192 passed (unchanged — docs-only).
+
+**PR S17 — Pure offline paper config validator — implemented**
+`src/research/paper_config_validator.py` created. Fully offline; no file I/O;
+no broker/API/credential/env/network/order/live/paper access. No real config
+file created. No paper or live trading approved. Pure function: same inputs →
+same output. No parameter optimisation.
+
+`PaperConfigStatus` (str, Enum) with 6 values matching the S16 schema:
+DRAFT, READY_FOR_PAPER_CONFIG_REVIEW, APPROVED_FOR_PAPER_SIMULATION_DESIGN,
+REJECTED_CONFIG_REVIEW, BLOCKED_RISK_LIMITS, BLOCKED_PROVENANCE.
+
+`PaperConfigValidationResult` frozen dataclass: result, blocker, candidate_id,
+run_id, status, criteria_checked, criteria_failed, and 5 safety flags (always
+False — validator makes no broker/credential/network/order/live calls).
+
+`validate_paper_config(config_dict)`: checks 24 criteria in deterministic order.
+(1) Schema — `config_schema_version` must be "PC/1.0"; mismatch → early exit
+with BLOCKED_PROVENANCE after exactly 1 criterion checked.
+(2) Provenance — candidate_id, run_id, source_git_sha: missing/empty →
+BLOCKED_PROVENANCE.
+(3) Strategy identity — symbol, interval, strategy_family, holding_horizon:
+missing/empty → REJECTED_CONFIG_REVIEW.
+(4) Paper account label — must be non-empty; any credential-like substring
+(api_key, secret, token, password, credential, auth) → BLOCKED_PROVENANCE.
+(5) Risk limits — max_notional_per_position (finite positive),
+max_position_fraction (≤ 0.10), max_daily_loss (finite positive),
+max_drawdown_stop (≤ 1.0), max_orders_per_day (positive integer ≤ 10),
+min_cash_buffer (finite positive < 1.0) → violation: BLOCKED_RISK_LIMITS.
+(6) Execution — allowed_order_types (non-empty list, allowlist {"market","limit"}),
+allowed_session ("regular"), slippage_bps_assumption (finite ≥ 0),
+commission_bps_assumption (finite ≥ 0) → violation: REJECTED_CONFIG_REVIEW.
+(7) Review fields — risk_review_notes, reviewer_name (non-empty strings);
+review_date_utc (ISO-8601-like datetime string: `YYYY-MM-DDTHH:MM:SS[Z|±HH:MM]`
+— plain date-only strings rejected); approval_status (valid enum value) →
+BLOCKED_PROVENANCE or REJECTED_CONFIG_REVIEW.
+(8) Forbidden scan — recursive scan of all keys and string values for
+credential/order/live patterns (api_key, secret_key, api_secret, auth_token,
+password, credential, live_account_id, production_account, submit_order,
+place_order, live_trading, env:, os.environ) → BLOCKED_PROVENANCE.
+
+Priority bucketing (highest first): BLOCKED_PROVENANCE → BLOCKED_RISK_LIMITS
+→ REJECTED_CONFIG_REVIEW.
+
+APPROVED_FOR_PAPER_SIMULATION_DESIGN is a config classification only; it does
+not approve paper trading, live trading, or any broker/API/order/credential
+access. Paper and live trading remain blocked.
+
+`tests/test_paper_config_validator.py` added: 135 tests across 13 classes
+(`TestPaperConfigStatusEnum`, `TestPaperConfigValidationResultDataclass`,
+`TestPassingConfigs`, `TestSafetyFlagsAlwaysFalse`, `TestSchemaVersion`,
+`TestProvenanceFields`, `TestStrategyFields`, `TestPaperAccountLabel`,
+`TestRiskLimits`, `TestExecutionFields`, `TestReviewFields`,
+`TestReviewDateUtc`, `TestForbiddenScan`, `TestPriorityBucketing`,
+`TestCriteriaOrder`, `TestPureFunctionProperties`, `TestNoForbiddenImports`).
+
+No real config file added. No file I/O. No broker/API/credential/env/network/
+order/live/paper access. All 5 safety flags always False.
+Full suite: 5 319 passed.
 
 ### Phase C — Paper trading execution
 
