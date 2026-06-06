@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
@@ -166,6 +167,19 @@ def _positive_int(v: Any) -> bool:
         return i > 0 and float(v) == i
     except (TypeError, ValueError):
         return False
+
+
+# Matches ISO-8601-like datetime strings: date + T + time + optional tz offset or Z.
+# Accepts: "2026-06-04T12:00:00+00:00", "2026-06-04T12:00:00Z", "2026-06-04T12:00:00".
+_ISO8601_PATTERN: re.Pattern[str] = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})?$"
+)
+
+
+def _is_iso8601_like_utc_string(value: Any) -> bool:
+    if not isinstance(value, str) or not value.strip():
+        return False
+    return bool(_ISO8601_PATTERN.match(value.strip()))
 
 
 def _scan_forbidden(d: Any) -> bool:
@@ -375,7 +389,7 @@ def validate_paper_config(config_dict: dict[str, Any]) -> PaperConfigValidationR
         failed.append("review.reviewer_name")
 
     checked.append("review.review_date_utc")
-    if not _is_nonempty_str(_get(config_dict, "review_date_utc")):
+    if not _is_iso8601_like_utc_string(_get(config_dict, "review_date_utc")):
         failed.append("review.review_date_utc")
 
     checked.append("review.approval_status")

@@ -633,6 +633,54 @@ class TestReviewFields:
 
 
 # ---------------------------------------------------------------------------
+# TestReviewDateUtc
+# ---------------------------------------------------------------------------
+
+class TestReviewDateUtc:
+    def test_offset_tz_passes(self):
+        r = validate_paper_config(_valid_config(review_date_utc="2026-06-04T12:00:00+00:00"))
+        assert r.result == "PASS"
+
+    def test_z_suffix_passes(self):
+        r = validate_paper_config(_valid_config(review_date_utc="2026-06-04T12:00:00Z"))
+        assert r.result == "PASS"
+
+    def test_not_a_date_blocked_provenance(self):
+        r = validate_paper_config(_valid_config(review_date_utc="not-a-date"))
+        assert r.result == "BLOCKED"
+        assert r.status == PaperConfigStatus.BLOCKED_PROVENANCE
+        assert "review.review_date_utc" in r.criteria_failed
+
+    def test_slash_date_blocked_provenance(self):
+        r = validate_paper_config(_valid_config(review_date_utc="2026/06/04"))
+        assert r.result == "BLOCKED"
+        assert r.status == PaperConfigStatus.BLOCKED_PROVENANCE
+        assert "review.review_date_utc" in r.criteria_failed
+
+    def test_non_string_blocked_provenance(self):
+        r = validate_paper_config(_valid_config(review_date_utc=20260604))
+        assert r.result == "BLOCKED"
+        assert r.status == PaperConfigStatus.BLOCKED_PROVENANCE
+        assert "review.review_date_utc" in r.criteria_failed
+
+    def test_whitespace_blocked_provenance(self):
+        r = validate_paper_config(_valid_config(review_date_utc="   "))
+        assert r.result == "BLOCKED"
+        assert r.status == PaperConfigStatus.BLOCKED_PROVENANCE
+        assert "review.review_date_utc" in r.criteria_failed
+
+    def test_date_only_no_time_blocked(self):
+        r = validate_paper_config(_valid_config(review_date_utc="2026-06-04"))
+        assert r.result == "BLOCKED"
+        assert r.status == PaperConfigStatus.BLOCKED_PROVENANCE
+
+    def test_none_blocked_provenance(self):
+        r = validate_paper_config(_valid_config(review_date_utc=None))
+        assert r.result == "BLOCKED"
+        assert r.status == PaperConfigStatus.BLOCKED_PROVENANCE
+
+
+# ---------------------------------------------------------------------------
 # TestForbiddenScan
 # ---------------------------------------------------------------------------
 
