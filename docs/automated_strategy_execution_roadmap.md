@@ -1315,6 +1315,53 @@ Simulation PASS is an offline research finding only. Neither authorises paper
 trading, live trading, or any order submission.
 Full suite: 5 319 passed (unchanged — docs-only).
 
+**PR S19 — Pure offline paper simulation skeleton — implemented**
+`src/research/paper_simulation.py` created. Fully offline; no file I/O; no
+broker/API/credential/env/network/order/live/paper access. No real config file
+created. No paper or live trading approved. Pure function: same inputs → same
+output. No parameter optimisation.
+
+`PaperSimulationStatus` (str, Enum) with 6 values: NOT_RUN, PASS,
+BLOCKED_CONFIG, BLOCKED_SAFETY, BLOCKED_DATA, ERROR_SIMULATION.
+
+`PaperSimulationResult` frozen dataclass: result, blocker, status, summary
+dict, trades tuple, equity_curve tuple, risk_limit_events tuple, and 5 safety
+flags (always False — simulator makes no broker/credential/network/order/live
+calls).
+
+`run_paper_simulation(config_dict, bars, *, start_date, end_date,
+_signal_provider, _fill_model, _config_validator)`:
+(1) Config gate — calls validate_paper_config() (injectable); any True safety
+flag → BLOCKED_SAFETY; non-PASS result → BLOCKED_CONFIG.
+(2) Data gate — bars must be non-empty list of dicts with timestamp, interval,
+open, high, low, close; all prices finite positive; all bars matching
+config interval → BLOCKED_DATA; if all bars have wrong interval →
+BLOCKED_CONFIG; date range must select ≥1 bar → BLOCKED_DATA.
+(3) Simulation loop — bar-by-bar; signal provider (injectable, default HOLD)
+returns "ENTER_LONG", "EXIT", or "HOLD"; unsupported signal → ERROR_SIMULATION;
+fill model (injectable, default close ± slippage_bps) prices entries/exits;
+risk checks before every entry: max_drawdown_stop, max_daily_loss,
+max_orders_per_day, min_cash_buffer/notional cap — violations produce
+risk_limit_events (not BLOCKED); position sizing respects
+max_notional_per_position, max_position_fraction, min_cash_buffer; commission
+deducted in PnL; open position closed at end of simulation.
+(4) Outputs — summary dict (metrics + all 5 safety flags always False), trades
+tuple, equity_curve tuple, risk_limit_events tuple; all in-memory, no writes.
+
+Simulation PASS is an offline research finding only. It does not approve paper
+trading, live trading, or any order submission.
+
+`tests/test_paper_simulation.py` added: 74 tests across 9 classes
+(`TestPaperSimulationStatusEnum`, `TestPaperSimulationResultDataclass`,
+`TestDefaultNoSignal`, `TestConfigGate`, `TestDataGate`,
+`TestUnsupportedSignal`, `TestSimulatedTrade`, `TestPositionSizing`,
+`TestRiskLimitEvents`, `TestEquityCurve`, `TestSafetyFlags`,
+`TestPureFunctionProperties`, `TestNoForbiddenImports`).
+
+No real config file added. No file I/O. No broker/API/credential/env/network/
+order/live/paper access. All 5 safety flags always False.
+Full suite: 5 401 passed.
+
 ### Phase C — Paper trading execution
 
 - Paper account executor: applies approved signal on Alpaca paper account
