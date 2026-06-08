@@ -1504,6 +1504,57 @@ added anywhere. Paper trading remains not approved. Live trading remains
 blocked. All live-gate safety flags remain fail-closed.
 Full suite: 5 459 passed (5 423 baseline + 36 new invariant tests).
 
+**PR S24 — Paper trading approval artifact schema design (docs-only) — added**
+`docs/paper_trading_approval_artifact_design.md` created, defining the
+proposed `PTA/1.0` schema for a future paper trading approval artifact —
+the "paper trading limited-run approval" record named as a required future
+artifact type in the S22 architecture design. Docs-only: no source code, no
+tests, no config files, no artifacts. **S24 adds design only. No approval
+artifact exists.**
+
+Defines: the purpose (a future, separately-approved record required before
+any future paper order planner or paper order path could proceed; does not
+approve paper trading by itself; can never approve live trading); the
+required upstream evidence chain (S14 PAPER_CANDIDATE_ELIGIBLE, S15
+APPROVED_FOR_PAPER_CONFIG_DESIGN, S17 PASS, S19 PASS, S20 integration
+evidence, S21 APPROVED_FOR_PAPER_TRADING_DESIGN, S22 architecture reference,
+S23 invariant tests passing); 32 proposed schema fields (provenance hashes,
+risk limits, allowed symbols/intervals/strategy-families/order-types/session,
+dry-run/human-confirmation/kill-switch flags, `live_trading_approved` /
+`live_order_submission_approved`, notes, known limitations); 8 structurally
+fixed values (`artifact_schema_version = "PTA/1.0"`, `approval_artifact_type
+= "PAPER_TRADING_APPROVAL"`, `approval_scope =
+"PAPER_TRADING_LIMITED_RUN_ONLY"`, `live_trading_approved = false`,
+`live_order_submission_approved = false`, `dry_run_required = true`,
+`human_confirmation_required = true`, `kill_switch_required = true`); a
+forbidden-field list (credential fields, account identifiers, order-action
+instructions, `live_trading_approved = true`, anything that would directly
+enable broker/network/order access); 20 proposed validation rules for a
+future S25 validator (schema version, required-field presence, provenance
+matching, hash matching, expiry, risk-limit bounds incl.
+`max_position_fraction <= 0.10` and `max_orders_per_day <= 10`,
+`allowed_order_types ⊆ {"market","limit"}`, `allowed_session == "regular"`,
+forbidden-field scanning, missing-evidence blocking); 9 proposed future
+statuses (`NOT_REVIEWED`, `DRAFT`, `APPROVED_FOR_DRY_RUN_DESIGN`,
+`APPROVED_FOR_PAPER_ORDER_PLAN_DESIGN`, `APPROVED_FOR_LIMITED_PAPER_RUN`,
+`REJECTED_APPROVAL_REVIEW`, `BLOCKED_PROVENANCE`, `BLOCKED_RISK_LIMITS`,
+`BLOCKED_SAFETY`); what an approved artifact would and would not authorise
+(only its named scope/candidate/run/config/evidence/account-label, never
+live trading, never automatic execution); and the future S25 plan (a pure
+offline approval-artifact validator, analogous to S17's
+`validate_paper_config()` — in-memory dict input only, no file/broker/API/
+credential/env/network/order access, grants no paper/live approval, all
+five safety flags always False, with its own required test coverage).
+
+S24 does not create any real approval artifact, does not approve paper or
+live trading, does not add any broker/API/credential/env/network/order
+access, and does not modify runtime/execution. It only permits a future,
+separately-approved S25 implementation PR for a pure offline validator —
+which would itself still grant no paper or live trading approval. Paper
+trading remains not approved. Live trading remains blocked. No order action
+follows from any artifact shape, status, or field described.
+Full suite: 5 459 passed (unchanged — docs-only).
+
 ### Phase C — Paper trading execution
 
 - Paper account executor: applies approved signal on Alpaca paper account
