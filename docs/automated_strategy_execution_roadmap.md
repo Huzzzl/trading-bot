@@ -1428,6 +1428,47 @@ trading, live trading, or any order submission. Paper and live trading
 remain not enabled. No review workflow tooling implemented.
 Full suite: 5 423 passed (unchanged — docs-only).
 
+**PR S22 — Paper trading architecture design (docs-only) — added**
+`docs/paper_trading_architecture_design.md` created, defining the proposed
+architecture for a future paper trading system, produced after S21 recorded
+`APPROVED_FOR_PAPER_TRADING_DESIGN`. Docs-only: no source code, no tests, no
+config files, no artifacts.
+
+Defines: six preconditions (S14 PAPER_CANDIDATE_ELIGIBLE, S15
+APPROVED_FOR_PAPER_CONFIG_DESIGN, S17 PASS, S19 PASS, S20 integration
+evidence, S21 APPROVED_FOR_PAPER_TRADING_DESIGN — none of which approves
+paper trading); ten proposed architecture components (paper config validator
+and simulation result reviewer — existing/pure offline; paper trading
+approval artifact, paper account connector boundary, paper order planner,
+paper order safety gate, paper execution adapter boundary, paper ledger /
+observation recorder — all future-only and unimplemented; kill switch /
+fail-closed state; audit log / evidence bundle); component boundaries
+distinguishing pure-offline from broker/network-requiring components (only
+the account connector and execution adapter boundaries would ever need
+credentials/network — both remain conceptual placeholders, explicitly
+undesigned-in-detail); a proposed 8-stage data flow with stages 3–8 (future
+approval artifact → order plan → safety gate → execution adapter → ledger →
+observation review) explicitly marked future-only and unimplemented; an
+8-point safety gate model (fail-closed default, explicit approval artifact
+required, paper-only account labels never credentials, kill switch enabled
+by default, max notional/orders/daily-loss/drawdown limits, dry-run/no-submit
+default, human confirmation required, no live account access); five required
+future approval artifact types (architecture review approval, sandbox
+readiness approval, dry-run approval, limited-run approval, observation-period
+review — none of which exists, each explicitly stated as not live trading
+approval); and the future S23 plan (docs-only safety gate design or
+tests-only architecture-invariant characterization — still no broker/API/
+credential/network/order access, still no paper/live approval, no
+runtime/execution changes).
+
+S22 does not approve paper or live trading, does not create any broker/API/
+order path, does not permit credential/env/network access, and does not
+modify runtime/execution. It only permits a future S23 docs-only or
+tests-only design PR. Paper trading remains not approved. Live trading
+remains blocked. No order action follows from any architecture status
+described.
+Full suite: 5 423 passed (unchanged — docs-only).
+
 ### Phase C — Paper trading execution
 
 - Paper account executor: applies approved signal on Alpaca paper account
