@@ -688,19 +688,43 @@ class TestRiskLimitEvents:
         assert isinstance(_default_run().risk_limit_events, tuple)
 
     def test_risk_event_has_required_fields(self):
-        cfg = _valid_config(max_orders_per_day=1, min_cash_buffer=0.0)
-        bars = [_make_bar(), _make_bar(), _make_bar()]
+        cfg = _valid_config(
+            max_orders_per_day=1,
+            max_notional_per_position=5000.0,
+            min_cash_buffer=0.01,
+            slippage_bps_assumption=0.0,
+            commission_bps_assumption=0.0,
+        )
+        bars = [
+            _make_bar(date="2026-06-04"),
+            _make_bar(date="2026-06-04"),
+            _make_bar(date="2026-06-04"),
+        ]
+        # ENTER on bar 0, EXIT on bar 1, ENTER again on bar 2 (blocked by
+        # max_orders_per_day -> guaranteed risk_limit_event)
         def signal(bar, prior, cfg, state):
+            idx = len(prior)
+            if idx == 0:
+                return "ENTER_LONG"
+            if idx == 1:
+                return "EXIT"
             return "ENTER_LONG"
+
         r = run_paper_simulation(
             cfg, bars, start_date="2026-06-04", end_date="2026-06-04",
             _signal_provider=signal,
         )
-        if r.risk_limit_events:
-            evt = r.risk_limit_events[0]
+        assert r.result == "PASS"
+        assert len(r.risk_limit_events) >= 1
+        for evt in r.risk_limit_events:
             assert "bar_index" in evt
             assert "limit_type" in evt
             assert "limit_value" in evt
+        assert r.broker_calls_made is False
+        assert r.credentials_read is False
+        assert r.network_calls_made is False
+        assert r.order_action_requested is False
+        assert r.live_trading_allowed is False
 
 
 # ---------------------------------------------------------------------------

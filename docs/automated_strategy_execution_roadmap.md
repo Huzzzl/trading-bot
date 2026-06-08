@@ -1362,6 +1362,42 @@ No real config file added. No file I/O. No broker/API/credential/env/network/
 order/live/paper access. All 5 safety flags always False.
 Full suite: 5 401 passed.
 
+**PR S20 — Paper simulation integration tests and cleanup — implemented**
+`tests/test_paper_simulation_integration.py` created: 22 tests covering the
+offline S17 → S19 chain `validate_paper_config(config_dict) →
+run_paper_simulation(config_dict, bars, ...)`. Uses the real
+`validate_paper_config()` (no fake validator) for every scenario, including
+a parametrised class that explicitly drives ≥5 cases through the real
+validator. All bars and configs are in-memory plain dicts; no real config
+files, no cached data, no network/broker access, no file writes.
+
+Coverage: valid config passes both S17 and S19; invalid schema version,
+forbidden credential-like field, and out-of-range risk limit each block at
+S17 and propagate to `BLOCKED_CONFIG`; valid config with empty bars →
+`BLOCKED_DATA`; valid config with interval-mismatched bars → `BLOCKED_CONFIG`;
+deterministic ENTER_LONG → EXIT provider yields exactly one simulated trade;
+summary preserves `candidate_id`/`run_id` provenance from the config; all 5
+safety flags remain False across PASS, BLOCKED_CONFIG, BLOCKED_DATA, and
+ERROR_SIMULATION paths; simulation PASS carries no paper/live approval field
+or flag; config and bars are not mutated by the chain; same input always
+produces the same output (determinism); and no files are created under
+`output/` or `data/cache/` by running the chain.
+
+`tests/test_paper_simulation.py` cleanup: replaced the weak conditional
+assertion in `test_risk_event_has_required_fields` (which used an invalid
+`min_cash_buffer=0.0` config and only checked fields `if` an event happened
+to fire) with a deterministic `max_orders_per_day=1` scenario that reliably
+produces a `risk_limit_event`, and now asserts `result == "PASS"`, at least
+one event is produced, every event has `bar_index`/`limit_type`/`limit_value`,
+and all 5 safety flags remain False.
+
+No production code changed. No real config file added. No file I/O. No
+broker/API/credential/env/network/order/live/paper access added.
+Simulation PASS remains an offline research finding only — it does not
+approve paper trading, live trading, or any order submission. Paper and
+live trading remain not enabled.
+Full suite: 5 423 passed.
+
 ### Phase C — Paper trading execution
 
 - Paper account executor: applies approved signal on Alpaca paper account
