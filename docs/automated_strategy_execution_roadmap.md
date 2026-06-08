@@ -1469,6 +1469,41 @@ remains blocked. No order action follows from any architecture status
 described.
 Full suite: 5 423 passed (unchanged — docs-only).
 
+**PR S23 — Paper architecture invariant tests (tests-only) — added**
+`tests/test_paper_architecture_invariants.py` created (36 tests): a
+characterization-test module that locks down the S14–S22 offline/paper-prep
+chain as an architecture invariant, with no new production behaviour. Tests
+only — no source code, config, or runtime changes.
+
+Coverage: (1) the six core offline modules (`pipeline_orchestrator`,
+`report_persistence`, `offline_snapshot_command`, `candidate_promotion`,
+`paper_config_validator`, `paper_simulation`) contain no actual broker/
+network/credential/order imports or calls — and confirms the
+`os.environ`/`submit_order`/`place_order` substrings that exist in
+`paper_config_validator` are scan-list string literals only, never real
+usage; (2) `run_paper_simulation` / `PaperSimulationResult` remain pure
+offline with all five safety flags False on a PASS run and no
+approval-implying summary keys; (3) `validate_paper_config` remains pure
+offline, returns PASS with all five safety flags False for a valid PC/1.0
+config, and blocks configs containing credential fields or forbidden
+substrings; (4) `evaluate_candidate_for_promotion` remains research-only,
+with all five safety flags False on an eligible result and no
+approval-named result fields; (5) `docs/paper_trading_architecture_design.md`
+still states docs-only/future-only/not-approved/blocked invariants;
+(6) `docs/live_readiness_status.md` still records live trading disabled,
+kill switch engaged, dry-run mode, human-confirm required, and not approved;
+(7) no production paper-trading execution path
+(`PaperBroker`/`PaperExecutionAdapter`/`PaperOrderSubmitter`/
+`submit_order(`/`place_order(`) exists anywhere under `src/research/`;
+(8) no new artifact/config files were added, and the test module itself
+performs no file-write operations (read-only `_read_doc` helper only).
+
+S23 adds tests only. No production behaviour was added. No broker, API,
+Alpaca, credential, environment variable, network, or order access was
+added anywhere. Paper trading remains not approved. Live trading remains
+blocked. All live-gate safety flags remain fail-closed.
+Full suite: 5 459 passed (5 423 baseline + 36 new invariant tests).
+
 ### Phase C — Paper trading execution
 
 - Paper account executor: applies approved signal on Alpaca paper account
