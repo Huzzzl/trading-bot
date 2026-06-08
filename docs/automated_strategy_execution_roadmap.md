@@ -1398,6 +1398,36 @@ approve paper trading, live trading, or any order submission. Paper and
 live trading remain not enabled.
 Full suite: 5 423 passed.
 
+**PR S21 — Paper simulation results review workflow design (docs-only) — added**
+`docs/paper_simulation_results_review_workflow.md` created, defining the
+manual review workflow that follows the S19 simulation skeleton and the S20
+integration evidence. Docs-only: no source code, no tests, no config files,
+no artifacts.
+
+Defines: review inputs (S17 validation result, S19 `PaperSimulationResult`,
+S20 integration evidence, summary/trades/equity-curve/risk-event tuples,
+reviewer notes); a 15-item manual review checklist (config/simulation PASS,
+all 5 safety flags False, candidate_id/run_id provenance match,
+total_simulated_trades, total_return_pct, max_drawdown_pct, win_rate_pct,
+risk_limit_events count/types, equity curve stability, trade assumptions,
+slippage/commission realism, single-trade/single-day dependence, risk-limit
+calibration, no implied paper/live approval); a 6-value review decision
+vocabulary (NOT_REVIEWED, NEEDS_MORE_SIMULATION_DATA,
+REJECTED_SIMULATION_REVIEW, BLOCKED_SAFETY_REVIEW, BLOCKED_PROVENANCE,
+APPROVED_FOR_PAPER_TRADING_DESIGN); the required evidence bundle (S14
+promotion result, S15 review decision, S16 config design reference, S17
+validation result, S19 simulation result, S20 integration evidence, reviewer
+checklist/decision/risk-notes/known-limitations); 11 disqualification
+criteria; and the future S22 docs-only paper trading architecture design plan.
+
+`APPROVED_FOR_PAPER_TRADING_DESIGN` authorises only a future docs-only
+architecture design PR (S22) — no broker, paper account, API key, credential,
+network, runtime, executor, or order path follows automatically. Simulation
+PASS remains an offline research finding only; it does not approve paper
+trading, live trading, or any order submission. Paper and live trading
+remain not enabled. No review workflow tooling implemented.
+Full suite: 5 423 passed (unchanged — docs-only).
+
 ### Phase C — Paper trading execution
 
 - Paper account executor: applies approved signal on Alpaca paper account
