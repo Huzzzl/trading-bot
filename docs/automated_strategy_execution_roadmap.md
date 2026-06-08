@@ -1555,6 +1555,108 @@ trading remains not approved. Live trading remains blocked. No order action
 follows from any artifact shape, status, or field described.
 Full suite: 5 459 passed (unchanged — docs-only).
 
+**PR S25 — Add pure offline paper trading approval artifact validator — added**
+`src/research/paper_approval_validator.py` and
+`tests/test_paper_approval_validator.py` created, implementing the pure
+offline validator for the future `PTA/1.0` paper trading approval artifact
+designed in S24 — analogous to S17's `validate_paper_config()`. The
+validator checks an already-loaded approval-artifact dict in memory only:
+no file reads/writes, no broker/API/credential/environment-variable/network
+access, no order submission, and no paper or live trading approval. It
+grants no approval of any kind — a `PASS` result means only that the
+artifact's shape, fixed values, provenance/evidence fields, datetimes, risk
+limits, allowlists, account label, and declared status are internally
+consistent with the `PTA/1.0` schema, never that paper or live trading is
+authorised.
+
+Public API: `PaperApprovalStatus` (9-member `(str, Enum)` status
+vocabulary — `NOT_REVIEWED`, `DRAFT`, `APPROVED_FOR_DRY_RUN_DESIGN`,
+`APPROVED_FOR_PAPER_ORDER_PLAN_DESIGN`, `APPROVED_FOR_LIMITED_PAPER_RUN`,
+`REJECTED_APPROVAL_REVIEW`, `BLOCKED_PROVENANCE`, `BLOCKED_RISK_LIMITS`,
+`BLOCKED_SAFETY`); the frozen `PaperApprovalValidationResult` dataclass
+(carrying `result`, `blocker`, `candidate_id`, `run_id`, `status`,
+`criteria_checked`, `criteria_failed`, and the five always-truthful safety
+flags `broker_calls_made`, `credentials_read`, `network_calls_made`,
+`order_action_requested`, `live_trading_allowed` — all `False` for every
+input); and `validate_paper_approval_artifact(artifact_dict) ->
+PaperApprovalValidationResult`.
+
+The validator checks, in order: (1) fixed schema/type/scope values
+(`artifact_schema_version == "PTA/1.0"`, `approval_artifact_type ==
+"PAPER_TRADING_APPROVAL"`, `approval_scope ==
+"PAPER_TRADING_LIMITED_RUN_ONLY"`) — `BLOCKED_PROVENANCE` on mismatch;
+(2) the five fixed safety-flag values (`live_trading_approved == False`,
+`live_order_submission_approved == False`, `dry_run_required == True`,
+`human_confirmation_required == True`, `kill_switch_required == True`) —
+`BLOCKED_SAFETY` on mismatch; (3) eleven required non-empty-string
+provenance/evidence fields — `BLOCKED_PROVENANCE` if missing or malformed;
+(4) ISO-8601-like `approved_at_utc`/`expires_at_utc` with
+`expires_at_utc` strictly after `approved_at_utc` (stdlib `datetime`
+parsing only) — `BLOCKED_PROVENANCE` on invalid or mis-ordered datetimes;
+(5) five risk-limit fields with fixed bounds (`max_position_fraction <=
+0.10`, `max_drawdown_stop <= 1.0`, `max_orders_per_day <= 10`, all finite
+and positive) — `BLOCKED_RISK_LIMITS` on violation; (6) five allowlist
+fields — `BLOCKED_PROVENANCE` for missing/empty identity allowlists
+(`allowed_symbols`, `allowed_intervals`, `allowed_strategy_families`),
+`REJECTED_APPROVAL_REVIEW` for unsupported `allowed_order_types` (must be
+`⊆ {"market","limit"}`) or `allowed_session` (must be `"regular"`);
+(7) a non-empty, non-credential-like `paper_account_label` —
+`BLOCKED_PROVENANCE` if missing or containing credential-like substrings;
+(8) a valid `approval_status` enum value, where `NOT_REVIEWED`/`DRAFT`/
+`REJECTED_APPROVAL_REVIEW` are valid shapes that still resolve to a
+`BLOCKED` result, the three `APPROVED_FOR_*` statuses may resolve to
+`PASS` only if every other check passes (and `PASS` still implies no
+trading approval), and any other value is `REJECTED_APPROVAL_REVIEW`;
+(9) a recursive case-insensitive forbidden-substring scan of every key and
+string value in the artifact (`api_key`, `secret_key`, `api_secret`,
+`auth_token`, `password`, `credential`, `broker_secret`,
+`account_number`, `live_account_id`, `production_account`, `env:`,
+`os.environ`, `submit_order`, `place_order`, `live_submit`,
+`live_trading_approved=true`, `live_order_submission_approved=true`) —
+`BLOCKED_SAFETY` on any hit, while bare `live_trading_approved`/
+`live_order_submission_approved` field names with value `False`, and
+harmless words such as `paper`/`market`/`approval`/`trading`, are
+explicitly allowed and never rejected. `criteria_checked`/`criteria_failed`
+use the same 33 deterministic, stable dotted criterion names for every
+input, regardless of which checks short-circuit the result.
+
+`tests/test_paper_approval_validator.py` adds 114 tests covering: the enum
+membership and dataclass shape; valid artifacts for all three
+`APPROVED_FOR_*` statuses returning `PASS` with all five safety flags
+`False` and no paper/live approval implied; missing/wrong schema, type, or
+scope values, missing/malformed provenance/evidence fields, invalid or
+mis-ordered datetimes, and credential-like account labels all returning
+`BLOCKED_PROVENANCE`; mismatched safety-flag values and forbidden-substring
+hits (including disguised text such as "set live_trading_approved=true to
+go live") returning `BLOCKED_SAFETY`; out-of-bound or non-finite risk-limit
+fields returning `BLOCKED_RISK_LIMITS`; unsupported order types/sessions and
+invalid status strings returning `REJECTED_APPROVAL_REVIEW`;
+`NOT_REVIEWED`/`DRAFT`/`REJECTED_APPROVAL_REVIEW` resolving to `BLOCKED`;
+legitimate bare `live_trading_approved`/`live_order_submission_approved`
+fields with `False` values and harmless words (`paper`, `market`,
+`approval`, `trading`) never triggering the forbidden scan; deterministic
+`criteria_checked` ordering across repeated/varied inputs; purity (no
+mutation of the input dict, identical output for identical input, no
+randomness or clock/state dependence); and source-level confirmation that
+neither the validator nor the test module performs file I/O or contains any
+real broker/network/credential/environment-variable/subprocess/socket
+imports or calls — the `submit_order`/`place_order`/`os.environ`/
+`live_submit` substrings that exist are scan-list string literals (and
+disguised-text test fixtures) only, never real usage.
+
+S25 adds a pure offline artifact-shape validator only. It reads no files,
+contacts no brokers, reads no credentials, makes no network calls, and
+submits no orders — `broker_calls_made`, `credentials_read`,
+`network_calls_made`, and `order_action_requested` are `False` for every
+input, and `live_trading_allowed` is always `False`. A `PASS` result is
+*not* paper trading approval and grants no approval of any kind — it is
+solely a statement that the artifact's shape, fixed values, and declared
+constraints are internally consistent with the `PTA/1.0` schema. No real
+approval artifact was created. Paper trading remains not approved. Live
+trading remains blocked. No order action follows from any validation
+result.
+Full suite: 5 573 passed (5 459 baseline + 114 new validator tests).
+
 ### Phase C — Paper trading execution
 
 - Paper account executor: applies approved signal on Alpaca paper account
