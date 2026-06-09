@@ -1657,6 +1657,69 @@ trading remains blocked. No order action follows from any validation
 result.
 Full suite: 5 573 passed (5 459 baseline + 114 new validator tests).
 
+**PR S26 — Paper order plan schema design (docs-only) — added**
+`docs/paper_order_plan_schema_design.md` created, defining the proposed
+`POP/1.0` schema for a future in-memory paper order plan — the next
+proposed artifact type in the S22 architecture data flow, produced after
+S25 confirmed the pure offline approval artifact validator is in place.
+Docs-only: no source code, no tests, no config files, no artifacts. **S26
+adds design only. No real order plan exists.**
+
+Defines: the scope (docs-only; no planner, no validator, no paper/live
+trading approval, no broker/API/credential/env/network/order access, no
+automatic execution); the purpose (the schema for a future in-memory plan
+that a future planner would produce and a future safety gate would inspect
+— a plan is not an order and cannot be submitted); the required upstream
+evidence chain (S14 `PAPER_CANDIDATE_ELIGIBLE`, S15
+`APPROVED_FOR_PAPER_CONFIG_DESIGN`, S17 PASS, S19 PASS, S20 integration
+evidence, S21 `APPROVED_FOR_PAPER_TRADING_DESIGN`, S22 architecture
+reference, S23 invariant tests passing, S25 `PaperApprovalValidationResult`
+PASS); 36 proposed schema fields (provenance hashes — including a new
+`approval_artifact_hash` tying the plan to the S24/S25-reviewed artifact —
+order-level fields: symbol/interval/strategy_family/holding_horizon,
+side/order_type/quantity/notional/limit_price/time_in_force/allowed_session,
+rationale, signal_snapshot/risk_snapshot dicts, plus the five always-false
+safety flags and the four always-true gate-requirement flags); 13
+structurally fixed values (`plan_schema_version = "POP/1.0"`,
+`plan_type = "PAPER_ORDER_PLAN"`, `approval_scope =
+"PAPER_TRADING_LIMITED_RUN_ONLY"`, `allowed_session = "regular"`,
+`dry_run_required = true`, `human_confirmation_required = true`,
+`kill_switch_required = true`, `safety_gate_required = true` — the primary
+structural distinction between a plan and an order —
+`broker_calls_made = false`, `credentials_read = false`,
+`network_calls_made = false`, `order_action_requested = false`,
+`live_trading_allowed = false`); allowed values for side
+(`{"BUY","SELL"}`), order_type (subset of `{"market","limit"}`),
+time_in_force (`"day"`), limit_price (required only for limit orders),
+quantity/notional (finite positive, notional bounded by approval artifact's
+`max_notional_per_position`), and symbol/interval/strategy_family (within
+approval artifact closed allowlists); forbidden fields (credential
+identifiers, account/live-account/broker-account references, environment
+variable secret names, `submit_order`/`place_order`/`live_submit`
+instructions, any field enabling broker/network/order access); 20 proposed
+validation rules for a future S27 validator (schema version, required-field
+presence, provenance non-empty, provenance matching approval artifact hashes,
+expiry, ISO-8601-like datetimes, symbol/interval/strategy/order-type within
+approval artifact allowlists, quantity/notional finite positive and bounded,
+risk_snapshot completeness, all §5 fixed-value checks, forbidden field scan,
+`safety_gate_required == true`, missing approval artifact reference blocks
+the plan); 8 proposed future statuses (`NOT_PLANNED`, `PLAN_DRAFT`,
+`PLAN_READY_FOR_SAFETY_GATE`, `PLAN_REJECTED_SCHEMA`,
+`PLAN_BLOCKED_PROVENANCE`, `PLAN_BLOCKED_RISK`, `PLAN_BLOCKED_SAFETY`,
+`PLAN_EXPIRED`); what a valid plan would and would not authorise (only
+safety-gate review, no broker/API/network/order/live trading); and the
+future S27 plan (a pure offline paper order plan validator analogous to
+S17/S25, or a docs-only order planner design).
+
+S26 does not create any real order plan, does not implement an order
+planner, does not approve paper or live trading, does not add any
+broker/API/credential/env/network/order access, and does not modify
+runtime/execution. It only permits a future, separately-approved S27
+implementation PR — which would itself still grant no paper or live trading
+approval. Paper trading remains not approved. Live trading remains blocked.
+No order action follows from any plan shape, status, or field described.
+Full suite: 5 573 passed (unchanged — docs-only).
+
 ### Phase C — Paper trading execution
 
 - Paper account executor: applies approved signal on Alpaca paper account
