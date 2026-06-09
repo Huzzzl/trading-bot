@@ -1720,6 +1720,91 @@ approval. Paper trading remains not approved. Live trading remains blocked.
 No order action follows from any plan shape, status, or field described.
 Full suite: 5 573 passed (unchanged — docs-only).
 
+**PR S27 — Add pure offline paper order plan validator — added**
+`src/research/paper_order_plan_validator.py` and
+`tests/test_paper_order_plan_validator.py` created, implementing the pure
+offline validator for the future `POP/1.0` paper order plan schema designed
+in S26 — analogous to S17's `validate_paper_config()` and S25's
+`validate_paper_approval_artifact()`. The validator checks an already-
+loaded plan dict in memory only: no file reads/writes, no broker/API/
+credential/env/network access, no order submission, and no paper or live
+trading approval. A paper order plan is not an order. Validator PASS means
+only that the plan's shape and scope are valid for future safety-gate review.
+
+Public API: `PaperOrderPlanStatus` (8-member `(str, Enum)` status
+vocabulary — `NOT_PLANNED`, `PLAN_DRAFT`, `PLAN_READY_FOR_SAFETY_GATE`,
+`PLAN_REJECTED_SCHEMA`, `PLAN_BLOCKED_PROVENANCE`, `PLAN_BLOCKED_RISK`,
+`PLAN_BLOCKED_SAFETY`, `PLAN_EXPIRED`); the frozen
+`PaperOrderPlanValidationResult` dataclass (carrying `result`, `blocker`,
+`plan_id`, `candidate_id`, `run_id`, `status`, `criteria_checked`,
+`criteria_failed`, and the five always-truthful safety flags
+`broker_calls_made`, `credentials_read`, `network_calls_made`,
+`order_action_requested`, `live_trading_allowed` — all `False` for every
+input); and `validate_paper_order_plan(plan_dict) ->
+PaperOrderPlanValidationResult`.
+
+The validator checks, in priority order: (1) plan schema version
+(`"POP/1.0"`) and plan type (`"PAPER_ORDER_PLAN"`) — `PLAN_REJECTED_SCHEMA`
+on mismatch; (2) approval scope (`"PAPER_TRADING_LIMITED_RUN_ONLY"`) —
+`PLAN_BLOCKED_PROVENANCE` on mismatch; (3) nine fixed boolean fields
+(four must be `True`: `dry_run_required`, `human_confirmation_required`,
+`kill_switch_required`, `safety_gate_required`; five must be `False`: the
+safety flags) — `PLAN_BLOCKED_SAFETY` on any violation; (4) seven required
+non-empty-string provenance/evidence fields — `PLAN_BLOCKED_PROVENANCE`;
+(5) ISO-8601-like `generated_at_utc`/`expires_at_utc` with
+`expires_at_utc` strictly after `generated_at_utc` — `PLAN_BLOCKED_PROVENANCE`;
+(6) four strategy identity fields — `PLAN_BLOCKED_PROVENANCE`; (7) order
+intent fields — `PLAN_REJECTED_SCHEMA` for unsupported
+`side`/`order_type`/`time_in_force`/`allowed_session`,
+`PLAN_BLOCKED_RISK` for invalid `quantity`/`notional`/`limit_price`;
+(8) rationale/signal_snapshot/risk_snapshot/notes presence —
+`PLAN_BLOCKED_PROVENANCE`; (9) risk-snapshot field bounds
+(`max_position_fraction <= 0.10`, `max_drawdown_stop <= 1.0`,
+`max_orders_per_day <= 10`, `notional <= max_notional_per_position` if
+present) — `PLAN_BLOCKED_RISK`; (10) valid `plan_status` enum value —
+`PLAN_REJECTED_SCHEMA` for unrecognised values; (11) recursive
+case-insensitive forbidden-substring scan (18 forbidden patterns covering
+credential identifiers, account references, order-action instructions,
+`paper_trading_approved`, `live_trading_approved`, `approved_for_live_trading`)
+— `PLAN_BLOCKED_SAFETY`; (12) final declared-status classification:
+`PLAN_READY_FOR_SAFETY_GATE` → `PASS`; all other valid statuses →
+`BLOCKED`. Aggregate priority: `PLAN_BLOCKED_PROVENANCE` >
+`PLAN_BLOCKED_SAFETY` > `PLAN_BLOCKED_RISK` > `PLAN_REJECTED_SCHEMA` >
+final classification. 43 deterministic criterion names, same order for
+every input. The five safety-flag keys (`credentials_read` etc.) are
+explicitly exempted from the key-name portion of the forbidden scan when
+their value is exactly `False`, since `"credentials_read"` contains the
+substring `"credential"` — they are still `PLAN_BLOCKED_SAFETY` if their
+value deviates from `False`.
+
+`tests/test_paper_order_plan_validator.py` adds 131 tests covering: enum
+membership and dataclass shape; valid market/limit/sell `PLAN_READY_FOR_
+SAFETY_GATE` plans returning `PASS` with all five safety flags `False` and
+no paper/live approval implied; every `PLAN_REJECTED_SCHEMA`,
+`PLAN_BLOCKED_PROVENANCE`, `PLAN_BLOCKED_RISK`, and `PLAN_BLOCKED_SAFETY`
+routing path (including each of the nine fixed-boolean violations, all seven
+provenance/evidence field failures, both datetime fields, all four strategy
+identity fields, all four order intent fields, all risk-snapshot bound and
+optional notional-cap violations, all 18 forbidden-substring patterns
+tested via `rationale`/`signal_snapshot`/`risk_snapshot` string/key
+injection, and the disguised-text test `"set live_trading_approved=true to
+enable"`); `NOT_PLANNED`/`PLAN_DRAFT`/`PLAN_EXPIRED` resolving to `BLOCKED`;
+the five safety-flag keys with value `False` being allowed; harmless words
+(`paper`, `market`, `approval`, `plan`, `order_type`, `trading`) never
+triggering the scan; deterministic `criteria_checked` ordering; purity (no
+mutation, identical output for identical input); and source-level
+confirmation of no file I/O, no forbidden imports, no actual
+broker/network/credential/env/order calls in either file.
+
+S27 adds a pure offline plan-shape validator only. A `PASS` result is NOT
+order submission approval and NOT paper trading approval — it is solely a
+statement that the plan's shape, fixed values, and declared constraints
+are internally consistent with the `POP/1.0` schema and eligible for a
+future, separately-approved safety gate. No real order plan was created.
+Paper trading remains not approved. Live trading remains blocked. No order
+action follows from any validation result.
+Full suite: 5 704 passed (5 573 baseline + 131 new validator tests).
+
 ### Phase C — Paper trading execution
 
 - Paper account executor: applies approved signal on Alpaca paper account
