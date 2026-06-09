@@ -1805,6 +1805,49 @@ Paper trading remains not approved. Live trading remains blocked. No order
 action follows from any validation result.
 Full suite: 5 704 passed (5 573 baseline + 131 new validator tests).
 
+**PR S28 — Add pure offline paper order safety gate — added**
+`src/research/paper_order_safety_gate.py`: pure offline
+`evaluate_paper_order_safety_gate(approval_artifact, order_plan, *, current_state,
+_approval_validator=None, _plan_validator=None)` function; `PaperOrderSafetyGateStatus`
+enum (11 members), `PaperOrderSafetyGateResult` frozen dataclass (20 fields); evaluates
+an already-loaded PTA/1.0 approval artifact dict and a POP/1.0 order plan dict together
+with an in-memory current state snapshot; runs 22 deterministic checks in declared order
+across 3 early-exit gates (approval validator, plan validator, state schema) and 19
+accumulated checks (5 provenance, 1 kill switch, 5 allowlist, 5 risk, 1 duplicate,
+1 position conflict, 1 safety fixed-flags); classifies by bucket priority
+BLOCKED_SAFETY > BLOCKED_PROVENANCE > BLOCKED_KILL_SWITCH > BLOCKED_RISK_LIMIT >
+BLOCKED_DUPLICATE > BLOCKED_POSITION_CONFLICT > PASS_DRY_RUN_ONLY; provenance checks
+match candidate_id/run_id/approval_artifact_hash/paper_config_hash/simulation_result_hash
+between artifact and plan; kill switch check requires kill_switch_required=True in plan
+and kill_switch_open=True in state; allowlist checks verify symbol/interval/strategy_family
+against approval allowlists (→ BLOCKED_PROVENANCE) and order_type/session (→
+BLOCKED_RISK_LIMIT); risk checks enforce notional ≤ max_notional_per_position, risk_snapshot
+max_position_fraction ≤ approval max_position_fraction, current_daily_order_count <
+max_orders_per_day, projected daily loss (max(0,−pnl)+notional) ≤ max_daily_loss, and
+projected drawdown (current+notional/max_notional) ≤ max_drawdown_stop; duplicate check
+rejects plan_id already in processed_plan_ids; position conflict blocks same symbol +
+candidate_id with status OPEN or PENDING; safety fixed-flags re-checks all required boolean
+invariants from both artifacts as defense-in-depth; PASS_DRY_RUN_ONLY authorises only a
+future dry-run/no-submit rendering step — it is NOT order submission approval, NOT paper
+trading approval, and NOT live trading approval; all five safety flags always False on
+result; dry_run_required/human_confirmation_required/kill_switch_required always True on
+result; injectable validator pattern (_approval_validator, _plan_validator) for testability;
+`tests/test_paper_order_safety_gate.py`: 98 tests across 18 classes covering enum values,
+frozen dataclass, valid PASS, safety flags always False on all gate_status values, PASS
+not approving paper/live trading, BLOCKED_APPROVAL/BLOCKED_PLAN via real and mock
+validators, safety flag True on validator result → BLOCKED_SAFETY, missing/invalid state →
+ERROR_GATE (7 cases), all 5 provenance mismatches → BLOCKED_PROVENANCE, kill_switch_open
+False → BLOCKED_KILL_SWITCH, symbol/interval/strategy_family not allowed → BLOCKED_PROVENANCE
+(3 cases), order_type/session mismatch → BLOCKED_RISK_LIMIT (2 cases), notional/position
+fraction/daily order count/daily loss/drawdown violations → BLOCKED_RISK_LIMIT (5 cases),
+duplicate plan_id → BLOCKED_DUPLICATE, position conflict OPEN/PENDING → BLOCKED_POSITION_CONFLICT
+(2 cases), all 4 safety fixed-flag violations → BLOCKED_SAFETY (via mock validators),
+bucket priority ordering (4 cases), projected value formulas (5 cases), deterministic
+check ordering, pure function properties (5 cases), no file I/O in source, no forbidden
+imports; no real order plan or approval artifact created; no file I/O; no broker/API/
+credential/env/network/order access added; no paper/live trading approved.
+Full suite: 5 802 passed (5 704 baseline + 98 new gate tests).
+
 ### Phase C — Paper trading execution
 
 - Paper account executor: applies approved signal on Alpaca paper account
