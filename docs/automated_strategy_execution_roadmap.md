@@ -1937,6 +1937,45 @@ verbs, and runtime/execution imports. No file I/O; no broker/API/credential/
 env/network/order access added; no paper/live trading approved.
 Full suite: 5 998 passed (5 866 baseline + 132 new planner tests).
 
+**PR S31 — Add planner to safety gate integration tests — added**
+`tests/test_paper_order_planner_gate_integration.py`: 57 integration tests
+across 13 classes covering the full pure offline chain S30
+`create_paper_order_plan()` → S27 `validate_paper_order_plan()` (standalone)
+→ S28 `evaluate_paper_order_safety_gate()` with the real functions for every
+scenario — no mocked validators anywhere in the module: full-chain market and
+limit plans passing all three stages to PASS_DRY_RUN_ONLY with all 22 gate
+checks; sequencing proof (the planner's internal S27 validation, the
+standalone S27 validation, and the gate's own approval+plan validator re-runs
+form three real validation layers in order; when the planner blocks, no plan
+is released and the downstream stages are never run — fail closed); the gate
+receiving the exact plan object returned by the planner; exact 37-key POP/1.0
+plan shape with no extras before entering the gate; provenance linkage
+(candidate_id/run_id/approval_artifact_hash/paper_config_hash/
+simulation_result_hash) from the approval artifact through the plan to the
+gate's five passing cross-artifact provenance checks; planner-stage stops for
+blocked approval/signal/sizing including market-signal-vs-limit-only-approval
+and notional-over-cap; gate-stage blocks for planner-passed structurally valid
+plans (kill switch closed → BLOCKED_KILL_SWITCH; daily order count at cap,
+projected daily loss over cap, projected drawdown over cap →
+BLOCKED_RISK_LIMIT with projected-value assertions; duplicate plan_id →
+BLOCKED_DUPLICATE; OPEN/PENDING same candidate+symbol →
+BLOCKED_POSITION_CONFLICT with CLOSED still passing); multi-symbol approval
+allowlist with the second symbol passing the full chain; safety flags always
+False on planner/validator/gate results across PASS and every blocked
+scenario family; no input mutation across the whole chain; determinism;
+deep-copy isolation (mutating original signal/sizing after the planner does
+not change the gated plan, which still passes the real validator and gate);
+runtime proof the chain never opens a file; and source scans of all four
+chain modules (planner, S27 plan validator, S25 approval validator, S28 gate)
+plus this module itself for file I/O, forbidden imports, broker/env/order
+call patterns, and runtime/execution imports. Tests-only: no production code
+changed; no real artifact created; no file I/O; no broker/API/credential/env/
+network/order access added; no paper/live trading approved; a
+planner-generated POP/1.0 plan remains an in-memory paper order plan only —
+not an order; PASS_DRY_RUN_ONLY remains clearance for a future
+dry-run/no-submit rendering step only, never order submission approval.
+Full suite: 6 055 passed (5 998 baseline + 57 new integration tests).
+
 ### Phase C — Paper trading execution
 
 - Paper account executor: applies approved signal on Alpaca paper account
