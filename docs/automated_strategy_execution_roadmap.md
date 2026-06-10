@@ -1880,6 +1880,63 @@ approved; PASS_DRY_RUN_ONLY remains clearance for a future dry-run/no-submit
 rendering step only — never order submission approval.
 Full suite: 5 866 passed (5 802 baseline + 64 new integration tests).
 
+**PR S30 — Add pure offline paper order planner — added**
+`src/research/paper_order_planner.py`: pure offline
+`create_paper_order_plan(approval_artifact, *, signal_snapshot, sizing_snapshot,
+generated_at_utc, expires_at_utc, plan_id, source_git_sha, _plan_validator=None)`
+function; `PaperOrderPlannerStatus` enum (8 members: NOT_PLANNED, PLAN_CREATED,
+BLOCKED_APPROVAL, BLOCKED_SIGNAL, BLOCKED_SIZING, BLOCKED_VALIDATION,
+BLOCKED_SAFETY, ERROR_PLANNER), `PaperOrderPlannerResult` frozen dataclass
+(12 fields); creates an in-memory POP/1.0 paper order plan dict from an
+already-loaded PTA/1.0 approval artifact plus in-memory signal and sizing
+snapshot dicts, then validates the generated plan with the existing S27
+`validate_paper_order_plan()`; five stages with 17 deterministic criteria names —
+local approval structural/safety checks (approval.schema/type/scope/status/
+identity/evidence_hashes/allowlists/risk_limits/safety_flags: fixed PTA values,
+non-empty identity/evidence strings, non-empty allowlists with
+allowed_session="regular", risk caps max_position_fraction ≤ 0.10,
+max_drawdown_stop ≤ 1.0, max_orders_per_day ≤ 10; live-approval flags must be
+False and required booleans True else BLOCKED_SAFETY, other failures
+BLOCKED_APPROVAL; the S25 validator is deliberately not called — approval checks
+stay simple and local), signal snapshot checks (signal.schema/allowlists/intent:
+8 required fields, confidence finite in [0,1], side BUY/SELL, order_type
+market/limit, symbol/interval/strategy_family/order_type inside the approval
+allowlists, else BLOCKED_SIGNAL), sizing snapshot checks
+(sizing.schema/risk_limits: finite-positive quantity/notional/caps,
+positive-int max_orders_per_day, limit_price finite-positive for limit orders
+and None/absent for market orders, every sizing cap ≤ the matching approval
+cap, else BLOCKED_SIZING), plan construction (plan.constructed: exactly the 37
+S27-expected POP/1.0 fields, no extras; deep-copied signal_snapshot/
+risk_snapshot; fixed time_in_force="day", plan_status="PLAN_READY_FOR_SAFETY_GATE",
+all four gate-requirement booleans True, all five safety flags False), and S27
+validation (plan.validation + safety.result_flags: validator non-PASS →
+BLOCKED_VALIDATION, validator safety flag True → BLOCKED_SAFETY, validator
+exception → ERROR_PLANNER); fail closed: the plan field is populated only on
+PLAN_CREATED — a blocked/error result never releases the constructed dict;
+malformed caller provenance (timestamps, plan_id, source_git_sha) is caught by
+the real S27 validation stage; all five safety flags always False on the
+result; a generated plan is an in-memory paper order plan only — it is not an
+order, and PLAN_CREATED is never order approval or paper/live trading approval;
+`tests/test_paper_order_planner.py`: 132 tests across 12 classes covering enum
+values, frozen dataclass shape, valid market and limit plans passing the real
+S27 validator, exact 37-key plan contents with provenance from the approval
+artifact and signal/sizing fields from the snapshots, plan safety flags False
+and required booleans True, planner result safety flags False across
+PASS/blocked/error scenarios, approval wrong fixed values/missing identity or
+evidence/empty allowlists/invalid risk caps → BLOCKED_APPROVAL and
+live-approval or required-boolean violations → BLOCKED_SAFETY, signal
+non-dict/missing fields/outside allowlists/invalid side/order_type/confidence →
+BLOCKED_SIGNAL, sizing non-dict/missing fields/invalid values/every cap
+excess/limit_price rules → BLOCKED_SIZING, injected blocked validator →
+BLOCKED_VALIDATION plus real-validator blocks for misordered timestamps/empty
+plan_id/empty sha, injected safety-flag validator → BLOCKED_SAFETY, raising
+validator → ERROR_PLANNER, deep-copy isolation (mutating original snapshots
+after planning does not change the returned plan), no input mutation,
+determinism, and source/self scans for file I/O, forbidden imports, order
+verbs, and runtime/execution imports. No file I/O; no broker/API/credential/
+env/network/order access added; no paper/live trading approved.
+Full suite: 5 998 passed (5 866 baseline + 132 new planner tests).
+
 ### Phase C — Paper trading execution
 
 - Paper account executor: applies approved signal on Alpaca paper account
