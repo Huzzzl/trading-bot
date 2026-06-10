@@ -1976,6 +1976,64 @@ not an order; PASS_DRY_RUN_ONLY remains clearance for a future
 dry-run/no-submit rendering step only, never order submission approval.
 Full suite: 6 055 passed (5 998 baseline + 57 new integration tests).
 
+**PR S32 — Add pure offline paper order lifecycle state machine — added**
+`src/research/paper_order_lifecycle.py`: pure offline in-memory lifecycle
+bookkeeping for a paper order plan after planning and safety-gate review;
+`PaperOrderLifecycleStatus` enum (12 members: NOT_STARTED, PLANNED,
+GATE_PASSED_DRY_RUN_ONLY, DRY_RUN_RENDERED, PAPER_ORDER_PENDING,
+PAPER_ORDER_FILLED, PAPER_ORDER_PARTIALLY_FILLED, PAPER_ORDER_REJECTED,
+PAPER_ORDER_CANCELLED, PAPER_ORDER_EXPIRED, BLOCKED, ERROR),
+`PaperOrderLifecycleEventType` enum (11 members), frozen
+`PaperOrderLifecycleState` (18 fields) and
+`PaperOrderLifecycleTransitionResult` (13 fields) dataclasses;
+`create_lifecycle_from_plan(plan, *, lifecycle_id, created_at_utc)` performs
+only minimal local checks (POP/1.0 schema/type, identity strings, side/
+order_type, finite-positive quantity, five safety flags False and four
+required booleans True, lifecycle identity strings — 7 deterministic
+criteria) and on PASS returns a PLANNED state with one PLAN_CREATED event,
+current_quantity from the plan, filled_quantity 0.0; on any failure no
+state is released (state=None, fail closed); it never calls the planner,
+validator, or safety gate; `apply_lifecycle_event(state, *, event_type,
+event_at_utc, details=None)` returns a NEW immutable state (8 deterministic
+criteria), never mutates the input, validates state/event/details schemas,
+re-checks state safety flags, scans event details recursively and
+case-insensitively for 14 forbidden action/credential/network phrases
+(assembled from fragments in source; on a hit the previous state is
+returned unchanged with details.forbidden_content failed), enforces the
+declared transition table (PLANNED → GATE_PASSED_DRY_RUN_ONLY →
+DRY_RUN_RENDERED → PAPER_ORDER_PENDING → fill/reject/cancel/expire
+outcomes, with PARTIALLY_FILLED allowing only fill/cancel/expire, and
+BLOCKED_BY_SAFETY/ERROR_RECORDED reachable from every non-terminal state),
+rejects all events in the six terminal statuses, validates fill details
+(filled_quantity finite positive ≤ current_quantity; average_fill_price
+finite positive when provided, retained otherwise), keeps filled_quantity
+unchanged on reject/cancel/expire, deep-copies details into the appended
+event dict (event_type/event_at_utc/from_status/to_status/details), and
+sets the state blocker from details.reason on BLOCKED/ERROR; all five
+safety flags always False on every state and result; lifecycle transitions
+are bookkeeping only — never order actions, order submission, broker
+integration, paper trading execution, or live trading;
+`tests/test_paper_order_lifecycle.py`: 174 tests across 13 classes covering
+both enums, frozen dataclasses, valid creation with PLAN_CREATED event and
+criteria ordering, every creation block family (non-dict/schema/type/
+identity/intent/quantity/safety-flag/required-boolean/lifecycle-identity),
+plan not mutated, every happy-path transition including partial→full fill,
+every disallowed transition with the previous state returned unchanged,
+terminal statuses rejecting all events, BLOCKED_BY_SAFETY/ERROR_RECORDED
+from every non-terminal state, fill validation (positive/over-quantity/
+price rules, price retention, reject/cancel/expire preserving fills), all
+14 forbidden detail words blocked in keys, values, and nested lists with
+case-insensitive scan and harmless details passing, apply input validation
+(non-state/non-enum/empty timestamp/non-dict details/empty reason/tainted
+state flags), immutability (old state and details never mutated, events
+growing by exactly one per event), determinism, safety flags always False
+across PASS/BLOCKED scenarios and all reachable statuses, and source/self
+scans confirming no file I/O, no forbidden imports, no contiguous order
+verbs, no env/network calls, and no runtime/execution/planner/validator/
+gate imports. No file I/O; no broker/API/credential/env/network/order
+access added; no paper/live trading approved.
+Full suite: 6 229 passed (6 055 baseline + 174 new lifecycle tests).
+
 ### Phase C — Paper trading execution
 
 - Paper account executor: applies approved signal on Alpaca paper account
