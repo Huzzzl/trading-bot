@@ -1848,6 +1848,38 @@ imports; no real order plan or approval artifact created; no file I/O; no broker
 credential/env/network/order access added; no paper/live trading approved.
 Full suite: 5 802 passed (5 704 baseline + 98 new gate tests).
 
+**PR S29 — Add paper order safety gate integration tests — added**
+`tests/test_paper_order_safety_gate_integration.py`: 64 integration tests across
+15 classes covering the full pure offline chain S25 `validate_paper_approval_artifact()`
+→ S27 `validate_paper_order_plan()` → S28 `evaluate_paper_order_safety_gate()` with
+the real validators for every core scenario: full-chain PASS_DRY_RUN_ONLY with all
+22 checks passed; approval blocked by S25 → BLOCKED_APPROVAL with the chain stopping
+before the plan stage; plan blocked by S27 → BLOCKED_PLAN; all 5 cross-artifact
+provenance mismatches (candidate_id/run_id/approval_artifact_hash/paper_config_hash/
+simulation_result_hash) proven to pass both validators individually and be caught
+only at the gate → BLOCKED_PROVENANCE; kill switch closed → BLOCKED_KILL_SWITCH;
+symbol/interval/strategy_family outside approval allowlists → BLOCKED_PROVENANCE;
+order_type outside approval allowlist → BLOCKED_RISK_LIMIT; session mismatch →
+BLOCKED_RISK_LIMIT via the gate's documented `_plan_validator` injection seam (the
+single bypass in the module, justified in-source: both validators pin
+allowed_session="regular" so the mismatch can never reach the gate through validated
+inputs); notional over approval cap, daily order count at cap, projected daily loss
+over cap, and projected drawdown over cap → BLOCKED_RISK_LIMIT; duplicate plan_id →
+BLOCKED_DUPLICATE; OPEN/PENDING same symbol+candidate positions →
+BLOCKED_POSITION_CONFLICT with CLOSED not blocking; all five plan safety-flag
+mutations blocked at the S27 stage before any PASS, approval live-approval flags
+blocked at the S25 stage, plus gate-level safety.fixed_flags defense-in-depth;
+result safety flags always False across PASS and every blocked scenario family on
+both gate and validator results; no input mutation; deterministic output for same
+input; runtime proof the chain never opens a file plus source scans of all three
+chain modules and the test module itself for file I/O, forbidden imports, and
+broker/env/order call patterns. Tests-only: no production code changed; no real
+approval artifact, order plan, or any other artifact created; no file I/O; no
+broker/API/credential/env/network/order access added; no paper/live trading
+approved; PASS_DRY_RUN_ONLY remains clearance for a future dry-run/no-submit
+rendering step only — never order submission approval.
+Full suite: 5 866 passed (5 802 baseline + 64 new integration tests).
+
 ### Phase C — Paper trading execution
 
 - Paper account executor: applies approved signal on Alpaca paper account
