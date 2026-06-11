@@ -2034,6 +2034,52 @@ gate imports. No file I/O; no broker/API/credential/env/network/order
 access added; no paper/live trading approved.
 Full suite: 6 229 passed (6 055 baseline + 174 new lifecycle tests).
 
+**PR S33 — Add planner/gate/lifecycle integration tests — added**
+`tests/test_paper_order_lifecycle_integration.py`: 69 integration tests
+across 16 classes covering the full pure offline chain S30
+`create_paper_order_plan()` → S27 `validate_paper_order_plan()` (standalone)
+→ S28 `evaluate_paper_order_safety_gate()` → S32
+`create_lifecycle_from_plan()` → S32 `apply_lifecycle_event()` with the real
+functions for every scenario — no mocked validators or mocked lifecycle
+functions anywhere in the module: full-chain market and limit plans passing
+all five stages (planner PLAN_CREATED, standalone S27 PASS, gate
+PASS_DRY_RUN_ONLY, lifecycle PLANNED with PLAN_CREATED event recording
+NOT_STARTED → PLANNED, SAFETY_GATE_PASSED event → GATE_PASSED_DRY_RUN_ONLY);
+the `_run_full_chain()` helper proving fail-closed sequencing (a blocked
+planner releases no plan and stops everything downstream; a non-PASS S27
+validation stops the chain; any gate status other than PASS_DRY_RUN_ONLY —
+kill switch, daily count at cap, duplicate plan_id, open position conflict —
+prevents lifecycle creation and advancement; the SAFETY_GATE_PASSED
+lifecycle event is only ever applied after the real gate returned
+PASS_DRY_RUN_ONLY); full bookkeeping chain PLANNED →
+GATE_PASSED_DRY_RUN_ONLY → DRY_RUN_RENDERED → PAPER_ORDER_PENDING →
+PAPER_ORDER_FILLED using only lifecycle events with the 5-event sequence
+asserted; lifecycle creation preserving planner-plan identity
+(lifecycle_id/plan_id/candidate_id/run_id/symbol/side/order_type/
+current_quantity); lifecycle sequencing enforced in integration (dry-run
+before gate event, pending before dry-run, fill before pending all blocked
+with the previous state returned unchanged; terminal FILLED rejecting all
+further events); BLOCKED_BY_SAFETY/ERROR_RECORDED recording
+bookkeeping-only blocked/error states with all safety flags False; fill
+details validated in the full chain (valid fill passes, over-quantity and
+invalid average price blocked); forbidden lifecycle details (order verbs,
+api_key/secret/token, http/endpoint) blocked with the previous state
+unchanged; safety flags always False on planner/validator/gate/lifecycle
+results and states across PASS and blocked scenario families; no input
+mutation (approval/signal/sizing/current_state/lifecycle state) across the
+whole chain; determinism at every stage; deep-copy isolation between caller
+snapshots and lifecycle state; runtime proof the chain never opens a file;
+and source scans of all five chain modules (planner, S27 plan validator,
+S28 gate, S32 lifecycle, S25 approval validator) plus this module itself
+for file I/O, forbidden imports, broker/env/order call patterns, and
+runtime/execution imports. Tests-only: no production code changed; no real
+artifact created; no file I/O; no broker/API/credential/env/network/order
+access added; no paper/live trading approved; lifecycle integration is pure
+offline/in-memory bookkeeping only — lifecycle transitions are not order
+actions; PASS_DRY_RUN_ONLY remains clearance for a future dry-run/no-submit
+rendering step only, never order submission approval.
+Full suite: 6 298 passed (6 229 baseline + 69 new integration tests).
+
 ### Phase C — Paper trading execution
 
 - Paper account executor: applies approved signal on Alpaca paper account
