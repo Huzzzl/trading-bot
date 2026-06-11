@@ -2080,6 +2080,54 @@ actions; PASS_DRY_RUN_ONLY remains clearance for a future dry-run/no-submit
 rendering step only, never order submission approval.
 Full suite: 6 298 passed (6 229 baseline + 69 new integration tests).
 
+**PR S34 — Add pure offline paper audit ledger recorder — added**
+`src/research/paper_audit_ledger.py`: pure offline, in-memory append-only
+audit ledger; `PaperAuditLedgerStatus` enum (4 members: EMPTY, UPDATED,
+BLOCKED, ERROR), `PaperAuditLedgerEntryType` enum (6 members:
+PLANNER_RESULT_RECORDED, VALIDATION_RESULT_RECORDED,
+SAFETY_GATE_RESULT_RECORDED, LIFECYCLE_TRANSITION_RECORDED,
+BLOCKED_CHAIN_RECORDED, ERROR_RECORDED), frozen `PaperAuditLedgerState`
+(10 fields) and `PaperAuditLedgerResult` (11 fields) dataclasses;
+`create_empty_audit_ledger(*, ledger_id)` validates a non-empty ledger_id
+(2 deterministic criteria: ledger.identity, ledger.created) and returns an
+EMPTY ledger with entries=() / last_entry_id=None, or no state at all on
+failure (fail closed); `append_audit_entry(ledger, *, entry_id, entry_type,
+recorded_at_utc, source, payload)` returns a NEW immutable ledger state (12
+deterministic criteria: ledger.schema, ledger.safety_flags, entry.identity,
+entry.duplicate_id, entry.type, entry.timestamp, entry.source,
+payload.schema, payload.required_keys, payload.source_matches_type,
+payload.forbidden_content, entry.appended), never mutates the input,
+validates ledger/entry/payload schemas, re-checks ledger safety flags,
+rejects duplicate entry ids, enforces the required payload keys and the
+required source per entry type (planner→"planner", validator→"validator",
+safety_gate→"safety_gate", lifecycle→"lifecycle", blocked/error→"chain"),
+and scans the payload recursively and case-insensitively for 14 forbidden
+action/credential/network phrases (assembled from fragments in source);
+on a duplicate id, source/type mismatch, missing key, or forbidden content
+the previous ledger is returned unchanged with entry=None; on PASS the
+deep-copied entry (entry_id/entry_type/recorded_at_utc/source/payload) is
+appended, status becomes UPDATED and last_entry_id is set; all five safety
+flags always False on every ledger state and result; the ledger is pure
+offline/in-memory only — no file I/O, no persistence, no artifact writing,
+and ledger entries are audit bookkeeping only, never order actions;
+`tests/test_paper_audit_ledger.py`: 93 tests across 12 classes covering
+both enums, frozen dataclasses, valid empty creation and its EMPTY shape,
+invalid ledger_id blocked, appending each of the six entry types,
+entries appending in order, old ledger never mutated, payload deep-copied
+into both state and result, duplicate entry_id blocked with old ledger
+unchanged, every input-validation block family (non-ledger object →
+state None, tainted safety flag, invalid entry_id/entry_type/timestamp/
+source, non-dict payload), missing required keys and source mismatch
+blocked for each entry type, all 14 forbidden payload words blocked in
+keys/values/nested lists case-insensitively with harmless payloads
+passing, blocked append leaving the ledger unchanged, safety flags always
+False on results and states, determinism, and source/self scans confirming
+no file I/O, no forbidden imports, no contiguous order verbs, no env/
+network calls, and no runtime/execution/planner/validator/gate/lifecycle
+imports. No file I/O; no persistence; no broker/API/credential/env/
+network/order access added; no paper/live trading approved.
+Full suite: 6 391 passed (6 298 baseline + 93 new audit ledger tests).
+
 ### Phase C — Paper trading execution
 
 - Paper account executor: applies approved signal on Alpaca paper account
