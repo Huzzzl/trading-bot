@@ -2175,6 +2175,51 @@ only; ledger entries are not order actions; S28 PASS_DRY_RUN_ONLY remains only
 offline clearance for a future dry-run/no-submit rendering step, not order
 approval. Full suite: 6 502 passed (6 391 baseline + 111 new integration tests).
 
+**PR S36 — Add pure offline dry-run/no-submit preview renderer — added**
+`src/research/paper_dry_run_preview.py`: pure offline display-only preview
+renderer; `PaperDryRunPreviewStatus` enum (7 members: NOT_RENDERED,
+PREVIEW_RENDERED, BLOCKED_PLAN, BLOCKED_GATE, BLOCKED_LIFECYCLE,
+BLOCKED_SAFETY, ERROR_RENDERER), frozen `PaperDryRunPreviewResult` dataclass
+(11 fields); `render_paper_dry_run_preview(order_plan, *, gate_snapshot,
+lifecycle_snapshot, preview_id, rendered_at_utc)` converts an already-loaded
+POP/1.0 plan dict plus already-loaded gate and lifecycle snapshot dicts into
+a display-only PDRP/1.0 preview dict with exactly 32 keys; 17 deterministic
+criteria across plan checks (schema/identity/intent/sizing — limit_price
+required for limit, forbidden for market — fixed booleans, safety flags),
+gate-snapshot checks (result="PASS", gate_status=PASS_DRY_RUN_ONLY,
+plan/candidate/run identity match, fixed booleans, safety flags),
+lifecycle-snapshot checks (status=GATE_PASSED_DRY_RUN_ONLY, lifecycle_id,
+identity match, safety flags), and preview identity; the renderer performs
+local structural checks only and never calls the planner, validator, safety
+gate, lifecycle, audit ledger, broker, runtime, execution, network,
+environment, or file system; fixed preview values: preview_schema_version
+"PDRP/1.0", preview_type "PAPER_DRY_RUN_NO_SUBMIT_PREVIEW", display_only=True,
+no_submit=True, broker_payload_created=False, dry_run_required/
+human_confirmation_required/kill_switch_required=True, all five safety flags
+False, and notes stating the preview is display-only and not an order; a
+safety-flag violation on a well-formed dict classifies BLOCKED_SAFETY while a
+non-dict/schema failure classifies the structural BLOCKED_* status; unexpected
+exceptions classify ERROR_RENDERER; fail closed: preview released only on
+PREVIEW_RENDERED; inputs never mutated; same input → same output;
+`tests/test_paper_dry_run_preview.py`: 107 tests across 13 classes covering
+the enum, frozen dataclass, valid market/limit renders, exact 32-key preview
+set, fixed values, display_only/no_submit/broker_payload_created, notes
+wording, 19 parametrised plan blocks plus limit-price cases and non-dict plan,
+plan/gate/lifecycle safety-flag-True → BLOCKED_SAFETY for all five flags and
+all three inputs, missing plan safety flags blocked, 9 gate blocks, 7
+lifecycle blocks, invalid preview_id/rendered_at_utc, ERROR_RENDERER via an
+exploding dict subclass, input non-mutation, determinism, preview keys free of
+broker-account/endpoint/credential/token/api-key/order-verb phrases (safety
+flag keys exempted by exact name with value False), result safety flags False
+across pass/blocked/error scenarios, production module source scans (no file
+I/O, no forbidden imports, no order verbs, no env calls, no runtime/execution/
+chain-module imports, stdlib-only import allowlist), and test-module
+self-scans. The preview is not an order and not a broker payload; no
+persistence or artifact writing added; no broker/API/credential/env/network/
+order access added; no paper/live trading approved; S28 PASS_DRY_RUN_ONLY
+remains only future dry-run/no-submit clearance, not order approval.
+Full suite: 6 609 passed (6 502 baseline + 107 new tests).
+
 ### Phase C — Paper trading execution
 
 - Paper account executor: applies approved signal on Alpaca paper account
