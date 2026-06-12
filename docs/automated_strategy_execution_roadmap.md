@@ -2220,6 +2220,54 @@ order access added; no paper/live trading approved; S28 PASS_DRY_RUN_ONLY
 remains only future dry-run/no-submit clearance, not order approval.
 Full suite: 6 609 passed (6 502 baseline + 107 new tests).
 
+**PR S37 — Add dry-run preview integration tests — added**
+`tests/test_paper_dry_run_preview_integration.py`: 77 integration tests
+covering the full pure offline preview chain S30 `create_paper_order_plan()`
+→ S27 `validate_paper_order_plan()` → S28
+`evaluate_paper_order_safety_gate()` → S32 `create_lifecycle_from_plan()` +
+`apply_lifecycle_event(SAFETY_GATE_PASSED)` → S36
+`render_paper_dry_run_preview()` using the REAL planner, validator, gate,
+lifecycle, and preview functions with no mocked components;
+`PreviewChainResults(NamedTuple)` with 6 fields and `_run_chain_to_preview()`
+helper proving fail-closed sequencing — the preview is rendered only after
+planner PASS, S27 PASS, S28 PASS_DRY_RUN_ONLY, lifecycle PLANNED creation,
+and the SAFETY_GATE_PASSED lifecycle event; the real gate result and
+lifecycle state are converted into plain dict snapshots via
+`_gate_result_to_snapshot()` / `_lifecycle_state_to_snapshot()` before
+rendering; valid market and limit chains render previews with all fixed
+PDRP/1.0 values (display_only=True, no_submit=True,
+broker_payload_created=False, all five safety flags False); limit preview
+preserves order_type/limit_price; preview preserves
+plan_id/candidate_id/run_id/lifecycle_id/symbol/side/quantity/notional;
+preview gate_status=PASS_DRY_RUN_ONLY and
+lifecycle_status=GATE_PASSED_DRY_RUN_ONLY; notes assert display-only / not
+an order / not a broker payload / cannot be submitted; planner blocks on
+approval/signal/sizing prevent validation/gate/lifecycle/preview; gate
+blocks on kill switch / daily count / duplicate plan / open position prevent
+lifecycle and preview; manual snapshot tampering blocked by the renderer
+(non-PASS gate snapshot → BLOCKED_GATE; PLANNED-before-gate-event lifecycle
+and mismatched lifecycle plan_id → BLOCKED_LIFECYCLE; any safety flag True
+in plan/gate/lifecycle (15 combinations) → BLOCKED_SAFETY); preview not
+rendered before SAFETY_GATE_PASSED, rendered after, and rendering never
+advances the lifecycle (state unchanged, 2 events only); preview keys and
+string values free of broker-account/live-account/endpoint/credential/
+token/api-key/secret/order-verb/network phrases (safety-flag keys exempted
+by exact name with value False); preview remains a plain dict; inputs not
+mutated across pass and blocked chains and by rendering; determinism at
+every stage; all upstream and preview result safety flags False across pass
+and blocked scenarios; runtime no-file-open proof with monkeypatched
+builtins.open through pass and blocked chains; test-module self-scan; and
+source scans of all 6 chain modules (S25 approval validator, S27 plan
+validator, S28 safety gate, S30 planner, S32 lifecycle, S36 dry-run
+preview) for file I/O, forbidden imports, broker/env/order calls, and
+runtime imports. No production code changed; no real artifact created; no
+file I/O; no broker/API/credential/env/network/order access added; no
+paper/live trading approved; dry-run preview integration is pure
+offline/in-memory display-only rendering; the preview is not an order and
+not a broker payload; S28 PASS_DRY_RUN_ONLY remains only dry-run/no-submit
+clearance, not order approval. Full suite: 6 686 passed (6 609 baseline +
+77 new integration tests).
+
 ### Phase C — Paper trading execution
 
 - Paper account executor: applies approved signal on Alpaca paper account
