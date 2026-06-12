@@ -2128,6 +2128,53 @@ imports. No file I/O; no persistence; no broker/API/credential/env/
 network/order access added; no paper/live trading approved.
 Full suite: 6 391 passed (6 298 baseline + 93 new audit ledger tests).
 
+**PR S35 — Add paper audit ledger integration tests — added**
+`tests/test_paper_audit_ledger_integration.py`: 111 integration tests covering
+the full pure offline chain S30 `create_paper_order_plan()` → S27
+`validate_paper_order_plan()` → S28 `evaluate_paper_order_safety_gate()` → S32
+`create_lifecycle_from_plan()` + `apply_lifecycle_event()` → S34
+`create_empty_audit_ledger()` + `append_audit_entry()` using the REAL
+planner, validator, gate, lifecycle, and ledger functions with no mocked
+components; `ChainWithLedgerResults(NamedTuple)` with 7 fields
+(planner_result, validation_result, gate_result, lifecycle_creation,
+lifecycle_after_gate, ledger, ledger_results); `_run_chain_with_ledger()`
+helper proving fail-closed sequencing and audit coverage across all 14
+steps — blocked planner records PLANNER_RESULT_RECORDED + BLOCKED_CHAIN_RECORDED
+and stops (2 entries); blocked gate records planner + validator + gate +
+blocked chain (4 entries); PASS path records 5 entries in exact order
+(PLANNER_RESULT_RECORDED, VALIDATION_RESULT_RECORDED,
+SAFETY_GATE_RESULT_RECORDED, LIFECYCLE_TRANSITION_RECORDED for PLAN_CREATED,
+LIFECYCLE_TRANSITION_RECORDED for SAFETY_GATE_PASSED); full bookkeeping fill
+chain appends 3 additional lifecycle entries (DRY_RUN_RENDERED,
+PAPER_ORDER_MARKED_PENDING, PAPER_ORDER_MARKED_FILLED) for 8 total; planner
+blocked on approval/signal/sizing; gate blocked on kill switch, daily count,
+duplicate plan_id, and open position (each leaves no lifecycle entries); plan_id
+preserved across all planner/validator/gate/lifecycle ledger entries; candidate_id
+and run_id in planner and validator payloads; entry_ids deterministic and unique;
+duplicate entry_id blocked with previous ledger returned unchanged; payload deep-
+copied so mutating the original dict after append does not mutate stored entries;
+mutating approval/signal/sizing after run does not mutate ledger entries;
+determinism (same inputs → same ledger and upstream results); all ledger result
+and ledger state safety flags False across pass and blocked chains; all upstream
+planner/gate/lifecycle safety flags False; blocked chain entry uses source="chain"
+and entry_type=BLOCKED_CHAIN_RECORDED; ERROR_RECORDED entry bookkeeping only with
+all safety flags False; 7 forbidden payload values blocked (order verb, api_key,
+secret, token, http, live_account, endpoint) with previous ledger unchanged;
+source mismatch and missing required payload key blocked in integration; no
+lifecycle state or lifecycle ledger entries when gate blocks; no ledger entries
+appended after the blocked chain entry in fail-closed paths; runtime no-file-open
+proof with monkeypatched builtins.open; test module source scan for all forbidden
+patterns; source scans of all 6 chain modules (S25 approval validator, S27 plan
+validator, S28 safety gate, S30 planner, S32 lifecycle, S34 audit ledger) for
+file I/O, forbidden imports, broker/env/order calls, and runtime imports; SAFETY_GATE_PASSED
+lifecycle event applied only after a real gate PASS_DRY_RUN_ONLY — never applied
+when the gate blocks; no production code changed; no real artifact created; no
+file I/O; no broker/API/credential/env/network/order access added; no paper/live
+trading approved; audit ledger integration is pure offline/in-memory bookkeeping
+only; ledger entries are not order actions; S28 PASS_DRY_RUN_ONLY remains only
+offline clearance for a future dry-run/no-submit rendering step, not order
+approval. Full suite: 6 502 passed (6 391 baseline + 111 new integration tests).
+
 ### Phase C — Paper trading execution
 
 - Paper account executor: applies approved signal on Alpaca paper account
