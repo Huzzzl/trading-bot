@@ -1,7 +1,7 @@
 """
 tests/test_paper_preview_ledger_integration.py
 -----------------------------------------------
-S38: Integration tests for the full pure offline preview + ledger chain
+S39: Integration tests for the full pure offline preview + ledger chain
 
     S30 create_paper_order_plan()
     -> S27 validate_paper_order_plan()
@@ -9,25 +9,17 @@ S38: Integration tests for the full pure offline preview + ledger chain
     -> S32 create_lifecycle_from_plan()
     -> S32 apply_lifecycle_event(SAFETY_GATE_PASSED)
     -> S36 render_paper_dry_run_preview()
+    -> S34 append PREVIEW_RESULT_RECORDED (source="preview")
     -> S34 create_empty_audit_ledger() / append_audit_entry()
 
 Every scenario uses the REAL planner, S27 validator, S28 gate, S32
 lifecycle, S36 preview renderer, and S34 ledger functions. No mocked
 components are used for core integration tests.
 
-CURRENT BOUNDARY (expected, not a bug): the S34 ledger defines exactly six
-entry types (PLANNER_RESULT_RECORDED, VALIDATION_RESULT_RECORDED,
-SAFETY_GATE_RESULT_RECORDED, LIFECYCLE_TRANSITION_RECORDED,
-BLOCKED_CHAIN_RECORDED, ERROR_RECORDED) and five allowed sources (planner,
-validator, safety_gate, lifecycle, chain). There is NO dedicated preview
-entry type and NO "preview" source. The rendered preview therefore remains
-a separate, display-only in-memory dict alongside the ledger and is NOT
-appended as a ledger entry in this PR. Forcing the preview into
-LIFECYCLE_TRANSITION_RECORDED (or any other type) would misclassify it;
-the tests below prove the ledger structurally refuses that. A future S39
-schema extension should add a dedicated PREVIEW_RESULT_RECORDED entry type
-(with its own required payload keys and source) before preview results are
-recorded in the ledger.
+S39 schema extension: the S34 ledger now defines seven entry types
+(adding PREVIEW_RESULT_RECORDED) and six allowed sources (adding "preview").
+A successful full-pass chain records exactly six ledger entries, with the
+final entry being PREVIEW_RESULT_RECORDED (source="preview").
 
 All fixtures are plain in-memory dicts. No real approval artifact, order
 plan, lifecycle record, preview artifact, ledger artifact, config, or any
@@ -107,6 +99,7 @@ _EID_VALIDATOR       = "eid-validator"
 _EID_GATE            = "eid-gate"
 _EID_LC_PLAN_CREATED = "eid-lc-plan-created"
 _EID_LC_GATE_PASSED  = "eid-lc-gate-passed"
+_EID_PREVIEW         = "eid-preview"
 _EID_BLOCKED         = "eid-blocked"
 
 _SAFETY_FLAG_NAMES: tuple[str, ...] = (
@@ -281,11 +274,7 @@ def _run_chain_to_preview_ledger(
     9.  apply SAFETY_GATE_PASSED -> append LIFECYCLE_TRANSITION_RECORDED for
         SAFETY_GATE_PASSED
     10. render_paper_dry_run_preview()
-
-    The preview is NOT appended to the ledger: S34 has no dedicated preview
-    entry type or "preview" source, so the rendered preview remains a
-    separate display-only in-memory dict (current expected boundary; a
-    future S39 schema extension should add PREVIEW_RESULT_RECORDED).
+    11. append PREVIEW_RESULT_RECORDED (source="preview")
     """
     if approval is None:
         approval = _valid_approval()
@@ -423,6 +412,18 @@ def _run_chain_to_preview_ledger(
         preview_id=_PREVIEW_ID,
         rendered_at_utc=_RENDERED_AT,
     )
+    _append(
+        _EID_PREVIEW, EType.PREVIEW_RESULT_RECORDED, "preview",
+        {
+            "preview_status": preview_result.preview["preview_status"],
+            "preview_id":     preview_result.preview["preview_id"],
+            "plan_id":        plan_id,
+            "lifecycle_id":   _LIFECYCLE_ID,
+            "display_only":   True,
+            "no_submit":      True,
+            "broker_payload_created": False,
+        },
+    )
     return PreviewLedgerChainResults(
         planner_result, validation_result, gate_result,
         lifecycle_creation, lifecycle_after_gate, preview_result,
@@ -448,6 +449,7 @@ _EXPECTED_PASS_ENTRY_TYPES = [
     "SAFETY_GATE_RESULT_RECORDED",
     "LIFECYCLE_TRANSITION_RECORDED",  # PLAN_CREATED
     "LIFECYCLE_TRANSITION_RECORDED",  # SAFETY_GATE_PASSED
+    "PREVIEW_RESULT_RECORDED",
 ]
 
 
@@ -487,15 +489,14 @@ class TestFullChainPreviewAndLedger:
 
 
 # ---------------------------------------------------------------------------
-# 3: preview is separate from the ledger (current expected boundary)
+# 3: S39 preview entry type and source in ledger schema
 # ---------------------------------------------------------------------------
 
-class TestPreviewSeparateFromLedger:
-    def test_s34_has_no_preview_entry_type(self):
-        # Current expected boundary, not a bug: S34 defines exactly six entry
-        # types and none of them is a preview type. A future S39 schema
-        # extension should add a dedicated PREVIEW_RESULT_RECORDED type.
+class TestPreviewLedgerEntry:
+    def test_s39_preview_result_recorded_in_enum(self):
+        # S39: PREVIEW_RESULT_RECORDED is now a dedicated entry type.
         values = {m.value for m in PaperAuditLedgerEntryType}
+        assert "PREVIEW_RESULT_RECORDED" in values
         assert values == {
             "PLANNER_RESULT_RECORDED",
             "VALIDATION_RESULT_RECORDED",
@@ -503,24 +504,28 @@ class TestPreviewSeparateFromLedger:
             "LIFECYCLE_TRANSITION_RECORDED",
             "BLOCKED_CHAIN_RECORDED",
             "ERROR_RECORDED",
+            "PREVIEW_RESULT_RECORDED",
         }
-        assert not any("PREVIEW" in v for v in values)
 
-    def test_s34_has_no_preview_source(self):
-        assert "preview" not in _ledger_mod._ALLOWED_SOURCES
+    def test_s39_preview_source_in_allowed_sources(self):
+        # S39: "preview" is now an allowed ledger source.
+        assert "preview" in _ledger_mod._ALLOWED_SOURCES
         assert _ledger_mod._ALLOWED_SOURCES == frozenset(
-            {"planner", "validator", "safety_gate", "lifecycle", "chain"}
+            {"planner", "validator", "safety_gate", "lifecycle", "chain", "preview"}
         )
 
-    def test_preview_rendered_but_not_in_ledger(self):
+    def test_preview_result_recorded_as_sixth_entry(self):
+        # S39: the rendered preview is now appended as the 6th ledger entry.
         chain = _run_chain_to_preview_ledger()
         assert chain.preview_result.preview_status is PreviewStatus.PREVIEW_RENDERED
-        # Exactly the five chain entries -- the preview is not one of them.
-        assert len(chain.ledger.entries) == 5
-        for entry in chain.ledger.entries:
-            assert entry["entry_type"] != "PREVIEW_RESULT_RECORDED"
-            assert "preview_id" not in entry["payload"]
-            assert "preview_status" not in entry["payload"]
+        assert len(chain.ledger.entries) == 6
+        last = chain.ledger.entries[-1]
+        assert last["entry_type"] == "PREVIEW_RESULT_RECORDED"
+        assert last["source"] == "preview"
+        assert last["payload"]["preview_id"] == _PREVIEW_ID
+        assert last["payload"]["display_only"] is True
+        assert last["payload"]["no_submit"] is True
+        assert last["payload"]["broker_payload_created"] is False
 
     def test_preview_remains_plain_display_only_dict(self):
         chain = _run_chain_to_preview_ledger()
@@ -530,9 +535,9 @@ class TestPreviewSeparateFromLedger:
         assert p["no_submit"] is True
 
     def test_ledger_refuses_preview_as_lifecycle_entry(self):
-        # Misclassifying the preview as LIFECYCLE_TRANSITION_RECORDED is
-        # structurally refused: the preview payload lacks the required
-        # lifecycle keys (previous_status/new_status/event_type/lifecycle_id).
+        # Structural integrity: misclassifying the preview as
+        # LIFECYCLE_TRANSITION_RECORDED is still refused because the preview
+        # payload lacks the required lifecycle keys.
         chain = _run_chain_to_preview_ledger()
         preview_payload = {
             "preview_id":     chain.preview_result.preview["preview_id"],
@@ -550,7 +555,7 @@ class TestPreviewSeparateFromLedger:
         assert r.result == "BLOCKED"
         assert "payload.required_keys" in r.criteria_failed
         assert r.state is chain.ledger
-        assert len(r.state.entries) == 5
+        assert len(r.state.entries) == 6
 
 
 # ---------------------------------------------------------------------------
@@ -924,7 +929,7 @@ class TestDuplicateEntryIdBlocked:
         assert existing_id in r.blocker
         assert r.entry is None
         assert r.state is chain.ledger
-        assert len(r.state.entries) == 5
+        assert len(r.state.entries) == 6
 
 
 # ---------------------------------------------------------------------------
@@ -960,7 +965,7 @@ class TestForbiddenPayloadBlockedByLedger:
         assert "forbidden" in r.blocker
         assert r.entry is None
         assert r.state is chain.ledger
-        assert len(r.state.entries) == 5
+        assert len(r.state.entries) == 6
 
 
 # ---------------------------------------------------------------------------
@@ -984,7 +989,7 @@ class TestNoArtifactsCreated:
             )
         assert calls == [], f"unexpected file opens: {calls}"
         assert pass_chain.preview_result.preview_status is PreviewStatus.PREVIEW_RENDERED
-        assert len(pass_chain.ledger.entries) == 5
+        assert len(pass_chain.ledger.entries) == 6
         assert blocked_chain.preview_result is None
         assert len(blocked_chain.ledger.entries) == 4
 
