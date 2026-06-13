@@ -2268,6 +2268,51 @@ not a broker payload; S28 PASS_DRY_RUN_ONLY remains only dry-run/no-submit
 clearance, not order approval. Full suite: 6 686 passed (6 609 baseline +
 77 new integration tests).
 
+**PR S38 — Add preview audit ledger integration tests — added**
+`tests/test_paper_preview_ledger_integration.py`: 73 integration tests
+covering the full pure offline chain S30 `create_paper_order_plan()` → S27
+`validate_paper_order_plan()` → S28 `evaluate_paper_order_safety_gate()` →
+S32 `create_lifecycle_from_plan()` + `apply_lifecycle_event(
+SAFETY_GATE_PASSED)` → S36 `render_paper_dry_run_preview()` → S34
+`create_empty_audit_ledger()` + `append_audit_entry()` using the REAL
+planner, validator, gate, lifecycle, preview, and ledger functions with no
+mocked components; `_run_chain_to_preview_ledger()` helper records every
+stage in the ledger and renders the preview only after the lifecycle
+SAFETY_GATE_PASSED event. CURRENT EXPECTED BOUNDARY (documented, not a
+bug): S34 defines exactly six entry types and five sources with NO
+dedicated preview entry type and NO "preview" source, so the rendered
+preview remains a separate display-only in-memory dict alongside the
+ledger and is NOT appended as a ledger entry; tests lock in the exact S34
+entry-type/source sets, prove the ledger structurally refuses a
+preview-as-lifecycle entry (payload.required_keys block), and recommend a
+future S39 schema extension adding PREVIEW_RESULT_RECORDED before preview
+results are recorded. Coverage: market/limit chains render previews with
+5 ledger entries in exact order (planner, validation, gate, lifecycle
+PLAN_CREATED, lifecycle SAFETY_GATE_PASSED); preview identity
+(plan_id/lifecycle_id/candidate_id/run_id) consistent with ledger
+payloads; preview fixed values (display_only=True, no_submit=True,
+broker_payload_created=False, five safety flags False) and notes
+disclaimers; no ledger entry claims an order or carries
+broker/action/credential fields; planner blocks (approval/signal/sizing)
+→ 2 entries, preview None; gate blocks (kill switch/daily count/
+duplicate/open position) → 4 entries, no lifecycle, preview None; preview
+blocked before SAFETY_GATE_PASSED and rendered after; neither preview
+render nor ledger append advances the lifecycle; preview/ledger/upstream
+safety flags False across pass and blocked chains; inputs not mutated;
+determinism at every stage including ledger equality; duplicate ledger
+entry id blocked with previous ledger unchanged; preview-like payloads
+with forbidden content (order verb/api key/token/network/endpoint
+phrases) blocked by the S34 scan; runtime no-file-open proof through pass
+and blocked chains; test-module self-scan; and source scans of all 7
+chain modules (S25, S27, S28, S30, S32, S34, S36). No production code
+changed; no real artifact created; no file I/O; no broker/API/credential/
+env/network/order access added; no paper/live trading approved; preview +
+audit ledger integration is pure offline/in-memory only; the preview is
+not an order and not a broker payload; ledger entries are not order
+actions; S28 PASS_DRY_RUN_ONLY remains only dry-run/no-submit clearance,
+not order approval. Full suite: 6 759 passed (6 686 baseline + 73 new
+integration tests).
+
 ### Phase C — Paper trading execution
 
 - Paper account executor: applies approved signal on Alpaca paper account
