@@ -84,6 +84,7 @@ class PaperAuditLedgerEntryType(str, Enum):
     LIFECYCLE_TRANSITION_RECORDED = "LIFECYCLE_TRANSITION_RECORDED"
     BLOCKED_CHAIN_RECORDED        = "BLOCKED_CHAIN_RECORDED"
     ERROR_RECORDED                = "ERROR_RECORDED"
+    PREVIEW_RESULT_RECORDED       = "PREVIEW_RESULT_RECORDED"
 
 
 # Required payload keys per entry type.
@@ -100,6 +101,9 @@ _REQUIRED_PAYLOAD_KEYS: dict[PaperAuditLedgerEntryType, tuple[str, ...]] = {
         ("blocked_stage", "blocker"),
     PaperAuditLedgerEntryType.ERROR_RECORDED:
         ("error_stage", "blocker"),
+    PaperAuditLedgerEntryType.PREVIEW_RESULT_RECORDED:
+        ("preview_status", "preview_id", "plan_id", "lifecycle_id",
+         "display_only", "no_submit", "broker_payload_created"),
 }
 
 # Required source value per entry type.
@@ -110,6 +114,7 @@ _REQUIRED_SOURCE: dict[PaperAuditLedgerEntryType, str] = {
     PaperAuditLedgerEntryType.LIFECYCLE_TRANSITION_RECORDED: "lifecycle",
     PaperAuditLedgerEntryType.BLOCKED_CHAIN_RECORDED:        "chain",
     PaperAuditLedgerEntryType.ERROR_RECORDED:               "chain",
+    PaperAuditLedgerEntryType.PREVIEW_RESULT_RECORDED:      "preview",
 }
 
 _ALLOWED_SOURCES: frozenset[str] = frozenset(_REQUIRED_SOURCE.values())
@@ -373,12 +378,27 @@ def append_audit_entry(
             f"source {source!r} does not match entry type {entry_type.value}"
         )
 
-    # 11. Forbidden payload content scan.
+    # 11. For PREVIEW_RESULT_RECORDED: display_only/no_submit/broker_payload_created
+    #     must carry fixed offline-only values (True/True/False).
+    if entry_type is PaperAuditLedgerEntryType.PREVIEW_RESULT_RECORDED:
+        _chk(
+            "payload.preview_safety",
+            payload.get("display_only") is True
+            and payload.get("no_submit") is True
+            and payload.get("broker_payload_created") is False,
+        )
+        if failed:
+            return _blocked(
+                "payload.preview_safety violated: display_only must be True, "
+                "no_submit must be True, broker_payload_created must be False"
+            )
+
+    # 12. Forbidden payload content scan.
     _chk("payload.forbidden_content", not _scan_forbidden_payload(payload))
     if failed:
         return _blocked("payload contains forbidden content")
 
-    # 12. Append the entry and build the new immutable ledger state.
+    # 13. Append the entry and build the new immutable ledger state.
     checked.append("entry.appended")
     entry = {
         "entry_id": entry_id,
