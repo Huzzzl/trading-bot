@@ -2313,6 +2313,27 @@ actions; S28 PASS_DRY_RUN_ONLY remains only dry-run/no-submit clearance,
 not order approval. Full suite: 6 759 passed (6 686 baseline + 73 new
 integration tests).
 
+**PR S39 — Add dedicated preview audit ledger entry type — added**
+`PREVIEW_RESULT_RECORDED` entry type with `source="preview"` to the S34
+audit ledger schema; required payload keys (`preview_status`, `preview_id`,
+`plan_id`, `lifecycle_id`, `display_only`, `no_submit`,
+`broker_payload_created`); `payload.preview_safety` criterion enforcing
+`display_only=True`, `no_submit=True`, `broker_payload_created=False`.
+Integration chain now records 6 ledger entries (final:
+PREVIEW_RESULT_RECORDED). S38 boundary tests converted to S39 behavior
+tests. Full suite: 6 783 passed.
+
+**PR S40 — Harden preview audit ledger payload validation — added**
+Two new semantic criteria for `PREVIEW_RESULT_RECORDED` only:
+`payload.preview_identity` (preview_id, plan_id, lifecycle_id must be
+non-empty strings) and `payload.preview_status` (must be
+`"PREVIEW_RENDERED"`). Criteria order: `payload.source_matches_type` →
+`payload.preview_identity` → `payload.preview_status` →
+`payload.preview_safety` → `payload.forbidden_content`. Non-preview entry
+types unaffected. No production code changed outside
+`paper_audit_ledger.py`; no broker/API/credential/env/network/order access;
+preview remains display-only audit bookkeeping; paper/live trading blocked.
+
 ### Phase C — Paper trading execution
 
 - Paper account executor: applies approved signal on Alpaca paper account

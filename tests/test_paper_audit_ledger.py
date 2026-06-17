@@ -552,6 +552,99 @@ class TestPreviewEntryType:
             assert result.result == "BLOCKED", f"expected BLOCKED when missing {key!r}"
             assert "payload.required_keys" in result.criteria_failed
 
+    # -- S40: payload.preview_identity ----------------------------------------
+
+    def test_preview_criteria_checked_order(self):
+        result = _append(_empty_ledger(), EntryType.PREVIEW_RESULT_RECORDED)
+        assert result.criteria_checked == (
+            "ledger.schema", "ledger.safety_flags", "entry.identity",
+            "entry.duplicate_id", "entry.type", "entry.timestamp",
+            "entry.source", "payload.schema", "payload.required_keys",
+            "payload.source_matches_type", "payload.preview_identity",
+            "payload.preview_status", "payload.preview_safety",
+            "payload.forbidden_content", "entry.appended",
+        )
+        assert result.criteria_failed == ()
+
+    @pytest.mark.parametrize("bad_val", ["", "   ", None, 123])
+    def test_preview_id_empty_blocks(self, bad_val):
+        _, payload = _VALID_ENTRIES[EntryType.PREVIEW_RESULT_RECORDED]
+        bad = dict(payload, preview_id=bad_val)
+        result = _append(
+            _empty_ledger(), EntryType.PREVIEW_RESULT_RECORDED,
+            source="preview", payload=bad,
+        )
+        assert result.result == "BLOCKED"
+        assert "payload.preview_identity" in result.criteria_failed
+
+    @pytest.mark.parametrize("bad_val", ["", "   ", None, 123])
+    def test_plan_id_empty_blocks(self, bad_val):
+        _, payload = _VALID_ENTRIES[EntryType.PREVIEW_RESULT_RECORDED]
+        bad = dict(payload, plan_id=bad_val)
+        result = _append(
+            _empty_ledger(), EntryType.PREVIEW_RESULT_RECORDED,
+            source="preview", payload=bad,
+        )
+        assert result.result == "BLOCKED"
+        assert "payload.preview_identity" in result.criteria_failed
+
+    @pytest.mark.parametrize("bad_val", ["", "   ", None, 123])
+    def test_lifecycle_id_empty_blocks(self, bad_val):
+        _, payload = _VALID_ENTRIES[EntryType.PREVIEW_RESULT_RECORDED]
+        bad = dict(payload, lifecycle_id=bad_val)
+        result = _append(
+            _empty_ledger(), EntryType.PREVIEW_RESULT_RECORDED,
+            source="preview", payload=bad,
+        )
+        assert result.result == "BLOCKED"
+        assert "payload.preview_identity" in result.criteria_failed
+
+    def test_identity_failure_returns_previous_ledger_unchanged(self):
+        ledger = _empty_ledger()
+        _, payload = _VALID_ENTRIES[EntryType.PREVIEW_RESULT_RECORDED]
+        bad = dict(payload, preview_id="")
+        result = _append(
+            ledger, EntryType.PREVIEW_RESULT_RECORDED,
+            source="preview", payload=bad,
+        )
+        assert result.state is ledger
+        assert result.entry is None
+        assert len(result.state.entries) == 0
+
+    # -- S40: payload.preview_status ------------------------------------------
+
+    @pytest.mark.parametrize("bad_status", [
+        "", "PREVIEW_FAILED", "BLOCKED", None, 42,
+    ])
+    def test_preview_status_bad_values_blocked(self, bad_status):
+        _, payload = _VALID_ENTRIES[EntryType.PREVIEW_RESULT_RECORDED]
+        bad = dict(payload, preview_status=bad_status)
+        result = _append(
+            _empty_ledger(), EntryType.PREVIEW_RESULT_RECORDED,
+            source="preview", payload=bad,
+        )
+        assert result.result == "BLOCKED"
+        assert "payload.preview_status" in result.criteria_failed
+
+    def test_preview_status_rendered_passes(self):
+        result = _append(_empty_ledger(), EntryType.PREVIEW_RESULT_RECORDED)
+        assert result.result == "PASS"
+        assert result.state.entries[0]["payload"]["preview_status"] == "PREVIEW_RENDERED"
+
+    def test_status_failure_returns_previous_ledger_unchanged(self):
+        ledger = _empty_ledger()
+        _, payload = _VALID_ENTRIES[EntryType.PREVIEW_RESULT_RECORDED]
+        bad = dict(payload, preview_status="PREVIEW_FAILED")
+        result = _append(
+            ledger, EntryType.PREVIEW_RESULT_RECORDED,
+            source="preview", payload=bad,
+        )
+        assert result.state is ledger
+        assert result.entry is None
+        assert len(result.state.entries) == 0
+
+    # -- S39: payload.preview_safety (retained, now after identity/status) ----
+
     def test_preview_display_only_false_blocked(self):
         _, payload = _VALID_ENTRIES[EntryType.PREVIEW_RESULT_RECORDED]
         bad = dict(payload, display_only=False)
@@ -591,74 +684,87 @@ class TestPreviewEntryType:
         assert result.entry is None
         assert len(result.state.entries) == 0
 
-    def test_preview_criteria_checked_order(self):
-        result = _append(_empty_ledger(), EntryType.PREVIEW_RESULT_RECORDED)
-        assert result.criteria_checked == (
-            "ledger.schema", "ledger.safety_flags", "entry.identity",
-            "entry.duplicate_id", "entry.type", "entry.timestamp",
-            "entry.source", "payload.schema", "payload.required_keys",
-            "payload.source_matches_type", "payload.preview_safety",
-            "payload.forbidden_content", "entry.appended",
+    def test_preview_safety_works_after_identity_and_status_pass(self):
+        _, payload = _VALID_ENTRIES[EntryType.PREVIEW_RESULT_RECORDED]
+        bad = dict(payload, no_submit=False)
+        result = _append(
+            _empty_ledger(), EntryType.PREVIEW_RESULT_RECORDED,
+            source="preview", payload=bad,
         )
-        assert result.criteria_failed == ()
+        assert result.result == "BLOCKED"
+        assert "payload.preview_safety" in result.criteria_failed
+        assert "payload.preview_identity" not in result.criteria_failed
+        assert "payload.preview_status" not in result.criteria_failed
 
-    def test_non_preview_criteria_no_preview_safety(self):
-        result = _append(_empty_ledger(), EntryType.PLANNER_RESULT_RECORDED)
+    # -- ordering / gating ----------------------------------------------------
+
+    def test_source_mismatch_stops_before_preview_semantic_criteria(self):
+        result = _append(
+            _empty_ledger(), EntryType.PREVIEW_RESULT_RECORDED, source="planner",
+        )
+        assert result.result == "BLOCKED"
+        assert "payload.source_matches_type" in result.criteria_failed
+        assert "payload.preview_identity" not in result.criteria_checked
+        assert "payload.preview_status" not in result.criteria_checked
         assert "payload.preview_safety" not in result.criteria_checked
 
-    def test_preview_safety_only_checked_for_preview_type(self):
-        for entry_type in EntryType:
-            if entry_type is EntryType.PREVIEW_RESULT_RECORDED:
-                continue
-            result = _append(_empty_ledger(), entry_type)
-            assert result.result == "PASS"
-            assert "payload.preview_safety" not in result.criteria_checked, (
-                f"payload.preview_safety should not appear for {entry_type.value}"
-            )
-
-    def test_preview_forbidden_content_blocked(self):
+    def test_missing_key_stops_before_preview_semantic_criteria(self):
         _, payload = _VALID_ENTRIES[EntryType.PREVIEW_RESULT_RECORDED]
-        bad = dict(payload, preview_status="call api_key rotation")
+        incomplete = {k: v for k, v in payload.items() if k != "preview_id"}
+        result = _append(
+            _empty_ledger(), EntryType.PREVIEW_RESULT_RECORDED,
+            source="preview", payload=incomplete,
+        )
+        assert result.result == "BLOCKED"
+        assert "payload.required_keys" in result.criteria_failed
+        assert "payload.preview_identity" not in result.criteria_checked
+
+    def test_forbidden_content_runs_after_all_preview_semantic_criteria(self):
+        _, payload = _VALID_ENTRIES[EntryType.PREVIEW_RESULT_RECORDED]
+        bad = dict(payload, extra_note="uses api_key rotation")
         result = _append(
             _empty_ledger(), EntryType.PREVIEW_RESULT_RECORDED,
             source="preview", payload=bad,
         )
         assert result.result == "BLOCKED"
         assert "payload.forbidden_content" in result.criteria_failed
+        assert "payload.preview_identity" in result.criteria_checked
+        assert "payload.preview_status" in result.criteria_checked
+        assert "payload.preview_safety" in result.criteria_checked
 
-    def test_preview_duplicate_entry_id_blocked(self):
+    def test_duplicate_entry_id_stops_before_payload_semantic_criteria(self):
         ledger = _append(
             _empty_ledger(), EntryType.PREVIEW_RESULT_RECORDED, entry_id="prev-1"
         ).state
         result = _append(
-            ledger, EntryType.ERROR_RECORDED, entry_id="prev-1"
+            ledger, EntryType.PREVIEW_RESULT_RECORDED, entry_id="prev-1"
         )
         assert result.result == "BLOCKED"
         assert "entry.duplicate_id" in result.criteria_failed
+        assert "payload.preview_identity" not in result.criteria_checked
         assert result.state is ledger
 
-    def test_preview_safety_flags_always_false(self):
-        scenarios = [
-            _append(_empty_ledger(), EntryType.PREVIEW_RESULT_RECORDED),
-            _append(
-                _empty_ledger(), EntryType.PREVIEW_RESULT_RECORDED,
-                source="preview",
-                payload={
-                    **_VALID_ENTRIES[EntryType.PREVIEW_RESULT_RECORDED][1],
-                    "display_only": False,
-                },
-            ),
-        ]
-        for result in scenarios:
-            for flag in _SAFETY_FLAG_NAMES:
-                assert getattr(result, flag) is False
-            if result.state is not None:
-                for flag in _SAFETY_FLAG_NAMES:
-                    assert getattr(result.state, flag) is False
+    # -- non-preview types unaffected -----------------------------------------
+
+    def test_non_preview_criteria_no_preview_semantic_criteria(self):
+        result = _append(_empty_ledger(), EntryType.PLANNER_RESULT_RECORDED)
+        assert "payload.preview_identity" not in result.criteria_checked
+        assert "payload.preview_status" not in result.criteria_checked
+        assert "payload.preview_safety" not in result.criteria_checked
+
+    def test_preview_semantic_criteria_only_for_preview_type(self):
+        for entry_type in EntryType:
+            if entry_type is EntryType.PREVIEW_RESULT_RECORDED:
+                continue
+            result = _append(_empty_ledger(), entry_type)
+            assert result.result == "PASS"
+            for c in ("payload.preview_identity", "payload.preview_status",
+                       "payload.preview_safety"):
+                assert c not in result.criteria_checked, (
+                    f"{c} should not appear for {entry_type.value}"
+                )
 
     def test_existing_six_types_unaffected(self):
-        # All six pre-S39 types still append successfully via the existing
-        # _VALID_ENTRIES fixtures.
         for entry_type in (
             EntryType.PLANNER_RESULT_RECORDED,
             EntryType.VALIDATION_RESULT_RECORDED,
@@ -671,6 +777,43 @@ class TestPreviewEntryType:
             assert result.result == "PASS", (
                 f"expected PASS for {entry_type.value}, got {result.blocker}"
             )
+
+    # -- safety flags ---------------------------------------------------------
+
+    def test_preview_safety_flags_always_false(self):
+        scenarios = [
+            _append(_empty_ledger(), EntryType.PREVIEW_RESULT_RECORDED),
+            _append(
+                _empty_ledger(), EntryType.PREVIEW_RESULT_RECORDED,
+                source="preview",
+                payload={
+                    **_VALID_ENTRIES[EntryType.PREVIEW_RESULT_RECORDED][1],
+                    "display_only": False,
+                },
+            ),
+            _append(
+                _empty_ledger(), EntryType.PREVIEW_RESULT_RECORDED,
+                source="preview",
+                payload={
+                    **_VALID_ENTRIES[EntryType.PREVIEW_RESULT_RECORDED][1],
+                    "preview_id": "",
+                },
+            ),
+            _append(
+                _empty_ledger(), EntryType.PREVIEW_RESULT_RECORDED,
+                source="preview",
+                payload={
+                    **_VALID_ENTRIES[EntryType.PREVIEW_RESULT_RECORDED][1],
+                    "preview_status": "PREVIEW_FAILED",
+                },
+            ),
+        ]
+        for result in scenarios:
+            for flag in _SAFETY_FLAG_NAMES:
+                assert getattr(result, flag) is False
+            if result.state is not None:
+                for flag in _SAFETY_FLAG_NAMES:
+                    assert getattr(result.state, flag) is False
 
 
 # ---------------------------------------------------------------------------
