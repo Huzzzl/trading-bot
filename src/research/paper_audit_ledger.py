@@ -378,9 +378,33 @@ def append_audit_entry(
             f"source {source!r} does not match entry type {entry_type.value}"
         )
 
-    # 11. For PREVIEW_RESULT_RECORDED: display_only/no_submit/broker_payload_created
-    #     must carry fixed offline-only values (True/True/False).
+    # 11-13. Preview-only semantic criteria (skipped for non-preview types).
     if entry_type is PaperAuditLedgerEntryType.PREVIEW_RESULT_RECORDED:
+        # 11. Identity fields must be non-empty strings.
+        _chk(
+            "payload.preview_identity",
+            _is_nonempty_str(payload.get("preview_id"))
+            and _is_nonempty_str(payload.get("plan_id"))
+            and _is_nonempty_str(payload.get("lifecycle_id")),
+        )
+        if failed:
+            return _blocked(
+                "payload.preview_identity violated: preview_id, plan_id, "
+                "and lifecycle_id must all be non-empty strings"
+            )
+
+        # 12. Preview status must be exactly PREVIEW_RENDERED.
+        _chk(
+            "payload.preview_status",
+            payload.get("preview_status") == "PREVIEW_RENDERED",
+        )
+        if failed:
+            return _blocked(
+                "payload.preview_status violated: preview_status must be "
+                "'PREVIEW_RENDERED'"
+            )
+
+        # 13. Safety booleans: display_only/no_submit/broker_payload_created.
         _chk(
             "payload.preview_safety",
             payload.get("display_only") is True
@@ -393,12 +417,12 @@ def append_audit_entry(
                 "no_submit must be True, broker_payload_created must be False"
             )
 
-    # 12. Forbidden payload content scan.
+    # 14. Forbidden payload content scan.
     _chk("payload.forbidden_content", not _scan_forbidden_payload(payload))
     if failed:
         return _blocked("payload contains forbidden content")
 
-    # 13. Append the entry and build the new immutable ledger state.
+    # 15. Append the entry and build the new immutable ledger state.
     checked.append("entry.appended")
     entry = {
         "entry_id": entry_id,

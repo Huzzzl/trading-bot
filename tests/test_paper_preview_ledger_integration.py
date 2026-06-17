@@ -1,7 +1,7 @@
 """
 tests/test_paper_preview_ledger_integration.py
 -----------------------------------------------
-S39: Integration tests for the full pure offline preview + ledger chain
+S39/S40: Integration tests for the full pure offline preview + ledger chain
 
     S30 create_paper_order_plan()
     -> S27 validate_paper_order_plan()
@@ -515,7 +515,6 @@ class TestPreviewLedgerEntry:
         )
 
     def test_preview_result_recorded_as_sixth_entry(self):
-        # S39: the rendered preview is now appended as the 6th ledger entry.
         chain = _run_chain_to_preview_ledger()
         assert chain.preview_result.preview_status is PreviewStatus.PREVIEW_RENDERED
         assert len(chain.ledger.entries) == 6
@@ -526,6 +525,26 @@ class TestPreviewLedgerEntry:
         assert last["payload"]["display_only"] is True
         assert last["payload"]["no_submit"] is True
         assert last["payload"]["broker_payload_created"] is False
+
+    def test_preview_entry_payload_has_all_s40_identity_fields(self):
+        chain = _run_chain_to_preview_ledger()
+        p = chain.ledger.entries[-1]["payload"]
+        assert p["preview_status"] == "PREVIEW_RENDERED"
+        assert isinstance(p["preview_id"], str) and p["preview_id"].strip()
+        assert isinstance(p["plan_id"], str) and p["plan_id"].strip()
+        assert isinstance(p["lifecycle_id"], str) and p["lifecycle_id"].strip()
+        assert p["display_only"] is True
+        assert p["no_submit"] is True
+        assert p["broker_payload_created"] is False
+
+    def test_preview_ledger_payload_matches_rendered_preview_identity(self):
+        chain = _run_chain_to_preview_ledger()
+        p = chain.ledger.entries[-1]["payload"]
+        prev = chain.preview_result.preview
+        assert p["preview_id"] == prev["preview_id"]
+        assert p["preview_status"] == prev["preview_status"]
+        assert p["plan_id"] == prev["plan_id"]
+        assert p["lifecycle_id"] == prev["lifecycle_id"]
 
     def test_preview_remains_plain_display_only_dict(self):
         chain = _run_chain_to_preview_ledger()
@@ -556,6 +575,126 @@ class TestPreviewLedgerEntry:
         assert "payload.required_keys" in r.criteria_failed
         assert r.state is chain.ledger
         assert len(r.state.entries) == 6
+
+
+# ---------------------------------------------------------------------------
+# S40: preview semantic validation blocks tampered payloads
+# ---------------------------------------------------------------------------
+
+class TestPreviewSemanticValidation:
+    def _valid_preview_payload(self, chain):
+        return {
+            "preview_status": chain.preview_result.preview["preview_status"],
+            "preview_id":     chain.preview_result.preview["preview_id"],
+            "plan_id":        _PLAN_ID,
+            "lifecycle_id":   _LIFECYCLE_ID,
+            "display_only":   True,
+            "no_submit":      True,
+            "broker_payload_created": False,
+        }
+
+    def test_tampered_empty_preview_id_blocked(self):
+        chain = _run_chain_to_preview_ledger()
+        bad = self._valid_preview_payload(chain)
+        bad["preview_id"] = ""
+        r = append_audit_entry(
+            chain.ledger, entry_id="eid-bad-id", entry_type=EType.PREVIEW_RESULT_RECORDED,
+            recorded_at_utc=_TS, source="preview", payload=bad,
+        )
+        assert r.result == "BLOCKED"
+        assert "payload.preview_identity" in r.criteria_failed
+        assert r.state is chain.ledger
+        assert len(r.state.entries) == 6
+
+    def test_tampered_empty_plan_id_blocked(self):
+        chain = _run_chain_to_preview_ledger()
+        bad = self._valid_preview_payload(chain)
+        bad["plan_id"] = ""
+        r = append_audit_entry(
+            chain.ledger, entry_id="eid-bad-plan", entry_type=EType.PREVIEW_RESULT_RECORDED,
+            recorded_at_utc=_TS, source="preview", payload=bad,
+        )
+        assert r.result == "BLOCKED"
+        assert "payload.preview_identity" in r.criteria_failed
+        assert r.state is chain.ledger
+
+    def test_tampered_empty_lifecycle_id_blocked(self):
+        chain = _run_chain_to_preview_ledger()
+        bad = self._valid_preview_payload(chain)
+        bad["lifecycle_id"] = ""
+        r = append_audit_entry(
+            chain.ledger, entry_id="eid-bad-lc", entry_type=EType.PREVIEW_RESULT_RECORDED,
+            recorded_at_utc=_TS, source="preview", payload=bad,
+        )
+        assert r.result == "BLOCKED"
+        assert "payload.preview_identity" in r.criteria_failed
+        assert r.state is chain.ledger
+
+    def test_tampered_preview_status_blocked(self):
+        chain = _run_chain_to_preview_ledger()
+        bad = self._valid_preview_payload(chain)
+        bad["preview_status"] = "PREVIEW_FAILED"
+        r = append_audit_entry(
+            chain.ledger, entry_id="eid-bad-status", entry_type=EType.PREVIEW_RESULT_RECORDED,
+            recorded_at_utc=_TS, source="preview", payload=bad,
+        )
+        assert r.result == "BLOCKED"
+        assert "payload.preview_status" in r.criteria_failed
+        assert r.state is chain.ledger
+        assert len(r.state.entries) == 6
+
+    def test_blocked_semantic_append_returns_existing_ledger_unchanged(self):
+        chain = _run_chain_to_preview_ledger()
+        snapshot = copy.deepcopy(chain.ledger.entries)
+        bad = self._valid_preview_payload(chain)
+        bad["preview_id"] = "   "
+        r = append_audit_entry(
+            chain.ledger, entry_id="eid-tampered", entry_type=EType.PREVIEW_RESULT_RECORDED,
+            recorded_at_utc=_TS, source="preview", payload=bad,
+        )
+        assert r.result == "BLOCKED"
+        assert r.state is chain.ledger
+        assert r.entry is None
+        assert len(r.state.entries) == 6
+        assert r.state.entries == tuple(snapshot)
+
+    def test_blocked_semantic_append_does_not_advance_lifecycle(self):
+        chain = _run_chain_to_preview_ledger()
+        state = chain.lifecycle_after_gate.state
+        events_snapshot = copy.deepcopy(state.events)
+        bad = self._valid_preview_payload(chain)
+        bad["preview_status"] = "BLOCKED"
+        append_audit_entry(
+            chain.ledger, entry_id="eid-tampered-2", entry_type=EType.PREVIEW_RESULT_RECORDED,
+            recorded_at_utc=_TS, source="preview", payload=bad,
+        )
+        assert state.status is LcStatus.GATE_PASSED_DRY_RUN_ONLY
+        assert state.events == events_snapshot
+
+    def test_preview_dict_not_mutated_by_ledger_append(self):
+        chain = _run_chain_to_preview_ledger()
+        preview_snapshot = copy.deepcopy(chain.preview_result.preview)
+        assert chain.preview_result.preview == preview_snapshot
+
+    def test_no_file_opens_through_blocked_semantic_chain(self, monkeypatch):
+        calls: list = []
+        _real = builtins.open
+
+        def _spy(*a, **k):
+            calls.append(a)
+            return _real(*a, **k)
+
+        with monkeypatch.context() as ctx:
+            ctx.setattr(builtins, "open", _spy)
+            chain = _run_chain_to_preview_ledger()
+            bad = self._valid_preview_payload(chain)
+            bad["preview_id"] = None
+            append_audit_entry(
+                chain.ledger, entry_id="eid-bad-null",
+                entry_type=EType.PREVIEW_RESULT_RECORDED,
+                recorded_at_utc=_TS, source="preview", payload=bad,
+            )
+        assert calls == []
 
 
 # ---------------------------------------------------------------------------
