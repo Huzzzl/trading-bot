@@ -2342,6 +2342,14 @@ current-state handoff), `docs/handoffs/session_2026_06_s39_s40.md`
 change; no source/test changes; paper trading remains not approved; live
 trading remains blocked.
 
+**PR S42 — Design paper broker read-only boundary — added** Docs-only:
+`docs/paper_broker_read_only_boundary_design.md` defining the future
+read-only paper-account connector architecture, inputs, outputs, safety
+checks, account-isolation rules, failure modes, and implementation
+sequence. No broker connection implemented; no credentials read; no
+network calls added; no account accessed; no order-action logic added;
+paper trading remains not approved; live trading remains blocked.
+
 ### Phase C — Paper trading execution
 
 - Paper account executor: applies approved signal on Alpaca paper account
