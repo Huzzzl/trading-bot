@@ -36,9 +36,9 @@ Rules:
 |---|---|
 | Repository | `Huzzzl/trading-bot` |
 | Current phase | Pure offline / paper-preparation |
-| Latest completed milestone | S40 |
-| Latest merged PR | #244 |
-| Current main SHA | `29e443d` |
+| Latest completed milestone | S41 |
+| Latest merged PR | #245 |
+| Current main SHA | `00b5b2a` |
 | Full-suite test count | 6,816 passed |
 | Paper trading | **Not approved** |
 | Live trading | **Blocked** |
@@ -65,6 +65,7 @@ The following components are implemented and tested:
 - In-memory audit ledger (7 entry types, 6 sources)
 - PREVIEW_RESULT_RECORDED entry type with source `"preview"`
 - S40 preview identity, status, and safety validation
+- S41 canonical project handoff and conversation workflow
 
 ---
 
@@ -204,30 +205,35 @@ separate design and review sequence:
 - Preview and audit ledger remain in memory.
 - Current implementation ends before broker, credential, network, runtime,
   and execution boundaries.
+- S42 read-only paper-broker boundary is a design document only. No
+  broker connection, credentials, network access, or account access is
+  implemented.
 
 ---
 
 ## Current milestone
 
-S40 complete (PR #244 merged).
+S41 complete (PR #245 merged). S42 in progress.
 
-- Added `payload.preview_identity` criterion
-- Added `payload.preview_status` criterion
-- Preserved `payload.preview_safety` criterion
-- Preserved fail-closed unchanged-ledger behavior
-- Preserved all offline safety boundaries
+- S41 added canonical project handoff and conversation workflow
+- S42 defines future read-only paper-broker boundary (design only)
+- No broker connection implemented
+- No credentials read
+- No network access added
+- No account accessed
+- No order-action logic added
 
 ---
 
 ## Next phase
 
-After S41 (this handoff system), the next engineering phase must be
-selected deliberately between:
+Current task: S42 paper broker read-only boundary design (docs-only).
 
-**A. Final offline orchestrator hardening**
-or
-**B. Paper broker readiness design** (beginning with docs-only and
-read-only boundaries)
+After S42:
+
+- S43: Credential and account-isolation design (docs-only)
+- S44: Connectivity health-check design (docs-only)
+- S45+: Implementation only after design review and explicit approval
 
 Explicit constraints:
 
@@ -243,8 +249,8 @@ Explicit constraints:
 
 | Step | Description |
 |---|---|
-| S41 | Canonical handoff and conversation workflow (docs-only) |
-| S42 | Paper broker read-only boundary design (docs-only) |
+| S41 | Canonical handoff and conversation workflow (docs-only) -- **done** |
+| S42 | Paper broker read-only boundary design (docs-only) -- **in progress** |
 | S43 | Credential and account-isolation design (docs-only) |
 | S44 | Paper connectivity health-check design (docs-only) |
 | Later | Implementation only after design review and explicit approval |
