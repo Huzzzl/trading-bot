@@ -2334,6 +2334,14 @@ types unaffected. No production code changed outside
 `paper_audit_ledger.py`; no broker/API/credential/env/network/order access;
 preview remains display-only audit bookkeeping; paper/live trading blocked.
 
+**PR S41 — Add canonical project handoff and conversation transition
+workflow — added** Docs-only: `docs/project_handoff.md` (canonical
+current-state handoff), `docs/handoffs/session_2026_06_s39_s40.md`
+(session handoff for S39-S40), `docs/conversation_handoff_workflow.md`
+(operating workflow for conversation transitions). No production behavior
+change; no source/test changes; paper trading remains not approved; live
+trading remains blocked.
+
 ### Phase C — Paper trading execution
 
 - Paper account executor: applies approved signal on Alpaca paper account
