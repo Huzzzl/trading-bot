@@ -2350,6 +2350,17 @@ sequence. No broker connection implemented; no credentials read; no
 network calls added; no account accessed; no order-action logic added;
 paper trading remains not approved; live trading remains blocked.
 
+**PR S43 — Implement pure credential metadata validation and account
+environment guard — added** Two pure offline in-memory validators:
+`credential_metadata.py` (CredentialMetadataStatus 10 members,
+validate_credential_metadata 11 criteria, forbidden-key/value scan) and
+`account_environment_guard.py` (AccountEnvironmentStatus 11 members,
+verify_account_environment 8 criteria, case-sensitive exact "paper"
+match, live hard-block). Fake/in-memory metadata only; no real
+credential loading; no environment-variable reads; no broker/account/
+network access; no adapter construction; no order-action logic; paper
+trading remains not approved; live trading remains blocked.
+
 ### Phase C — Paper trading execution
 
 - Paper account executor: applies approved signal on Alpaca paper account

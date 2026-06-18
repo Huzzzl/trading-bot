@@ -36,10 +36,10 @@ Rules:
 |---|---|
 | Repository | `Huzzzl/trading-bot` |
 | Current phase | Pure offline / paper-preparation |
-| Latest completed milestone | S41 |
-| Latest merged PR | #245 |
-| Current main SHA | `00b5b2a` |
-| Full-suite test count | 6,816 passed |
+| Latest completed milestone | S42 |
+| Latest merged PR | #246 |
+| Current main SHA | `15d32bc` |
+| Full-suite test count | 6,959 passed |
 | Paper trading | **Not approved** |
 | Live trading | **Blocked** |
 | Broker connection | Not implemented |
@@ -66,6 +66,8 @@ The following components are implemented and tested:
 - PREVIEW_RESULT_RECORDED entry type with source `"preview"`
 - S40 preview identity, status, and safety validation
 - S41 canonical project handoff and conversation workflow
+- S42 read-only paper-broker boundary design (docs-only)
+- S43 credential metadata validation and account environment guard
 
 ---
 
@@ -208,30 +210,37 @@ separate design and review sequence:
 - S42 read-only paper-broker boundary is a design document only. No
   broker connection, credentials, network access, or account access is
   implemented.
+- S43 credential metadata validation and account environment guard are
+  pure offline in-memory validators. No credential loading, no
+  environment-variable reads, no broker/account/network access, no
+  adapter construction.
 
 ---
 
 ## Current milestone
 
-S41 complete (PR #245 merged). S42 in progress.
+S42 complete (PR #246 merged). S43 in progress.
 
-- S41 added canonical project handoff and conversation workflow
-- S42 defines future read-only paper-broker boundary (design only)
+- S42 defined future read-only paper-broker boundary (design only)
+- S43 implements pure credential metadata validation and account
+  environment guard (no real credentials, no env vars, no broker access)
 - No broker connection implemented
-- No credentials read
+- No credentials loaded
+- No environment variables read
 - No network access added
 - No account accessed
+- No adapter constructed
 - No order-action logic added
 
 ---
 
 ## Next phase
 
-Current task: S42 paper broker read-only boundary design (docs-only).
+Current task: S43 credential metadata validation and account environment
+guard.
 
-After S42:
+After S43:
 
-- S43: Credential and account-isolation design (docs-only)
 - S44: Connectivity health-check design (docs-only)
 - S45+: Implementation only after design review and explicit approval
 
@@ -250,7 +259,8 @@ Explicit constraints:
 | Step | Description |
 |---|---|
 | S41 | Canonical handoff and conversation workflow (docs-only) -- **done** |
-| S42 | Paper broker read-only boundary design (docs-only) -- **in progress** |
+| S42 | Paper broker read-only boundary design (docs-only) -- **done** |
+| S43 | Credential metadata validation and account environment guard -- **in progress** |
 | S43 | Credential and account-isolation design (docs-only) |
 | S44 | Paper connectivity health-check design (docs-only) |
 | Later | Implementation only after design review and explicit approval |
