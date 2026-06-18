@@ -75,13 +75,8 @@ class TestSafetyFlagsOnBlocked:
     def test_safety_flags_on_schema_error(self):
         _assert_safety_flags(_run(expected_environment=""))
 
-    def test_safety_flags_on_mismatch(self):
-        _assert_safety_flags(_run(
-            expected_environment="paper",
-            credential_environment="paper",
-            adapter_environment="paper",
-            broker_reported_environment="something",
-        ))
+    def test_safety_flags_on_ambiguous(self):
+        _assert_safety_flags(_run(broker_reported_environment="something"))
 
 
 class TestDeterminism:
@@ -158,34 +153,68 @@ class TestLiveBlocking:
         assert r.status is Status.BLOCKED_LIVE_ENVIRONMENT
 
 
-class TestAliasesBlocked:
-    def test_uppercase_paper_blocks(self):
+class TestAmbiguousBlocking:
+    def test_uppercase_paper_blocks_ambiguous(self):
         r = _run(expected_environment="PAPER")
-        assert r.status not in (Status.VERIFIED_PAPER,)
+        assert r.status is Status.BLOCKED_AMBIGUOUS_ENVIRONMENT
 
     @pytest.mark.parametrize("alias", ["sandbox", "demo", "test", "paper-trading"])
-    def test_alias_blocks(self, alias):
+    def test_alias_blocks_ambiguous(self, alias):
         r = _run(expected_environment=alias)
-        assert r.status not in (Status.VERIFIED_PAPER,)
+        assert r.status is Status.BLOCKED_AMBIGUOUS_ENVIRONMENT
 
-    def test_unknown_environment_blocks(self):
+    def test_unknown_environment_blocks_ambiguous(self):
         r = _run(expected_environment="staging")
-        assert r.status not in (Status.VERIFIED_PAPER,)
+        assert r.status is Status.BLOCKED_AMBIGUOUS_ENVIRONMENT
 
-    def test_ambiguous_environment_blocks(self):
+    def test_ambiguous_broker_reported_blocks(self):
         r = _run(broker_reported_environment="maybe-paper")
-        assert r.status not in (Status.VERIFIED_PAPER,)
+        assert r.status is Status.BLOCKED_AMBIGUOUS_ENVIRONMENT
+
+    def test_ambiguous_credential_blocks(self):
+        r = _run(credential_environment="sandbox")
+        assert r.status is Status.BLOCKED_AMBIGUOUS_ENVIRONMENT
+
+    def test_ambiguous_adapter_blocks(self):
+        r = _run(adapter_environment="demo")
+        assert r.status is Status.BLOCKED_AMBIGUOUS_ENVIRONMENT
 
 
-class TestMismatch:
-    def test_mismatched_values_block(self):
+class TestNoFallback:
+    def test_mismatched_broker_blocks(self):
         r = _run(broker_reported_environment="staging")
-        assert r.status not in (Status.VERIFIED_PAPER,)
+        assert r.status is Status.BLOCKED_AMBIGUOUS_ENVIRONMENT
 
-    def test_no_fallback_occurs(self):
+    def test_no_fallback_from_live(self):
         r = _run(expected_environment="live")
         assert r.status is Status.BLOCKED_LIVE_ENVIRONMENT
         assert r.result == "BLOCKED"
+
+
+class TestEnumReachability:
+    def test_all_enum_members_documented(self):
+        expected = {
+            "NOT_VERIFIED",
+            "VERIFIED_PAPER",
+            "BLOCKED_SCHEMA",
+            "BLOCKED_LIVE_ENVIRONMENT",
+            "BLOCKED_AMBIGUOUS_ENVIRONMENT",
+            "BLOCKED_SAFETY",
+        }
+        actual = {m.name for m in Status}
+        assert actual == expected
+
+    def test_verified_paper_reachable(self):
+        assert _run().status is Status.VERIFIED_PAPER
+
+    def test_blocked_schema_reachable(self):
+        assert _run(expected_environment="").status is Status.BLOCKED_SCHEMA
+
+    def test_blocked_live_reachable(self):
+        assert _run(expected_environment="live").status is Status.BLOCKED_LIVE_ENVIRONMENT
+
+    def test_blocked_ambiguous_reachable(self):
+        assert _run(expected_environment="staging").status is Status.BLOCKED_AMBIGUOUS_ENVIRONMENT
 
 
 class TestCriteriaOrder:
@@ -197,7 +226,6 @@ class TestCriteriaOrder:
             "environment.credential_paper",
             "environment.adapter_paper",
             "environment.broker_reported_paper",
-            "environment.all_match",
             "environment.no_live",
             "environment.safety_flags",
         )
@@ -210,6 +238,15 @@ class TestCriteriaOrder:
             "environment.expected_paper",
         )
         assert r.criteria_failed == ("environment.expected_paper",)
+
+    def test_ambiguous_stops_at_field_criterion(self):
+        r = _run(credential_environment="sandbox")
+        assert r.criteria_checked == (
+            "environment.schema",
+            "environment.expected_paper",
+            "environment.credential_paper",
+        )
+        assert r.criteria_failed == ("environment.credential_paper",)
 
 
 class TestSourceHygiene:

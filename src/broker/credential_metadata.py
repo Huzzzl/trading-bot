@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import dataclasses
 import re
+from datetime import datetime as _datetime
+from datetime import timedelta as _timedelta
 from enum import Enum
 
 
@@ -76,15 +78,22 @@ _FORBIDDEN_VALUE_FRAGMENTS: tuple[str, ...] = (
 
 _ALLOWED_KEY_EXACT = "secret_material_present"
 
-_ISO_PATTERN = re.compile(
-    r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}"
-)
+_UTC_ZERO = _timedelta(0)
 
 
-def _is_valid_iso_utc(value: object) -> bool:
+def _parse_utc_timestamp(value: object) -> _datetime | None:
     if not isinstance(value, str):
-        return False
-    return _ISO_PATTERN.match(value) is not None
+        return None
+    try:
+        normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
+        dt = _datetime.fromisoformat(normalized)
+    except (ValueError, TypeError):
+        return None
+    if dt.tzinfo is None:
+        return None
+    if dt.utcoffset() != _UTC_ZERO:
+        return None
+    return dt
 
 
 def _contains_forbidden_key(key: str) -> bool:
@@ -222,10 +231,11 @@ def validate_credential_metadata(
 
     # 6. metadata.expiry_format
     checked.append("metadata.expiry_format")
-    if not _is_valid_iso_utc(expires_raw):
+    expires_dt = _parse_utc_timestamp(expires_raw)
+    if expires_dt is None:
         return _blocked(
             CredentialMetadataStatus.BLOCKED_EXPIRY,
-            "expires_at_utc is not a valid ISO-8601-like UTC datetime",
+            "expires_at_utc is not a valid timezone-aware UTC datetime",
             checked,
             "metadata.expiry_format",
             profile_name=profile_name,
@@ -236,17 +246,18 @@ def validate_credential_metadata(
 
     # 7. metadata.not_expired
     checked.append("metadata.not_expired")
-    if not _is_valid_iso_utc(now_utc):
+    now_dt = _parse_utc_timestamp(now_utc)
+    if now_dt is None:
         return _blocked(
             CredentialMetadataStatus.BLOCKED_EXPIRY,
-            "now_utc is not a valid ISO-8601-like UTC datetime",
+            "now_utc is not a valid timezone-aware UTC datetime",
             checked,
             "metadata.not_expired",
             profile_name=profile_name,
             declared_environment=declared_environment,
             expires_at_utc=expires_at_utc,
         )
-    if expires_at_utc <= now_utc:
+    if expires_dt <= now_dt:
         return _blocked(
             CredentialMetadataStatus.BLOCKED_EXPIRY,
             "credential metadata is expired or not future",

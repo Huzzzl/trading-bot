@@ -211,6 +211,77 @@ class TestExpiry:
         r = _run(m)
         assert r.status is Status.BLOCKED_EXPIRY
 
+    def test_valid_z_suffix(self):
+        m = _valid_metadata()
+        m["expires_at_utc"] = "2027-01-01T00:00:00Z"
+        r = _run(m, now_utc="2026-01-01T00:00:00Z")
+        assert r.status is Status.CREDENTIAL_METADATA_READY_PAPER
+
+    def test_valid_plus_zero_offset(self):
+        m = _valid_metadata()
+        m["expires_at_utc"] = "2027-01-01T00:00:00+00:00"
+        r = _run(m, now_utc="2026-01-01T00:00:00+00:00")
+        assert r.status is Status.CREDENTIAL_METADATA_READY_PAPER
+
+    def test_future_expiry_parsed_datetime(self):
+        m = _valid_metadata()
+        m["expires_at_utc"] = "2026-06-01T00:00:01Z"
+        r = _run(m, now_utc="2026-06-01T00:00:00Z")
+        assert r.status is Status.CREDENTIAL_METADATA_READY_PAPER
+
+    @pytest.mark.parametrize("bad_ts", [
+        "2026-13-01T00:00:00Z",
+        "2026-01-32T00:00:00Z",
+        "2026-01-01T25:00:00Z",
+        "2026-01-01T00:61:00Z",
+        "2026-01-01T00:00:61Z",
+    ])
+    def test_invalid_date_time_components_block(self, bad_ts):
+        m = _valid_metadata()
+        m["expires_at_utc"] = bad_ts
+        r = _run(m)
+        assert r.status is Status.BLOCKED_EXPIRY
+        assert "metadata.expiry_format" in r.criteria_failed
+
+    def test_trailing_garbage_blocks(self):
+        m = _valid_metadata()
+        m["expires_at_utc"] = "2027-01-01T00:00:00Z extra"
+        r = _run(m)
+        assert r.status is Status.BLOCKED_EXPIRY
+
+    def test_missing_timezone_blocks(self):
+        m = _valid_metadata()
+        m["expires_at_utc"] = "2027-01-01T00:00:00"
+        r = _run(m)
+        assert r.status is Status.BLOCKED_EXPIRY
+        assert "metadata.expiry_format" in r.criteria_failed
+
+    def test_non_utc_positive_offset_blocks(self):
+        m = _valid_metadata()
+        m["expires_at_utc"] = "2027-01-01T00:00:00+05:00"
+        r = _run(m)
+        assert r.status is Status.BLOCKED_EXPIRY
+        assert "metadata.expiry_format" in r.criteria_failed
+
+    def test_non_utc_negative_offset_blocks(self):
+        m = _valid_metadata()
+        m["expires_at_utc"] = "2027-01-01T00:00:00-03:00"
+        r = _run(m)
+        assert r.status is Status.BLOCKED_EXPIRY
+        assert "metadata.expiry_format" in r.criteria_failed
+
+    def test_naive_now_utc_blocks(self):
+        m = _valid_metadata()
+        r = _run(m, now_utc="2026-01-01T00:00:00")
+        assert r.status is Status.BLOCKED_EXPIRY
+        assert "metadata.not_expired" in r.criteria_failed
+
+    def test_non_utc_now_utc_blocks(self):
+        m = _valid_metadata()
+        r = _run(m, now_utc="2026-01-01T00:00:00+05:00")
+        assert r.status is Status.BLOCKED_EXPIRY
+        assert "metadata.not_expired" in r.criteria_failed
+
 
 class TestRotation:
     def test_rotation_true_blocks(self):

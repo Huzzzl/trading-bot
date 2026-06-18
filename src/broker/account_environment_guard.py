@@ -8,11 +8,6 @@ class AccountEnvironmentStatus(str, Enum):
     NOT_VERIFIED = "NOT_VERIFIED"
     VERIFIED_PAPER = "VERIFIED_PAPER"
     BLOCKED_SCHEMA = "BLOCKED_SCHEMA"
-    BLOCKED_EXPECTED_ENVIRONMENT = "BLOCKED_EXPECTED_ENVIRONMENT"
-    BLOCKED_CREDENTIAL_ENVIRONMENT = "BLOCKED_CREDENTIAL_ENVIRONMENT"
-    BLOCKED_ADAPTER_ENVIRONMENT = "BLOCKED_ADAPTER_ENVIRONMENT"
-    BLOCKED_BROKER_ENVIRONMENT = "BLOCKED_BROKER_ENVIRONMENT"
-    BLOCKED_ENVIRONMENT_MISMATCH = "BLOCKED_ENVIRONMENT_MISMATCH"
     BLOCKED_LIVE_ENVIRONMENT = "BLOCKED_LIVE_ENVIRONMENT"
     BLOCKED_AMBIGUOUS_ENVIRONMENT = "BLOCKED_AMBIGUOUS_ENVIRONMENT"
     BLOCKED_SAFETY = "BLOCKED_SAFETY"
@@ -74,7 +69,6 @@ def _check_paper_or_live(
     field_name: str,
     checked: list[str],
     criterion: str,
-    blocked_status: AccountEnvironmentStatus,
     *,
     expected_environment: str | None = None,
     credential_environment: str | None = None,
@@ -96,8 +90,8 @@ def _check_paper_or_live(
             broker_reported_environment=broker_reported_environment,
         )
     return _blocked(
-        blocked_status,
-        f"{field_name} is not paper",
+        AccountEnvironmentStatus.BLOCKED_AMBIGUOUS_ENVIRONMENT,
+        f"{field_name} is not a recognized environment",
         checked,
         criterion,
         expected_environment=expected_environment,
@@ -140,7 +134,6 @@ def verify_account_environment(
         "expected_environment",
         checked,
         "environment.expected_paper",
-        AccountEnvironmentStatus.BLOCKED_EXPECTED_ENVIRONMENT,
         expected_environment=expected_environment,
     )
     if result is not None:
@@ -152,7 +145,6 @@ def verify_account_environment(
         "credential_environment",
         checked,
         "environment.credential_paper",
-        AccountEnvironmentStatus.BLOCKED_CREDENTIAL_ENVIRONMENT,
         expected_environment=expected_environment,
         credential_environment=credential_environment,
     )
@@ -165,7 +157,6 @@ def verify_account_environment(
         "adapter_environment",
         checked,
         "environment.adapter_paper",
-        AccountEnvironmentStatus.BLOCKED_ADAPTER_ENVIRONMENT,
         expected_environment=expected_environment,
         credential_environment=credential_environment,
         adapter_environment=adapter_environment,
@@ -179,7 +170,6 @@ def verify_account_environment(
         "broker_reported_environment",
         checked,
         "environment.broker_reported_paper",
-        AccountEnvironmentStatus.BLOCKED_BROKER_ENVIRONMENT,
         expected_environment=expected_environment,
         credential_environment=credential_environment,
         adapter_environment=adapter_environment,
@@ -188,22 +178,7 @@ def verify_account_environment(
     if result is not None:
         return result
 
-    # 6. environment.all_match
-    checked.append("environment.all_match")
-    all_values = set(fields.values())
-    if len(all_values) != 1 or all_values != {"paper"}:
-        return _blocked(
-            AccountEnvironmentStatus.BLOCKED_ENVIRONMENT_MISMATCH,
-            "environment values do not all match paper",
-            checked,
-            "environment.all_match",
-            expected_environment=expected_environment,
-            credential_environment=credential_environment,
-            adapter_environment=adapter_environment,
-            broker_reported_environment=broker_reported_environment,
-        )
-
-    # 7. environment.no_live
+    # 6. environment.no_live
     checked.append("environment.no_live")
     for name, value in fields.items():
         if value == "live":
