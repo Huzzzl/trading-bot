@@ -2361,6 +2361,23 @@ credential loading; no environment-variable reads; no broker/account/
 network access; no adapter construction; no order-action logic; paper
 trading remains not approved; live trading remains blocked.
 
+**PR S44 — Add fake credential provider and fake paper adapter integration
+tests — added** Two pure offline fake-only classes:
+`fake_credential_provider.py` (FakeCredentialProviderResult frozen
+dataclass, create_fake_paper_credential_metadata returns ordinary metadata
+only, refuses non-paper environment) and `fake_paper_adapter.py`
+(FakePaperAdapterResult frozen dataclass, create_fake_paper_adapter_metadata
+exposes environment metadata only, refuses non-paper). Integration tests
+wire fakes through S43 credential metadata validator and account environment
+guard: full chain pass, live/ambiguous/expired/rotation/forbidden blocks,
+immutability, determinism, all five safety flags always False, no fallback,
+no adapter construction outside fake classes, no order-action capability,
+source hygiene scans. No real credentials; no os.environ/getenv; no file
+I/O; no network; no broker SDK; no account access; no order methods; no
+runtime wiring; PASS is not credential approval, not account-access
+approval, not paper-trading approval; paper trading remains not approved;
+live trading remains blocked.
+
 ### Phase C — Paper trading execution
 
 - Paper account executor: applies approved signal on Alpaca paper account
