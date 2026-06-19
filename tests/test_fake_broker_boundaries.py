@@ -241,6 +241,60 @@ class TestForbiddenCredentialFieldsBlocks:
         assert r.status is CMS.CREDENTIAL_METADATA_READY_PAPER
 
 
+class TestProtectedFieldOverrideBlocks:
+    _PROTECTED_OVERRIDES = [
+        ("profile_name", "tampered-profile"),
+        ("declared_environment", "live"),
+        ("expires_at_utc", "2020-01-01T00:00:00Z"),
+        ("rotation_required", True),
+        ("secret_material_present", True),
+    ]
+
+    @pytest.mark.parametrize("field,override_value", _PROTECTED_OVERRIDES)
+    def test_extra_fields_cannot_override_protected_field(self, field, override_value):
+        cred = _credential_result(extra_fields={field: override_value})
+        assert cred.result == "BLOCKED"
+
+    @pytest.mark.parametrize("field,override_value", _PROTECTED_OVERRIDES)
+    def test_metadata_is_none_on_protected_field_override(self, field, override_value):
+        cred = _credential_result(extra_fields={field: override_value})
+        assert cred.metadata is None
+
+    @pytest.mark.parametrize("field,override_value", _PROTECTED_OVERRIDES)
+    def test_safety_flags_false_on_protected_field_override(self, field, override_value):
+        cred = _credential_result(extra_fields={field: override_value})
+        _assert_all_safety_flags_false(cred)
+
+    @pytest.mark.parametrize("field,override_value", _PROTECTED_OVERRIDES)
+    def test_blocker_names_field_on_protected_field_override(self, field, override_value):
+        cred = _credential_result(extra_fields={field: override_value})
+        assert field in cred.blocker
+
+    @pytest.mark.parametrize("field,override_value", _PROTECTED_OVERRIDES)
+    def test_blocker_does_not_leak_override_value(self, field, override_value):
+        cred = _credential_result(extra_fields={field: override_value})
+        assert str(override_value) not in cred.blocker
+
+    def test_harmless_non_protected_extra_field_still_passes(self):
+        cred = _credential_result(extra_fields={"notes": "just a note"})
+        assert cred.result == "PASS"
+        assert cred.metadata["notes"] == "just a note"
+
+    def test_extra_fields_input_not_mutated(self):
+        extra = {"declared_environment": "live"}
+        original = copy.deepcopy(extra)
+        create_fake_paper_credential_metadata(extra_fields=extra)
+        assert extra == original
+
+    def test_multiple_protected_field_conflicts_named_in_blocker(self):
+        cred = _credential_result(
+            extra_fields={"profile_name": "x", "declared_environment": "live"}
+        )
+        assert cred.result == "BLOCKED"
+        assert "declared_environment" in cred.blocker
+        assert "profile_name" in cred.blocker
+
+
 class TestInputImmutability:
     def test_credential_metadata_not_mutated(self):
         cred = _credential_result()

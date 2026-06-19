@@ -17,6 +17,29 @@ class FakeCredentialProviderResult:
 
 _FUTURE_EXPIRY = "2099-01-01T00:00:00Z"
 
+_PROTECTED_FIELDS = frozenset(
+    {
+        "profile_name",
+        "declared_environment",
+        "expires_at_utc",
+        "rotation_required",
+        "secret_material_present",
+    }
+)
+
+
+def _blocked(blocker: str) -> FakeCredentialProviderResult:
+    return FakeCredentialProviderResult(
+        result="BLOCKED",
+        blocker=blocker,
+        metadata=None,
+        broker_calls_made=False,
+        credentials_read=False,
+        network_calls_made=False,
+        order_action_requested=False,
+        live_trading_allowed=False,
+    )
+
 
 def create_fake_paper_credential_metadata(
     *,
@@ -28,16 +51,15 @@ def create_fake_paper_credential_metadata(
     extra_fields: dict | None = None,
 ) -> FakeCredentialProviderResult:
     if declared_environment != "paper":
-        return FakeCredentialProviderResult(
-            result="BLOCKED",
-            blocker="fake provider refuses non-paper environment",
-            metadata=None,
-            broker_calls_made=False,
-            credentials_read=False,
-            network_calls_made=False,
-            order_action_requested=False,
-            live_trading_allowed=False,
-        )
+        return _blocked("fake provider refuses non-paper environment")
+
+    if extra_fields is not None:
+        conflicts = _PROTECTED_FIELDS.intersection(extra_fields)
+        if conflicts:
+            field_list = ", ".join(sorted(conflicts))
+            return _blocked(
+                f"extra_fields cannot override protected field(s): {field_list}"
+            )
 
     metadata: dict = {
         "profile_name": profile_name,
