@@ -36,10 +36,10 @@ Rules:
 |---|---|
 | Repository | `Huzzzl/trading-bot` |
 | Current phase | Pure offline / paper-preparation |
-| Latest completed milestone | S42 |
-| Latest merged PR | #246 |
-| Current main SHA | `15d32bc` |
-| Full-suite test count | 6,959 passed |
+| Latest completed milestone | S43 |
+| Latest merged PR | #247 |
+| Current main SHA | `8e2a198` |
+| Full-suite test count | 6,981 passed |
 | Paper trading | **Not approved** |
 | Live trading | **Blocked** |
 | Broker connection | Not implemented |
@@ -68,6 +68,7 @@ The following components are implemented and tested:
 - S41 canonical project handoff and conversation workflow
 - S42 read-only paper-broker boundary design (docs-only)
 - S43 credential metadata validation and account environment guard
+- S44 fake credential provider and fake paper adapter integration tests
 
 ---
 
@@ -214,34 +215,38 @@ separate design and review sequence:
   pure offline in-memory validators. No credential loading, no
   environment-variable reads, no broker/account/network access, no
   adapter construction.
+- S44 fake credential provider and fake paper adapter are pure offline
+  test-only fakes. No real credentials, no broker SDK, no network, no
+  order methods. PASS is not credential approval, not account-access
+  approval, not paper-trading approval.
 
 ---
 
 ## Current milestone
 
-S42 complete (PR #246 merged). S43 in progress.
+S43 complete (PR #247 merged). S44 in progress.
 
-- S42 defined future read-only paper-broker boundary (design only)
-- S43 implements pure credential metadata validation and account
-  environment guard (no real credentials, no env vars, no broker access)
+- S43 implemented credential metadata validation and account environment
+  guard (pure offline in-memory validators)
+- S44 adds fake credential provider and fake paper adapter with
+  integration tests wiring through S43 validators
 - No broker connection implemented
 - No credentials loaded
 - No environment variables read
 - No network access added
 - No account accessed
-- No adapter constructed
+- No real adapter constructed
 - No order-action logic added
 
 ---
 
 ## Next phase
 
-Current task: S43 credential metadata validation and account environment
-guard.
+Current task: S44 fake credential provider and fake paper adapter
+integration tests.
 
-After S43:
+After S44:
 
-- S44: Connectivity health-check design (docs-only)
 - S45+: Implementation only after design review and explicit approval
 
 Explicit constraints:
@@ -260,9 +265,8 @@ Explicit constraints:
 |---|---|
 | S41 | Canonical handoff and conversation workflow (docs-only) -- **done** |
 | S42 | Paper broker read-only boundary design (docs-only) -- **done** |
-| S43 | Credential metadata validation and account environment guard -- **in progress** |
-| S43 | Credential and account-isolation design (docs-only) |
-| S44 | Paper connectivity health-check design (docs-only) |
+| S43 | Credential metadata validation and account environment guard -- **done** |
+| S44 | Fake credential provider and fake paper adapter integration tests -- **in progress** |
 | Later | Implementation only after design review and explicit approval |
 
 ---
