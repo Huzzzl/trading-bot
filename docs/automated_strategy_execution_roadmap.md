@@ -2378,6 +2378,54 @@ runtime wiring; PASS is not credential approval, not account-access
 approval, not paper-trading approval; paper trading remains not approved;
 live trading remains blocked.
 
+**PR S45 — Pure offline paper account snapshot reader — implemented**
+`src/broker/paper_account_snapshot.py` created. Fully offline; no broker/
+API/credential/env/network/order/live/paper access. No live/paper trading
+approved. No account accessed.
+
+`PaperAccountSnapshotStatus` (str, Enum) with 7 values: NOT_READ,
+SNAPSHOT_READY_PAPER, BLOCKED_SCHEMA, BLOCKED_ENVIRONMENT,
+BLOCKED_ACCOUNT_STATUS, BLOCKED_STALE_RESPONSE, BLOCKED_SAFETY.
+
+`PaperAccountSnapshotResult` frozen dataclass (20 fields): result, status,
+blocker, environment, account_status, cash, buying_power, equity, positions,
+open_orders, market_clock, broker_timestamp, request_id, criteria_checked,
+criteria_failed, and 5 safety flags (always False).
+
+`read_fake_paper_account_snapshot(snapshot, *, expected_environment,
+credential_environment, adapter_environment, request_id, requested_at_utc,
+max_age_seconds)` pure in-memory function: calls S43
+verify_account_environment(); validates required snapshot fields; account_status
+must be exactly "active"; cash/buying_power/equity must be finite non-negative
+numbers; positions/open_orders must be lists or tuples; market_clock must be a
+dict; broker_timestamp and requested_at_utc must be strict timezone-aware UTC;
+broker_timestamp must not be in the future; snapshot age must not exceed
+max_age_seconds; request_id must be non-empty; positions/open_orders copied into
+immutable tuples; raw input dict not retained or returned; fail closed at first
+failed criterion; inputs not mutated; 14 deterministic criteria.
+
+`src/broker/fake_paper_adapter.py` extended with
+`create_fake_paper_account_snapshot()` fake-only helper returning ordinary
+snapshot metadata. No connection/request methods. No real account identifiers.
+No credentials. No URLs or endpoints.
+
+`tests/test_paper_account_snapshot.py` added: 161 tests across 18 classes
+covering valid paper snapshot passes, live/ambiguous environment blocks,
+inactive/disabled account blocks, malformed/missing field blocks, negative/NaN/
+infinite financial value blocks, stale response blocks, future broker timestamp
+blocks, invalid timezone blocks, empty request_id blocks, input immutability,
+deterministic output, positions/open_orders as tuples, raw input dict not
+returned, all five safety flags always False on PASS and BLOCKED, no file/env/
+network/broker-SDK/order behavior, no automatic chain entry, and fake snapshot
+helper validation.
+
+Snapshot readiness is observation only. Snapshot readiness is not account-access
+approval. Snapshot readiness is not paper-trading approval. Snapshot readiness
+is not order approval. Paper trading remains not approved. Live trading remains
+blocked.
+
+Full suite: 7,268 passed.
+
 ### Phase C — Paper trading execution
 
 - Paper account executor: applies approved signal on Alpaca paper account
