@@ -36,10 +36,10 @@ Rules:
 |---|---|
 | Repository | `Huzzzl/trading-bot` |
 | Current phase | Pure offline / paper-preparation |
-| Latest completed milestone | S44 |
-| Latest merged PR | #248 |
-| Current main SHA | `a8f91af` |
-| Full-suite test count | 7,268 passed |
+| Latest completed milestone | S45 |
+| Latest merged PR | #249 |
+| Current main SHA | `4342d25` |
+| Full-suite test count | 7,457 passed |
 | Paper trading | **Not approved** |
 | Live trading | **Blocked** |
 | Broker connection | Not implemented |
@@ -70,6 +70,7 @@ The following components are implemented and tested:
 - S43 credential metadata validation and account environment guard
 - S44 fake credential provider and fake paper adapter integration tests
 - S45 pure offline paper account snapshot reader
+- S46 paper account snapshot isolation integration tests (tests-only)
 
 ---
 
@@ -225,17 +226,25 @@ separate design and review sequence:
   account access, no order-action logic. Snapshot readiness is
   observation only, not account-access approval, not paper-trading
   approval.
+- S46 paper account snapshot isolation integration tests prove the
+  S43-S45 observation boundary remains isolated from the existing
+  offline order-preparation chain. No production source modified.
+  Snapshot PASS never invokes planner, validator, gate, lifecycle,
+  preview, or ledger. Snapshot result cannot be used as PTA/1.0 or
+  POP/1.0 input. Positions and open_orders remain observations only.
+  Snapshot readiness does not advance lifecycle.
 
 ---
 
 ## Current milestone
 
-S44 complete (PR #248 merged). S45 in progress.
+S45 complete (PR #249 merged). S46 in progress.
 
-- S44 implemented fake credential provider and fake paper adapter with
-  integration tests wiring through S43 validators
-- S45 adds pure offline paper account snapshot reader with fake
-  snapshot helper and comprehensive tests
+- S45 implemented pure offline paper account snapshot reader with
+  fake snapshot helper and 178 tests
+- S46 adds 172 tests-only integration tests proving the S43-S45
+  observation boundary stays isolated from the order-preparation chain
+- No production source modified in S46
 - No broker connection implemented
 - No credentials loaded
 - No environment variables read
@@ -248,11 +257,11 @@ S44 complete (PR #248 merged). S45 in progress.
 
 ## Next phase
 
-Current task: S45 pure offline paper account snapshot reader.
+Current task: S46 paper account snapshot isolation integration tests.
 
-After S45:
+After S46:
 
-- S46+: Implementation only after design review and explicit approval
+- S47+: Implementation only after design review and explicit approval
 
 Explicit constraints:
 
@@ -272,7 +281,8 @@ Explicit constraints:
 | S42 | Paper broker read-only boundary design (docs-only) -- **done** |
 | S43 | Credential metadata validation and account environment guard -- **done** |
 | S44 | Fake credential provider and fake paper adapter integration tests -- **done** |
-| S45 | Pure offline paper account snapshot reader -- **in progress** |
+| S45 | Pure offline paper account snapshot reader -- **done** |
+| S46 | Paper account snapshot isolation integration tests (tests-only) -- **in progress** |
 | Later | Implementation only after design review and explicit approval |
 
 ---

@@ -2426,6 +2426,38 @@ blocked.
 
 Full suite: 7,268 passed.
 
+**PR S46 — Paper account snapshot isolation integration tests — implemented**
+`tests/test_paper_account_snapshot_isolation.py` added (tests-only). 172 tests
+across 12 classes proving the S43-S45 broker-observation boundary remains
+isolated from the existing offline order-preparation chain (planner, plan
+validator, safety gate, lifecycle, dry-run preview, audit ledger).
+
+Tests cover: valid fake credential metadata passes S43 validation; valid fake
+adapter passes S43 environment guard; valid fake snapshot passes S45 reader;
+snapshot PASS (and BLOCKED) does not invoke any of `create_paper_order_plan`,
+`validate_paper_order_plan`, `evaluate_paper_order_safety_gate`,
+`create_lifecycle_from_plan`, `apply_lifecycle_event`,
+`render_paper_dry_run_preview`, `append_audit_entry` (parametrised mock-patched
+across all 7 chain functions × PASS/BLOCKED); snapshot result has no
+approval/plan/gate/lifecycle/preview/ledger/submit/execution/order-action
+field names or values; snapshot result cannot be used as PTA/1.0 or POP/1.0
+input (direct rejection by the real S25 and S27 validators); positions and
+open_orders are immutable tuples with no approval/submit/client_order_id keys;
+blocked credential/environment/snapshot paths stop the chain with no fallback
+to PASS; all five safety flags False on PASS and BLOCKED; deterministic and
+immutable results; no file writes during the full observation chain (builtins
+open patched); no env reads, no network, no broker SDK, no runtime/main wiring,
+no order-action methods in any observation module (forbidden-pattern source
+scans across all 5 broker-boundary modules).
+
+No production source code modified. No orchestrator added. Snapshot data is
+not wired into current_state or the safety gate. No broker payloads or account
+identifiers created. Snapshot readiness is observation only. Snapshot
+readiness is not approval. Snapshot readiness does not advance lifecycle.
+Paper trading remains not approved. Live trading remains blocked.
+
+Full suite: 7,457 passed.
+
 ### Phase C — Paper trading execution
 
 - Paper account executor: applies approved signal on Alpaca paper account
