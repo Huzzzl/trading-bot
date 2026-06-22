@@ -154,7 +154,17 @@ def read_fake_paper_account_snapshot(
             "input.request_id",
         )
 
-    # 3. environment.verification
+    # 3. input.max_age_seconds
+    checked.append("input.max_age_seconds")
+    if isinstance(max_age_seconds, bool) or not isinstance(max_age_seconds, int) or max_age_seconds < 0:
+        return _blocked(
+            PaperAccountSnapshotStatus.BLOCKED_SCHEMA,
+            "max_age_seconds is not a non-negative integer",
+            checked,
+            "input.max_age_seconds",
+        )
+
+    # 4. environment.verification
     checked.append("environment.verification")
     broker_reported = snapshot.get("broker_reported_environment")
     if not isinstance(broker_reported, str):

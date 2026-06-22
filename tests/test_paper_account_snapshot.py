@@ -437,6 +437,55 @@ class TestEmptyRequestIdBlocks:
         _assert_all_safety_flags_false(r)
 
 
+class TestMaxAgeSecondsValidation:
+    def test_none_blocks(self):
+        r = _read(max_age_seconds=None)  # type: ignore[arg-type]
+        assert r.result == "BLOCKED"
+        assert r.status is PASS.BLOCKED_SCHEMA
+
+    def test_string_blocks(self):
+        r = _read(max_age_seconds="60")  # type: ignore[arg-type]
+        assert r.result == "BLOCKED"
+        assert r.status is PASS.BLOCKED_SCHEMA
+
+    def test_float_blocks(self):
+        r = _read(max_age_seconds=60.0)  # type: ignore[arg-type]
+        assert r.result == "BLOCKED"
+        assert r.status is PASS.BLOCKED_SCHEMA
+
+    def test_bool_blocks(self):
+        r = _read(max_age_seconds=True)  # type: ignore[arg-type]
+        assert r.result == "BLOCKED"
+        assert r.status is PASS.BLOCKED_SCHEMA
+
+    def test_negative_blocks(self):
+        r = _read(max_age_seconds=-1)
+        assert r.result == "BLOCKED"
+        assert r.status is PASS.BLOCKED_SCHEMA
+
+    def test_zero_valid_when_timestamps_equal(self):
+        snap = _snapshot(broker_timestamp="2026-06-01T00:01:00Z")
+        r = _read(snap, requested_at_utc="2026-06-01T00:01:00Z", max_age_seconds=0)
+        assert r.result == "PASS"
+
+    @pytest.mark.parametrize("invalid_value", [None, "60", 60.0, True, -1])
+    def test_invalid_values_return_blocked_schema(self, invalid_value):
+        r = _read(max_age_seconds=invalid_value)
+        assert r.result == "BLOCKED"
+        assert r.status is PASS.BLOCKED_SCHEMA
+
+    @pytest.mark.parametrize("invalid_value", [None, "60", 60.0, True, -1])
+    def test_safety_flags_false_on_invalid(self, invalid_value):
+        r = _read(max_age_seconds=invalid_value)
+        _assert_all_safety_flags_false(r)
+
+    def test_input_not_mutated(self):
+        snap = _snapshot()
+        original = copy.deepcopy(snap)
+        _read(snap, max_age_seconds=None)  # type: ignore[arg-type]
+        assert snap == original
+
+
 class TestInputImmutability:
     def test_snapshot_not_mutated(self):
         snap = _snapshot(positions=[{"symbol": "SPY"}])
