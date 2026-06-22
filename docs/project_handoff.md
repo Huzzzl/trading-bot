@@ -36,10 +36,10 @@ Rules:
 |---|---|
 | Repository | `Huzzzl/trading-bot` |
 | Current phase | Pure offline / paper-preparation |
-| Latest completed milestone | S45 |
-| Latest merged PR | #249 |
-| Current main SHA | `4342d25` |
-| Full-suite test count | 7,457 passed |
+| Latest completed milestone | S46 |
+| Latest merged PR | #250 |
+| Current main SHA | `6f98f46` |
+| Full-suite test count | 7,609 passed |
 | Paper trading | **Not approved** |
 | Live trading | **Blocked** |
 | Broker connection | Not implemented |
@@ -71,6 +71,7 @@ The following components are implemented and tested:
 - S44 fake credential provider and fake paper adapter integration tests
 - S45 pure offline paper account snapshot reader
 - S46 paper account snapshot isolation integration tests (tests-only)
+- S47 pure offline paper snapshot reconciliation
 
 ---
 
@@ -233,18 +234,23 @@ separate design and review sequence:
   preview, or ledger. Snapshot result cannot be used as PTA/1.0 or
   POP/1.0 input. Positions and open_orders remain observations only.
   Snapshot readiness does not advance lifecycle.
+- S47 paper snapshot reconciliation compares an already-validated
+  PaperAccountSnapshotResult with caller-supplied expected observation
+  state. Pure offline in-memory function. Difference found is not an
+  order signal. Reconciliation does not approve paper trading and
+  does not advance lifecycle. No planner/gate/lifecycle/preview/ledger
+  calls. No current_state wiring. No order or broker payload creation.
 
 ---
 
 ## Current milestone
 
-S45 complete (PR #249 merged). S46 in progress.
+S46 complete (PR #250 merged). S47 in progress.
 
-- S45 implemented pure offline paper account snapshot reader with
-  fake snapshot helper and 178 tests
-- S46 adds 172 tests-only integration tests proving the S43-S45
+- S46 added 172 tests-only integration tests proving the S43-S45
   observation boundary stays isolated from the order-preparation chain
-- No production source modified in S46
+- S47 implements pure offline paper snapshot reconciliation with
+  152 tests
 - No broker connection implemented
 - No credentials loaded
 - No environment variables read
@@ -257,11 +263,11 @@ S45 complete (PR #249 merged). S46 in progress.
 
 ## Next phase
 
-Current task: S46 paper account snapshot isolation integration tests.
+Current task: S47 pure offline paper snapshot reconciliation.
 
-After S46:
+After S47:
 
-- S47+: Implementation only after design review and explicit approval
+- S48+: Implementation only after design review and explicit approval
 
 Explicit constraints:
 
@@ -282,7 +288,8 @@ Explicit constraints:
 | S43 | Credential metadata validation and account environment guard -- **done** |
 | S44 | Fake credential provider and fake paper adapter integration tests -- **done** |
 | S45 | Pure offline paper account snapshot reader -- **done** |
-| S46 | Paper account snapshot isolation integration tests (tests-only) -- **in progress** |
+| S46 | Paper account snapshot isolation integration tests (tests-only) -- **done** |
+| S47 | Pure offline paper snapshot reconciliation -- **in progress** |
 | Later | Implementation only after design review and explicit approval |
 
 ---
