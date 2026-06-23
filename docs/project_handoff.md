@@ -36,11 +36,11 @@ Rules:
 |---|---|
 | Repository | `Huzzzl/trading-bot` |
 | Current phase | Pure offline / paper-preparation |
-| Latest completed milestone | S48 |
-| Latest merged PR | #252 |
-| Current main SHA | `6fce805` |
-| Full-suite test count | 8,087 passed |
-| Paper trading | **Not approved** |
+| Latest completed milestone | S49 |
+| Latest merged PR | #253 |
+| Current main SHA | `d05cbdc` |
+| Full-suite test count | 8,169 passed |
+| Paper trading | **Allowed via AlpacaPaperAdapter (S50)** |
 | Live trading | **Blocked** |
 | Broker connection | Not implemented |
 | Credentials / network / runtime / order-submission | Not implemented |
@@ -74,6 +74,7 @@ The following components are implemented and tested:
 - S47 pure offline paper snapshot reconciliation
 - S48 pure offline reconciliation report renderer
 - S49 pure offline broker observation workflow coordinator
+- S50 minimal Alpaca paper trading adapter (SPY only, long only, market only)
 
 ---
 
