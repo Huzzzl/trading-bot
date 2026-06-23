@@ -191,7 +191,29 @@ def render_paper_reconciliation_report(
                 request_id=request_id,
             )
 
-    # 5. rendering.financial_lines
+    # 5. input.reconciliation_consistency
+    checked.append("input.reconciliation_consistency")
+    actual_has_difference = (
+        float(reconciliation_result.cash_difference) != 0
+        or float(reconciliation_result.buying_power_difference) != 0
+        or float(reconciliation_result.equity_difference) != 0
+        or len(reconciliation_result.position_differences) > 0
+        or len(reconciliation_result.open_order_differences) > 0
+    )
+    declared_difference = (
+        reconciliation_result.status
+        is PaperSnapshotReconciliationStatus.RECONCILED_DIFFERENCE_FOUND
+    )
+    if declared_difference != actual_has_difference:
+        return _blocked(
+            PaperReconciliationReportStatus.BLOCKED_RECONCILIATION,
+            "reconciliation_result.status does not match the payload",
+            checked,
+            "input.reconciliation_consistency",
+            request_id=request_id,
+        )
+
+    # 6. rendering.financial_lines
     checked.append("rendering.financial_lines")
     financial_lines: list[str] = []
     for field_label, value in (
@@ -201,7 +223,7 @@ def render_paper_reconciliation_report(
     ):
         financial_lines.append(f"{field_label}={_format_amount(float(value))}")
 
-    # 6. rendering.position_lines
+    # 7. rendering.position_lines
     checked.append("rendering.position_lines")
     position_lines: list[str] = []
     for diff in reconciliation_result.position_differences:
@@ -216,7 +238,7 @@ def render_paper_reconciliation_report(
         position_lines.append(_format_diff_item(diff, kind_label="position"))
     position_lines.sort()
 
-    # 7. rendering.open_order_lines
+    # 8. rendering.open_order_lines
     checked.append("rendering.open_order_lines")
     open_order_lines: list[str] = []
     for diff in reconciliation_result.open_order_differences:
@@ -231,7 +253,7 @@ def render_paper_reconciliation_report(
         open_order_lines.append(_format_diff_item(diff, kind_label="open_order"))
     open_order_lines.sort()
 
-    # 8. rendering.summary
+    # 9. rendering.summary
     checked.append("rendering.summary")
     has_difference = (
         reconciliation_result.status
@@ -249,7 +271,7 @@ def render_paper_reconciliation_report(
             f"reconciliation request_id={request_id} observed no difference"
         )
 
-    # 9. rendering.safety_flags
+    # 10. rendering.safety_flags
     checked.append("rendering.safety_flags")
 
     return PaperReconciliationReportResult(

@@ -448,14 +448,20 @@ class TestMalformedReconciliationPayloads:
         assert r.result == "PASS"
 
     def test_non_dict_position_diff_blocks(self):
-        recon = _no_diff_reconciliation()
+        recon = _diff_reconciliation(
+            snap_kwargs={"positions": [{"symbol": "SPY"}]},
+            expected_positions=[],
+        )
         tampered = dataclasses.replace(recon, position_differences=("not-a-dict",))
         r = render_paper_reconciliation_report(tampered)
         assert r.result == "BLOCKED"
         assert r.status is RS.BLOCKED_SCHEMA
 
     def test_non_dict_open_order_diff_blocks(self):
-        recon = _no_diff_reconciliation()
+        recon = _diff_reconciliation(
+            snap_kwargs={"open_orders": [{"id": "o1"}]},
+            expected_open_orders=[],
+        )
         tampered = dataclasses.replace(recon, open_order_differences=("not-a-dict",))
         r = render_paper_reconciliation_report(tampered)
         assert r.result == "BLOCKED"
@@ -477,6 +483,157 @@ class TestMalformedReconciliationPayloads:
             tampered = dataclasses.replace(recon, **tamper_kwargs)
             r = render_paper_reconciliation_report(tampered)
             assert r.result == "BLOCKED"
+
+
+class TestReconciliationStatusPayloadConsistency:
+    @staticmethod
+    def _zero_diff_recon() -> PaperSnapshotReconciliationResult:
+        return _no_diff_reconciliation()
+
+    @staticmethod
+    def _real_diff_recon(**overrides) -> PaperSnapshotReconciliationResult:
+        return _diff_reconciliation(**overrides)
+
+    def test_no_difference_with_nonzero_cash_blocks(self):
+        recon = self._zero_diff_recon()
+        tampered = dataclasses.replace(recon, cash_difference=50.0)
+        r = render_paper_reconciliation_report(tampered)
+        assert r.result == "BLOCKED"
+        assert r.status is RS.BLOCKED_RECONCILIATION
+
+    def test_no_difference_with_nonzero_buying_power_blocks(self):
+        recon = self._zero_diff_recon()
+        tampered = dataclasses.replace(recon, buying_power_difference=-100.0)
+        r = render_paper_reconciliation_report(tampered)
+        assert r.result == "BLOCKED"
+        assert r.status is RS.BLOCKED_RECONCILIATION
+
+    def test_no_difference_with_nonzero_equity_blocks(self):
+        recon = self._zero_diff_recon()
+        tampered = dataclasses.replace(recon, equity_difference=25.5)
+        r = render_paper_reconciliation_report(tampered)
+        assert r.result == "BLOCKED"
+        assert r.status is RS.BLOCKED_RECONCILIATION
+
+    def test_no_difference_with_nonempty_positions_blocks(self):
+        recon = self._zero_diff_recon()
+        tampered = dataclasses.replace(
+            recon,
+            position_differences=({"kind": "extra_in_snapshot", "key": "SPY", "actual": {"symbol": "SPY"}},),
+        )
+        r = render_paper_reconciliation_report(tampered)
+        assert r.result == "BLOCKED"
+        assert r.status is RS.BLOCKED_RECONCILIATION
+
+    def test_no_difference_with_nonempty_open_orders_blocks(self):
+        recon = self._zero_diff_recon()
+        tampered = dataclasses.replace(
+            recon,
+            open_order_differences=({"kind": "extra_in_snapshot", "key": "o1", "actual": {"id": "o1"}},),
+        )
+        r = render_paper_reconciliation_report(tampered)
+        assert r.result == "BLOCKED"
+        assert r.status is RS.BLOCKED_RECONCILIATION
+
+    def test_difference_found_with_all_zero_empty_payload_blocks(self):
+        recon = self._real_diff_recon(snap_kwargs={"cash": 200000.0})
+        tampered = dataclasses.replace(
+            recon,
+            cash_difference=0.0,
+            buying_power_difference=0.0,
+            equity_difference=0.0,
+            position_differences=(),
+            open_order_differences=(),
+        )
+        assert tampered.status is ReconS.RECONCILED_DIFFERENCE_FOUND
+        r = render_paper_reconciliation_report(tampered)
+        assert r.result == "BLOCKED"
+        assert r.status is RS.BLOCKED_RECONCILIATION
+
+    @pytest.mark.parametrize("tamper_kwargs", [
+        {"cash_difference": 1.0},
+        {"buying_power_difference": -1.0},
+        {"equity_difference": 0.01},
+    ])
+    def test_consistency_mismatch_deterministic(self, tamper_kwargs):
+        recon = self._zero_diff_recon()
+        tampered = dataclasses.replace(recon, **tamper_kwargs)
+        r1 = render_paper_reconciliation_report(tampered)
+        r2 = render_paper_reconciliation_report(tampered)
+        assert r1 == r2
+
+    def test_consistency_mismatch_no_report_content(self):
+        recon = self._zero_diff_recon()
+        tampered = dataclasses.replace(recon, cash_difference=50.0)
+        r = render_paper_reconciliation_report(tampered)
+        assert r.summary is None
+        assert r.financial_lines is None
+        assert r.position_lines is None
+        assert r.open_order_lines is None
+
+    def test_consistency_mismatch_safety_flags(self):
+        recon = self._zero_diff_recon()
+        tampered = dataclasses.replace(recon, cash_difference=50.0)
+        r = render_paper_reconciliation_report(tampered)
+        _assert_all_safety_flags_false(r)
+
+    def test_consistency_mismatch_criterion_in_checked(self):
+        recon = self._zero_diff_recon()
+        tampered = dataclasses.replace(recon, equity_difference=10.0)
+        r = render_paper_reconciliation_report(tampered)
+        assert "input.reconciliation_consistency" in r.criteria_checked
+        assert r.criteria_failed == ("input.reconciliation_consistency",)
+
+    @pytest.mark.parametrize("module_name,func_name", [
+        ("src.research.paper_order_planner", "create_paper_order_plan"),
+        ("src.research.paper_order_plan_validator", "validate_paper_order_plan"),
+        ("src.research.paper_order_safety_gate", "evaluate_paper_order_safety_gate"),
+        ("src.research.paper_order_lifecycle", "create_lifecycle_from_plan"),
+        ("src.research.paper_order_lifecycle", "apply_lifecycle_event"),
+        ("src.research.paper_dry_run_preview", "render_paper_dry_run_preview"),
+        ("src.research.paper_audit_ledger", "append_audit_entry"),
+    ])
+    def test_consistency_mismatch_does_not_invoke_chain(self, module_name, func_name):
+        from unittest.mock import patch
+        recon = self._zero_diff_recon()
+        tampered = dataclasses.replace(recon, cash_difference=50.0)
+        with patch(f"{module_name}.{func_name}") as mocked:
+            r = render_paper_reconciliation_report(tampered)
+            assert r.result == "BLOCKED"
+            assert mocked.call_count == 0
+
+    def test_difference_found_with_zero_payload_does_not_invoke_chain(self):
+        from unittest.mock import patch
+        recon = self._real_diff_recon(snap_kwargs={"cash": 200000.0})
+        tampered = dataclasses.replace(
+            recon,
+            cash_difference=0.0,
+            buying_power_difference=0.0,
+            equity_difference=0.0,
+            position_differences=(),
+            open_order_differences=(),
+        )
+        for target in [
+            "src.research.paper_order_planner.create_paper_order_plan",
+            "src.research.paper_order_plan_validator.validate_paper_order_plan",
+            "src.research.paper_order_safety_gate.evaluate_paper_order_safety_gate",
+            "src.research.paper_order_lifecycle.create_lifecycle_from_plan",
+            "src.research.paper_order_lifecycle.apply_lifecycle_event",
+            "src.research.paper_dry_run_preview.render_paper_dry_run_preview",
+            "src.research.paper_audit_ledger.append_audit_entry",
+        ]:
+            with patch(target) as mocked:
+                r = render_paper_reconciliation_report(tampered)
+                assert r.result == "BLOCKED"
+                assert mocked.call_count == 0
+
+    def test_consistency_mismatch_never_silently_correct(self):
+        recon = self._zero_diff_recon()
+        tampered = dataclasses.replace(recon, cash_difference=50.0)
+        r = render_paper_reconciliation_report(tampered)
+        assert r.status is RS.BLOCKED_RECONCILIATION
+        assert r.status is not RS.REPORT_READY_DIFFERENCE_FOUND
+        assert r.status is not RS.REPORT_READY_NO_DIFFERENCE
 
 
 class TestBlockedReconciliationRejected:
