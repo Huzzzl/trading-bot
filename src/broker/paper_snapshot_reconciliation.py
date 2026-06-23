@@ -180,7 +180,43 @@ def reconcile_paper_account_snapshot(
                 request_id=request_id,
             )
 
-    # 4. input.expected_financial_values
+    # 4. input.snapshot_payload
+    checked.append("input.snapshot_payload")
+    if not isinstance(request_id, str) or not request_id.strip():
+        return _blocked(
+            PaperSnapshotReconciliationStatus.BLOCKED_SNAPSHOT,
+            "snapshot_result.request_id is not a non-empty string",
+            checked,
+            "input.snapshot_payload",
+            request_id=request_id if isinstance(request_id, str) else None,
+        )
+    for field_name, value in (
+        ("cash", snapshot_result.cash),
+        ("buying_power", snapshot_result.buying_power),
+        ("equity", snapshot_result.equity),
+    ):
+        if not _is_finite_non_negative(value):
+            return _blocked(
+                PaperSnapshotReconciliationStatus.BLOCKED_SNAPSHOT,
+                f"snapshot_result.{field_name} is not a finite non-negative number",
+                checked,
+                "input.snapshot_payload",
+                request_id=request_id,
+            )
+    for field_name, value in (
+        ("positions", snapshot_result.positions),
+        ("open_orders", snapshot_result.open_orders),
+    ):
+        if not isinstance(value, (list, tuple)):
+            return _blocked(
+                PaperSnapshotReconciliationStatus.BLOCKED_SNAPSHOT,
+                f"snapshot_result.{field_name} is not a list or tuple",
+                checked,
+                "input.snapshot_payload",
+                request_id=request_id,
+            )
+
+    # 5. input.expected_financial_values
     checked.append("input.expected_financial_values")
     for name, value in (
         ("expected_cash", expected_cash),

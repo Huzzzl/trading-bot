@@ -495,6 +495,128 @@ class TestMalformedInputsRejected:
         assert r.status is RS.RECONCILED_NO_DIFFERENCE
 
 
+class TestMalformedSnapshotPayloadBlocked:
+    @pytest.mark.parametrize("field", ["cash", "buying_power", "equity"])
+    @pytest.mark.parametrize("bad_value", [
+        None, "100", True, False, float("nan"),
+        float("inf"), float("-inf"), -1.0, -0.01,
+    ])
+    def test_malformed_financial_field_blocks(self, field, bad_value):
+        good = _pass_snapshot()
+        tampered = dataclasses.replace(good, **{field: bad_value})
+        r = _reconcile(tampered)
+        assert r.result == "BLOCKED"
+        assert r.status is RS.BLOCKED_SNAPSHOT
+
+    @pytest.mark.parametrize("field", ["cash", "buying_power", "equity"])
+    @pytest.mark.parametrize("bad_value", [
+        None, "100", True, float("nan"), float("inf"), -1.0,
+    ])
+    def test_malformed_financial_field_safety_flags(self, field, bad_value):
+        good = _pass_snapshot()
+        tampered = dataclasses.replace(good, **{field: bad_value})
+        r = _reconcile(tampered)
+        _assert_all_safety_flags_false(r)
+
+    @pytest.mark.parametrize("field", ["positions", "open_orders"])
+    @pytest.mark.parametrize("bad_value", [
+        None, "not-a-list", 42, {"key": "value"}, 3.14, True,
+    ])
+    def test_malformed_collection_field_blocks(self, field, bad_value):
+        good = _pass_snapshot()
+        tampered = dataclasses.replace(good, **{field: bad_value})
+        r = _reconcile(tampered)
+        assert r.result == "BLOCKED"
+        assert r.status is RS.BLOCKED_SNAPSHOT
+
+    @pytest.mark.parametrize("field", ["positions", "open_orders"])
+    @pytest.mark.parametrize("bad_value", [None, "not-a-list", 42])
+    def test_malformed_collection_field_safety_flags(self, field, bad_value):
+        good = _pass_snapshot()
+        tampered = dataclasses.replace(good, **{field: bad_value})
+        r = _reconcile(tampered)
+        _assert_all_safety_flags_false(r)
+
+    @pytest.mark.parametrize("bad_value", [None, "", "   ", "\t\n"])
+    def test_empty_or_none_request_id_blocks(self, bad_value):
+        good = _pass_snapshot()
+        tampered = dataclasses.replace(good, request_id=bad_value)
+        r = _reconcile(tampered)
+        assert r.result == "BLOCKED"
+        assert r.status is RS.BLOCKED_SNAPSHOT
+
+    @pytest.mark.parametrize("bad_value", [None, 42, 3.14, True, {"id": "x"}])
+    def test_non_string_request_id_blocks(self, bad_value):
+        good = _pass_snapshot()
+        tampered = dataclasses.replace(good, request_id=bad_value)
+        r = _reconcile(tampered)
+        assert r.result == "BLOCKED"
+        assert r.status is RS.BLOCKED_SNAPSHOT
+
+    def test_request_id_block_safety_flags(self):
+        good = _pass_snapshot()
+        tampered = dataclasses.replace(good, request_id="")
+        r = _reconcile(tampered)
+        _assert_all_safety_flags_false(r)
+
+    def test_malformed_snapshot_never_raises(self):
+        good = _pass_snapshot()
+        for tamper_kwargs in [
+            {"cash": None},
+            {"buying_power": float("nan")},
+            {"equity": float("inf")},
+            {"positions": "x"},
+            {"open_orders": None},
+            {"request_id": ""},
+            {"cash": -1.0},
+            {"cash": True},
+        ]:
+            tampered = dataclasses.replace(good, **tamper_kwargs)
+            # Must not raise — every malformed value returns BLOCKED.
+            r = _reconcile(tampered)
+            assert r.result == "BLOCKED"
+            assert r.status is RS.BLOCKED_SNAPSHOT
+
+    def test_malformed_snapshot_blocked_is_deterministic(self):
+        good = _pass_snapshot()
+        tampered = dataclasses.replace(good, cash=None)
+        r1 = _reconcile(tampered)
+        r2 = _reconcile(tampered)
+        assert r1 == r2
+
+    def test_malformed_snapshot_does_not_invoke_order_chain(self):
+        from unittest.mock import patch
+        chain_targets = [
+            "src.research.paper_order_planner.create_paper_order_plan",
+            "src.research.paper_order_plan_validator.validate_paper_order_plan",
+            "src.research.paper_order_safety_gate.evaluate_paper_order_safety_gate",
+            "src.research.paper_order_lifecycle.create_lifecycle_from_plan",
+            "src.research.paper_order_lifecycle.apply_lifecycle_event",
+            "src.research.paper_dry_run_preview.render_paper_dry_run_preview",
+            "src.research.paper_audit_ledger.append_audit_entry",
+        ]
+        good = _pass_snapshot()
+        tampered = dataclasses.replace(good, cash=None)
+        for target in chain_targets:
+            with patch(target) as mocked:
+                r = _reconcile(tampered)
+                assert r.result == "BLOCKED"
+                assert mocked.call_count == 0
+
+    def test_malformed_snapshot_request_id_preserved_when_string(self):
+        good = _pass_snapshot()
+        tampered = dataclasses.replace(good, cash=None)
+        r = _reconcile(tampered)
+        assert r.request_id == _REQUEST_ID
+
+    def test_malformed_snapshot_payload_criterion_in_checked(self):
+        good = _pass_snapshot()
+        tampered = dataclasses.replace(good, cash=None)
+        r = _reconcile(tampered)
+        assert "input.snapshot_payload" in r.criteria_checked
+        assert r.criteria_failed == ("input.snapshot_payload",)
+
+
 class TestDeterministicOutput:
     def test_no_difference_deterministic(self):
         r1 = _reconcile()
