@@ -2514,6 +2514,60 @@ trading remains blocked.
 
 Full suite: 7,609 passed.
 
+**PR S48 — Pure offline reconciliation report renderer — implemented**
+`src/broker/paper_reconciliation_report.py` created. Fully offline; no
+broker/API/credential/env/network/order/live/paper access. No file writes,
+no JSON export to disk, no logging side effects, no ledger append.
+No live/paper trading approved.
+
+`PaperReconciliationReportStatus` (str, Enum, 6 members): NOT_RENDERED,
+REPORT_READY_NO_DIFFERENCE, REPORT_READY_DIFFERENCE_FOUND,
+BLOCKED_RECONCILIATION, BLOCKED_SCHEMA, BLOCKED_SAFETY.
+
+`PaperReconciliationReportResult` frozen dataclass (15 fields): result,
+status, blocker, request_id, summary, financial_lines, position_lines,
+open_order_lines, criteria_checked, criteria_failed, and 5 safety flags
+(always False).
+
+`render_paper_reconciliation_report(reconciliation_result)` pure in-memory
+function with 9 deterministic criteria: accepts only PASS reconciliation
+results in RECONCILED_NO_DIFFERENCE or RECONCILED_DIFFERENCE_FOUND;
+fail-closed on non-recon type/non-PASS recon/safety flag set/malformed
+internal payload (request_id non-empty string, financial diffs finite
+numbers, difference collections must be tuples, every diff entry must
+be a dict). Renders financial lines for cash_difference/buying_power_difference/
+equity_difference with signed two-decimal formatting; renders position
+and open_order lines sorted deterministically; summary explicitly states
+"differences are observations only and are not order signals" when a
+difference is found.
+
+`tests/test_paper_reconciliation_report.py` added: 174 tests across
+17 classes covering no-difference report, financial/position/open-order
+difference lines, multiple differences, deterministic sorted ordering,
+immutable tuples (frozen result, tuples reject append), malformed
+reconciliation payloads (None/empty/invalid request_id; NaN/inf/string/
+bool/None financial diffs; invalid collection types; non-dict diff
+entries), blocked reconciliation rejection → BLOCKED_RECONCILIATION
+with no report content, tampered safety flags rejection
+→ BLOCKED_SAFETY, input immutability, raw object not retained
+(no PaperSnapshotReconciliationResult field; no callable-action method),
+all five safety flags always False on every PASS/BLOCKED result
+(parametrised), no order-chain function invoked under no-difference,
+difference-found, or BLOCKED (21 mock-patched cases across 7 chain
+functions × 3 outcomes), no approval/plan/gate/lifecycle/preview/ledger/
+submit/execution/order-action/account_id/broker_payload/current_state
+field names, status value contains no APPROVED/SUBMIT/EXECUTE/LIFECYCLE/
+PLAN/ORDER substrings, 24-pattern forbidden source scan (includes
+logging, json.dump, current_state), src imports limited to
+paper_snapshot_reconciliation, no order-action function on module.
+
+Report readiness is observation only. Report readiness is not approval.
+Difference found is not an order signal. Report rendering does not
+advance lifecycle. Paper trading remains not approved. Live trading
+remains blocked.
+
+Full suite: 7,861 passed.
+
 ### Phase C — Paper trading execution
 
 - Paper account executor: applies approved signal on Alpaca paper account

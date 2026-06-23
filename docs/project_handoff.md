@@ -36,10 +36,10 @@ Rules:
 |---|---|
 | Repository | `Huzzzl/trading-bot` |
 | Current phase | Pure offline / paper-preparation |
-| Latest completed milestone | S46 |
-| Latest merged PR | #250 |
-| Current main SHA | `6f98f46` |
-| Full-suite test count | 7,609 passed |
+| Latest completed milestone | S47 |
+| Latest merged PR | #251 |
+| Current main SHA | `fc3d465` |
+| Full-suite test count | 7,861 passed |
 | Paper trading | **Not approved** |
 | Live trading | **Blocked** |
 | Broker connection | Not implemented |
@@ -72,6 +72,7 @@ The following components are implemented and tested:
 - S45 pure offline paper account snapshot reader
 - S46 paper account snapshot isolation integration tests (tests-only)
 - S47 pure offline paper snapshot reconciliation
+- S48 pure offline reconciliation report renderer
 
 ---
 
@@ -240,17 +241,22 @@ separate design and review sequence:
   order signal. Reconciliation does not approve paper trading and
   does not advance lifecycle. No planner/gate/lifecycle/preview/ledger
   calls. No current_state wiring. No order or broker payload creation.
+- S48 paper reconciliation report renderer converts an already-produced
+  PaperSnapshotReconciliationResult into a deterministic, read-only
+  human review report. Pure offline in-memory function. Report
+  readiness is observation only. Difference found is not an order
+  signal. Report rendering does not advance lifecycle. No file writes,
+  no JSON export to disk, no logging side effects, no ledger append.
 
 ---
 
 ## Current milestone
 
-S46 complete (PR #250 merged). S47 in progress.
+S47 complete (PR #251 merged). S48 in progress.
 
-- S46 added 172 tests-only integration tests proving the S43-S45
-  observation boundary stays isolated from the order-preparation chain
-- S47 implements pure offline paper snapshot reconciliation with
-  152 tests
+- S47 implemented pure offline paper snapshot reconciliation with
+  230 tests
+- S48 adds pure offline reconciliation report renderer with 174 tests
 - No broker connection implemented
 - No credentials loaded
 - No environment variables read
@@ -263,11 +269,11 @@ S46 complete (PR #250 merged). S47 in progress.
 
 ## Next phase
 
-Current task: S47 pure offline paper snapshot reconciliation.
+Current task: S48 pure offline reconciliation report renderer.
 
-After S47:
+After S48:
 
-- S48+: Implementation only after design review and explicit approval
+- S49+: Implementation only after design review and explicit approval
 
 Explicit constraints:
 
@@ -289,7 +295,8 @@ Explicit constraints:
 | S44 | Fake credential provider and fake paper adapter integration tests -- **done** |
 | S45 | Pure offline paper account snapshot reader -- **done** |
 | S46 | Paper account snapshot isolation integration tests (tests-only) -- **done** |
-| S47 | Pure offline paper snapshot reconciliation -- **in progress** |
+| S47 | Pure offline paper snapshot reconciliation -- **done** |
+| S48 | Pure offline reconciliation report renderer -- **in progress** |
 | Later | Implementation only after design review and explicit approval |
 
 ---
