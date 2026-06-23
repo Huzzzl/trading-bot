@@ -85,7 +85,10 @@ def _open_order():
 class TestBullishNoPositionBuys:
     def test_buy_submitted_once(self):
         a = _mock_adapter()
-        r = run_paper_trading_cycle(adapter=a, bars=_bars_bullish(), signal_config=_config())
+        r = run_paper_trading_cycle(
+            adapter=a, bars=_bars_bullish(), signal_config=_config(),
+            submit_enabled=True,
+        )
         assert r["result"] == "PASS"
         assert r["action"] == "buy_submitted"
         assert r["signal"] == "BUY"
@@ -94,14 +97,18 @@ class TestBullishNoPositionBuys:
     def test_buy_order_returned(self):
         a = _mock_adapter()
         a.submit_market_order.return_value = {"id": "ord-1", "symbol": "SPY", "side": "buy"}
-        r = run_paper_trading_cycle(adapter=a, bars=_bars_bullish(), signal_config=_config())
+        r = run_paper_trading_cycle(
+            adapter=a, bars=_bars_bullish(), signal_config=_config(),
+            submit_enabled=True,
+        )
         assert r["order"] == {"id": "ord-1", "symbol": "SPY", "side": "buy"}
 
     def test_buy_qty_calculation_floor(self):
         a = _mock_adapter()
-        # equity=100000, fraction=0.10 -> max_notional=10000
-        # latest_close=109 -> floor(10000/109) = 91
-        run_paper_trading_cycle(adapter=a, bars=_bars_bullish(), signal_config=_config())
+        run_paper_trading_cycle(
+            adapter=a, bars=_bars_bullish(), signal_config=_config(),
+            submit_enabled=True,
+        )
         symbol, qty, side = a.submit_market_order.call_args.args[:3]
         assert symbol == "SPY"
         assert side == "buy"
@@ -111,17 +118,16 @@ class TestBullishNoPositionBuys:
         a = _mock_adapter()
         run_paper_trading_cycle(
             adapter=a, bars=_bars_bullish(), signal_config=_config(),
-            client_order_id="cid-42",
+            client_order_id="cid-42", submit_enabled=True,
         )
         kwargs = a.submit_market_order.call_args.kwargs
         assert kwargs.get("client_order_id") == "cid-42"
 
     def test_buy_uses_smaller_fraction(self):
         a = _mock_adapter()
-        # equity=100000 * 0.05 = 5000 / 109 = 45
         run_paper_trading_cycle(
             adapter=a, bars=_bars_bullish(), signal_config=_config(),
-            max_position_fraction=0.05,
+            max_position_fraction=0.05, submit_enabled=True,
         )
         symbol, qty, _ = a.submit_market_order.call_args.args[:3]
         assert qty == 45
@@ -131,7 +137,10 @@ class TestBearishLongPositionSells:
     def test_sell_full_held_quantity(self):
         a = _mock_adapter(positions=[_position(qty=7)])
         a.submit_market_order.return_value = {"id": "s1", "symbol": "SPY", "side": "sell"}
-        r = run_paper_trading_cycle(adapter=a, bars=_bars_bearish(), signal_config=_config())
+        r = run_paper_trading_cycle(
+            adapter=a, bars=_bars_bearish(), signal_config=_config(),
+            submit_enabled=True,
+        )
         assert r["result"] == "PASS"
         assert r["action"] == "sell_submitted"
         assert r["signal"] == "SELL"
@@ -395,8 +404,10 @@ class TestStrictBrokerResponseValidation:
 
     def test_valid_non_spy_position_ignored_for_spy_state(self):
         a = _mock_adapter(positions=[_position(symbol="QQQ", qty=100)])
-        r = run_paper_trading_cycle(adapter=a, bars=_bars_bullish(), signal_config=_config())
-        # Bullish + no SPY position => BUY proceeds
+        r = run_paper_trading_cycle(
+            adapter=a, bars=_bars_bullish(), signal_config=_config(),
+            submit_enabled=True,
+        )
         assert r["result"] == "PASS"
         assert r["action"] == "buy_submitted"
         assert a.submit_market_order.call_count == 1
@@ -405,7 +416,10 @@ class TestStrictBrokerResponseValidation:
         a = _mock_adapter(open_orders=[
             {"id": "o-qqq", "symbol": "QQQ", "status": "new", "side": "buy"},
         ])
-        r = run_paper_trading_cycle(adapter=a, bars=_bars_bullish(), signal_config=_config())
+        r = run_paper_trading_cycle(
+            adapter=a, bars=_bars_bullish(), signal_config=_config(),
+            submit_enabled=True,
+        )
         assert r["result"] == "PASS"
         assert r["action"] == "buy_submitted"
         assert a.submit_market_order.call_count == 1
@@ -470,7 +484,10 @@ class TestAdapterExceptionReturnsError:
     def test_submit_exception(self):
         a = _mock_adapter()
         a.submit_market_order.side_effect = AlpacaPaperAdapterError("rejected")
-        r = run_paper_trading_cycle(adapter=a, bars=_bars_bullish(), signal_config=_config())
+        r = run_paper_trading_cycle(
+            adapter=a, bars=_bars_bullish(), signal_config=_config(),
+            submit_enabled=True,
+        )
         assert r["result"] == "ERROR"
         assert "buy submission" in r["blocker"]
 
@@ -491,12 +508,18 @@ class TestAdapterExceptionReturnsError:
 class TestExactlyOneSubmitCall:
     def test_buy_one_call(self):
         a = _mock_adapter()
-        run_paper_trading_cycle(adapter=a, bars=_bars_bullish(), signal_config=_config())
+        run_paper_trading_cycle(
+            adapter=a, bars=_bars_bullish(), signal_config=_config(),
+            submit_enabled=True,
+        )
         assert a.submit_market_order.call_count == 1
 
     def test_sell_one_call(self):
         a = _mock_adapter(positions=[_position(qty=4)])
-        run_paper_trading_cycle(adapter=a, bars=_bars_bearish(), signal_config=_config())
+        run_paper_trading_cycle(
+            adapter=a, bars=_bars_bearish(), signal_config=_config(),
+            submit_enabled=True,
+        )
         assert a.submit_market_order.call_count == 1
 
     def test_no_call_on_hold(self):
@@ -514,7 +537,10 @@ class TestNoRetry:
     def test_submit_failure_no_retry(self):
         a = _mock_adapter()
         a.submit_market_order.side_effect = AlpacaPaperAdapterError("transient")
-        run_paper_trading_cycle(adapter=a, bars=_bars_bullish(), signal_config=_config())
+        run_paper_trading_cycle(
+            adapter=a, bars=_bars_bullish(), signal_config=_config(),
+            submit_enabled=True,
+        )
         assert a.submit_market_order.call_count == 1
 
 
@@ -532,6 +558,80 @@ class TestInputImmutability:
         a = _mock_adapter()
         run_paper_trading_cycle(adapter=a, bars=_bars_bullish(), signal_config=cfg)
         assert cfg == original
+
+
+class TestDryRunDefault:
+    def test_buy_dry_run_returns_buy_planned(self):
+        a = _mock_adapter()
+        r = run_paper_trading_cycle(
+            adapter=a, bars=_bars_bullish(), signal_config=_config(),
+        )
+        assert r["result"] == "PASS"
+        assert r["action"] == "buy_planned"
+        assert r["order_plan"] == {
+            "symbol": "SPY", "qty": 91, "side": "buy", "type": "market",
+        }
+        assert r["order"] is None
+        assert a.submit_market_order.call_count == 0
+
+    def test_sell_dry_run_returns_sell_planned(self):
+        a = _mock_adapter(positions=[_position(qty=7)])
+        r = run_paper_trading_cycle(
+            adapter=a, bars=_bars_bearish(), signal_config=_config(),
+        )
+        assert r["result"] == "PASS"
+        assert r["action"] == "sell_planned"
+        assert r["order_plan"] == {
+            "symbol": "SPY", "qty": 7.0, "side": "sell", "type": "market",
+        }
+        assert r["order"] is None
+        assert a.submit_market_order.call_count == 0
+
+    def test_hold_has_no_plan(self):
+        a = _mock_adapter()
+        r = run_paper_trading_cycle(
+            adapter=a, bars=_bars_flat(), signal_config=_config(),
+        )
+        assert r["action"] == "none"
+        assert r["order_plan"] is None
+        assert r["order"] is None
+
+    def test_block_has_no_plan(self):
+        a = _mock_adapter(clock={"timestamp": "t", "is_open": False})
+        r = run_paper_trading_cycle(
+            adapter=a, bars=_bars_bullish(), signal_config=_config(),
+        )
+        assert r["action"] == "none"
+        assert r["order_plan"] is None
+
+    def test_default_submit_enabled_false(self):
+        # No explicit submit_enabled — default behavior must not submit.
+        a = _mock_adapter()
+        r = run_paper_trading_cycle(
+            adapter=a, bars=_bars_bullish(), signal_config=_config(),
+        )
+        assert r["action"] == "buy_planned"
+        assert a.submit_market_order.call_count == 0
+
+    def test_explicit_submit_enabled_false(self):
+        a = _mock_adapter()
+        r = run_paper_trading_cycle(
+            adapter=a, bars=_bars_bullish(), signal_config=_config(),
+            submit_enabled=False,
+        )
+        assert r["action"] == "buy_planned"
+        assert a.submit_market_order.call_count == 0
+
+    def test_submit_enabled_true_returns_buy_submitted(self):
+        a = _mock_adapter()
+        r = run_paper_trading_cycle(
+            adapter=a, bars=_bars_bullish(), signal_config=_config(),
+            submit_enabled=True,
+        )
+        assert r["action"] == "buy_submitted"
+        assert r["order_plan"] is not None  # still present on submit
+        assert r["order"] is not None
+        assert a.submit_market_order.call_count == 1
 
 
 class TestNoNetworkInModule:
