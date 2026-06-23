@@ -75,22 +75,36 @@ def _signal_dict(signal_result, action: str, order: dict | None, result: str) ->
     }
 
 
-def _find_spy_position(positions: list[dict]) -> dict | None:
-    if not isinstance(positions, list):
-        return None
-    spy = [p for p in positions if isinstance(p, dict) and p.get("symbol") == _SYMBOL]
+def _find_spy_position(positions: list) -> tuple[dict | None, str | None]:
+    """Return (spy_position, blocker_reason).
+
+    Strictly rejects any non-dict entry in the positions list.
+    """
+    for p in positions:
+        if not isinstance(p, dict):
+            return None, "malformed position entry: not a dict"
+    spy = [p for p in positions if p.get("symbol") == _SYMBOL]
     if not spy:
-        return None
-    return spy[0]
+        return None, None
+    return spy[0], None
 
 
-def _find_spy_open_order(open_orders: list[dict]) -> bool:
-    if not isinstance(open_orders, list):
-        return True  # defensive: treat malformed as "open order present"
+def _check_open_orders(open_orders: list) -> tuple[bool, str | None]:
+    """Return (has_spy_open_order, blocker_reason).
+
+    Strictly rejects non-dict entries and entries with missing/non-string
+    symbol field.
+    """
+    has_spy = False
     for o in open_orders:
-        if isinstance(o, dict) and o.get("symbol") == _SYMBOL:
-            return True
-    return False
+        if not isinstance(o, dict):
+            return False, "malformed open order entry: not a dict"
+        sym = o.get("symbol")
+        if not isinstance(sym, str) or not sym.strip():
+            return False, "open order entry has missing/invalid symbol"
+        if sym == _SYMBOL:
+            has_spy = True
+    return has_spy, None
 
 
 def run_paper_trading_cycle(
@@ -116,7 +130,10 @@ def run_paper_trading_cycle(
         return _error(f"clock read failed: {exc}")
     if not isinstance(clock, dict) or "is_open" not in clock:
         return _blocked("malformed clock response")
-    is_open = bool(clock["is_open"])
+    is_open_raw = clock["is_open"]
+    if not isinstance(is_open_raw, bool):
+        return _blocked("clock is_open must be exactly bool")
+    is_open = is_open_raw
     market_session = "open" if is_open else "closed"
 
     # 2. account
@@ -141,7 +158,9 @@ def run_paper_trading_cycle(
     if not isinstance(positions, list):
         return _blocked("malformed positions response")
 
-    spy_position = _find_spy_position(positions)
+    spy_position, pos_block = _find_spy_position(positions)
+    if pos_block is not None:
+        return _blocked(pos_block)
     has_position = False
     held_qty: float | None = None
     if spy_position is not None:
@@ -161,7 +180,9 @@ def run_paper_trading_cycle(
         return _error(f"open orders read failed: {exc}")
     if not isinstance(open_orders, list):
         return _blocked("malformed open orders response")
-    has_open_order = _find_spy_open_order(open_orders)
+    has_open_order, order_block = _check_open_orders(open_orders)
+    if order_block is not None:
+        return _blocked(order_block)
 
     # 5/6. signal
     position_state = PositionState(has_position=has_position, symbol=_SYMBOL if has_position else None)

@@ -66,9 +66,9 @@ def _mock_adapter(*, clock=None, account=None, positions=None, open_orders=None)
     return a
 
 
-def _position(qty=10, side="long"):
+def _position(qty=10, side="long", symbol="SPY"):
     return {
-        "symbol": "SPY",
+        "symbol": symbol,
         "qty": qty,
         "side": side,
         "avg_entry_price": 100.0,
@@ -290,6 +290,139 @@ class TestMalformedBrokerResponses:
         a = _mock_adapter(positions=[_position(qty=bad_qty)])
         r = run_paper_trading_cycle(adapter=a, bars=_bars_bearish(), signal_config=_config())
         assert r["result"] == "BLOCKED"
+
+
+class TestStrictBrokerResponseValidation:
+    @pytest.mark.parametrize("bad_is_open", [
+        "false", "true", "True", "False",
+        0, 1, -1, 0.0, 1.0,
+        None, [], {}, object(),
+    ])
+    def test_non_bool_is_open_blocks(self, bad_is_open):
+        a = _mock_adapter(clock={"timestamp": "t", "is_open": bad_is_open})
+        r = run_paper_trading_cycle(adapter=a, bars=_bars_bullish(), signal_config=_config())
+        assert r["result"] == "BLOCKED"
+        assert "is_open" in r["blocker"]
+        assert a.submit_market_order.call_count == 0
+
+    def test_true_bool_is_open_accepted(self):
+        a = _mock_adapter(clock={"timestamp": "t", "is_open": True})
+        r = run_paper_trading_cycle(adapter=a, bars=_bars_bullish(), signal_config=_config())
+        assert r["result"] == "PASS"
+
+    def test_false_bool_is_open_accepted_as_closed(self):
+        a = _mock_adapter(clock={"timestamp": "t", "is_open": False})
+        r = run_paper_trading_cycle(adapter=a, bars=_bars_bullish(), signal_config=_config())
+        # Market closed -> signal_engine returns BLOCK
+        assert r["result"] == "PASS"
+        assert r["signal"] == "BLOCK"
+        assert a.submit_market_order.call_count == 0
+
+    @pytest.mark.parametrize("bad_entry", [
+        "not-a-dict", 42, None, ["x"], object(), True,
+    ])
+    def test_non_dict_position_entry_blocks(self, bad_entry):
+        a = _mock_adapter(positions=[bad_entry])
+        r = run_paper_trading_cycle(adapter=a, bars=_bars_bullish(), signal_config=_config())
+        assert r["result"] == "BLOCKED"
+        assert "position entry" in r["blocker"]
+        assert a.submit_market_order.call_count == 0
+
+    @pytest.mark.parametrize("bad_entry", [
+        "not-a-dict", 42, None, ["x"], object(),
+    ])
+    def test_non_dict_open_order_entry_blocks(self, bad_entry):
+        a = _mock_adapter(open_orders=[bad_entry])
+        r = run_paper_trading_cycle(adapter=a, bars=_bars_bullish(), signal_config=_config())
+        assert r["result"] == "BLOCKED"
+        assert "open order entry" in r["blocker"]
+        assert a.submit_market_order.call_count == 0
+
+    @pytest.mark.parametrize("bad_sym", [None, "", "   ", 42, ["SPY"], True])
+    def test_open_order_missing_or_invalid_symbol_blocks(self, bad_sym):
+        a = _mock_adapter(open_orders=[{"id": "o1", "symbol": bad_sym, "status": "new"}])
+        r = run_paper_trading_cycle(adapter=a, bars=_bars_bullish(), signal_config=_config())
+        assert r["result"] == "BLOCKED"
+        assert "symbol" in r["blocker"]
+        assert a.submit_market_order.call_count == 0
+
+    def test_open_order_missing_symbol_key_blocks(self):
+        a = _mock_adapter(open_orders=[{"id": "o1", "status": "new"}])
+        r = run_paper_trading_cycle(adapter=a, bars=_bars_bullish(), signal_config=_config())
+        assert r["result"] == "BLOCKED"
+        assert a.submit_market_order.call_count == 0
+
+    def test_mixed_valid_and_non_dict_position_blocks(self):
+        # Even when a valid non-SPY dict is present, a non-dict entry still blocks.
+        a = _mock_adapter(positions=[_position(symbol="QQQ", qty=5), "garbage"])
+        r = run_paper_trading_cycle(adapter=a, bars=_bars_bullish(), signal_config=_config())
+        assert r["result"] == "BLOCKED"
+        assert a.submit_market_order.call_count == 0
+
+    def test_mixed_valid_and_non_dict_open_order_blocks(self):
+        a = _mock_adapter(open_orders=[
+            {"id": "o-qqq", "symbol": "QQQ", "status": "new"},
+            "garbage",
+        ])
+        r = run_paper_trading_cycle(adapter=a, bars=_bars_bullish(), signal_config=_config())
+        assert r["result"] == "BLOCKED"
+        assert a.submit_market_order.call_count == 0
+
+    def test_malformed_state_does_not_evaluate_signal(self):
+        from unittest.mock import patch
+        a = _mock_adapter(positions=["garbage"])
+        with patch("src.runtime.paper_trading_cycle.evaluate_signal") as m:
+            r = run_paper_trading_cycle(adapter=a, bars=_bars_bullish(), signal_config=_config())
+            assert m.call_count == 0
+        assert r["result"] == "BLOCKED"
+        assert a.submit_market_order.call_count == 0
+
+    def test_malformed_is_open_does_not_evaluate_signal(self):
+        from unittest.mock import patch
+        a = _mock_adapter(clock={"timestamp": "t", "is_open": "true"})
+        with patch("src.runtime.paper_trading_cycle.evaluate_signal") as m:
+            r = run_paper_trading_cycle(adapter=a, bars=_bars_bullish(), signal_config=_config())
+            assert m.call_count == 0
+        assert r["result"] == "BLOCKED"
+
+    def test_malformed_open_orders_does_not_evaluate_signal(self):
+        from unittest.mock import patch
+        a = _mock_adapter(open_orders=["garbage"])
+        with patch("src.runtime.paper_trading_cycle.evaluate_signal") as m:
+            r = run_paper_trading_cycle(adapter=a, bars=_bars_bullish(), signal_config=_config())
+            assert m.call_count == 0
+        assert r["result"] == "BLOCKED"
+
+    def test_valid_non_spy_position_ignored_for_spy_state(self):
+        a = _mock_adapter(positions=[_position(symbol="QQQ", qty=100)])
+        r = run_paper_trading_cycle(adapter=a, bars=_bars_bullish(), signal_config=_config())
+        # Bullish + no SPY position => BUY proceeds
+        assert r["result"] == "PASS"
+        assert r["action"] == "buy_submitted"
+        assert a.submit_market_order.call_count == 1
+
+    def test_valid_non_spy_open_order_ignored_for_spy_state(self):
+        a = _mock_adapter(open_orders=[
+            {"id": "o-qqq", "symbol": "QQQ", "status": "new", "side": "buy"},
+        ])
+        r = run_paper_trading_cycle(adapter=a, bars=_bars_bullish(), signal_config=_config())
+        assert r["result"] == "PASS"
+        assert r["action"] == "buy_submitted"
+        assert a.submit_market_order.call_count == 1
+
+    def test_malformed_spy_position_dict_missing_side_blocks(self):
+        a = _mock_adapter(positions=[{"symbol": "SPY", "qty": 5}])
+        r = run_paper_trading_cycle(adapter=a, bars=_bars_bearish(), signal_config=_config())
+        assert r["result"] == "BLOCKED"
+        assert "side" in r["blocker"]
+        assert a.submit_market_order.call_count == 0
+
+    def test_malformed_spy_position_dict_missing_qty_blocks(self):
+        a = _mock_adapter(positions=[{"symbol": "SPY", "side": "long"}])
+        r = run_paper_trading_cycle(adapter=a, bars=_bars_bearish(), signal_config=_config())
+        assert r["result"] == "BLOCKED"
+        assert "qty" in r["blocker"]
+        assert a.submit_market_order.call_count == 0
 
 
 class TestAccountNotActiveBlocks:
