@@ -190,9 +190,16 @@ class AlpacaPaperAdapter:
         client_order_id: str | None = None,
     ) -> dict[str, Any]:
         self._validate_order(symbol=symbol, qty=qty, side=side)
+        if side == "sell":
+            self._ensure_sufficient_long_position(symbol=symbol, qty=qty)
         try:
             from alpaca.trading.requests import MarketOrderRequest
             from alpaca.trading.enums import OrderSide, TimeInForce
+        except ImportError as exc:
+            raise AlpacaPaperAdapterError(
+                f"submit_market_order failed: {exc}"
+            ) from exc
+        try:
             request = MarketOrderRequest(
                 symbol=symbol,
                 qty=qty,
@@ -200,29 +207,51 @@ class AlpacaPaperAdapter:
                 time_in_force=TimeInForce.DAY,
                 client_order_id=client_order_id,
             )
-            try:
-                raw = self._client.submit_order(order_data=request)
-            except TypeError:
-                raw = self._client.submit_order(request)
-        except ImportError:
-            try:
-                raw = self._client.submit_order(
-                    symbol=symbol,
-                    qty=qty,
-                    side=side,
-                    type="market",
-                    time_in_force="day",
-                    client_order_id=client_order_id,
-                )
-            except Exception as exc:
-                raise AlpacaPaperAdapterError(
-                    f"submit_market_order failed: {exc}"
-                ) from exc
+            raw = self._client.submit_order(order_data=request)
         except Exception as exc:
             raise AlpacaPaperAdapterError(
                 f"submit_market_order failed: {exc}"
             ) from exc
         return self._normalize_order(raw)
+
+    def _ensure_sufficient_long_position(self, *, symbol: str, qty: float) -> None:
+        try:
+            positions = self._client.get_all_positions() or []
+        except Exception as exc:
+            raise AlpacaPaperAdapterError(
+                f"sell rejected: cannot read positions: {exc}"
+            ) from exc
+        held: float | None = None
+        for raw in positions:
+            raw_symbol = _to_str(_get(raw, "symbol"))
+            if raw_symbol != symbol:
+                continue
+            raw_side = _to_str(_get(raw, "side"))
+            if raw_side is None or raw_side.lower() != "long":
+                raise AlpacaPaperAdapterError(
+                    f"sell rejected: {symbol} position side is not long"
+                )
+            raw_qty = _to_float(_get(raw, "qty"))
+            if (
+                raw_qty is None
+                or isinstance(raw_qty, bool)
+                or raw_qty != raw_qty
+                or raw_qty in (float("inf"), float("-inf"))
+                or raw_qty <= 0
+            ):
+                raise AlpacaPaperAdapterError(
+                    f"sell rejected: {symbol} position qty is malformed"
+                )
+            held = raw_qty
+            break
+        if held is None:
+            raise AlpacaPaperAdapterError(
+                f"sell rejected: no {symbol} position to sell"
+            )
+        if qty > held:
+            raise AlpacaPaperAdapterError(
+                f"sell rejected: requested qty exceeds held {symbol} qty"
+            )
 
     def cancel_order(self, order_id: str) -> dict[str, Any]:
         if not isinstance(order_id, str) or not order_id.strip():

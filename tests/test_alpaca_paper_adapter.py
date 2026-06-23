@@ -281,6 +281,7 @@ class TestSubmitMarketOrder:
 
     def test_sell_returns_normalized_order(self):
         client = MagicMock()
+        client.get_all_positions.return_value = [_position(qty="10")]
         client.submit_order.return_value = _order(side="sell", id="ord-2")
         a = _adapter(client)
         res = a.submit_market_order("SPY", 1, "sell")
@@ -335,6 +336,141 @@ class TestSubmitMarketOrder:
             a.submit_market_order("SPY", 1, "buy")
         # Exactly one submission attempt — no automatic retry.
         assert client.submit_order.call_count == 1
+
+
+class TestSubmitOrderSingleCall:
+    def test_typeerror_performs_exactly_one_call(self):
+        client = MagicMock()
+        client.submit_order.side_effect = TypeError(
+            "submit_order() got unexpected keyword argument 'order_data'"
+        )
+        a = _adapter(client)
+        with pytest.raises(AlpacaPaperAdapterError):
+            a.submit_market_order("SPY", 1, "buy")
+        assert client.submit_order.call_count == 1
+
+    def test_uses_order_data_keyword(self):
+        client = MagicMock()
+        client.submit_order.return_value = _order()
+        a = _adapter(client)
+        a.submit_market_order("SPY", 1, "buy")
+        _, kwargs = client.submit_order.call_args
+        assert "order_data" in kwargs
+        assert kwargs["order_data"] is not None
+
+    def test_no_positional_fallback_after_typeerror(self):
+        client = MagicMock()
+        client.submit_order.side_effect = TypeError("rejected kwarg")
+        a = _adapter(client)
+        with pytest.raises(AlpacaPaperAdapterError):
+            a.submit_market_order("SPY", 1, "buy")
+        # All call_args must use the kwarg form; no positional retry.
+        assert client.submit_order.call_count == 1
+        args, kwargs = client.submit_order.call_args
+        assert args == ()
+        assert "order_data" in kwargs
+
+    def test_generic_exception_performs_one_call(self):
+        client = MagicMock()
+        client.submit_order.side_effect = RuntimeError("net")
+        a = _adapter(client)
+        with pytest.raises(AlpacaPaperAdapterError):
+            a.submit_market_order("SPY", 1, "buy")
+        assert client.submit_order.call_count == 1
+
+
+class TestLongOnlySellGuard:
+    def test_sell_equal_to_held_passes(self):
+        client = MagicMock()
+        client.get_all_positions.return_value = [_position(qty="5")]
+        client.submit_order.return_value = _order(side="sell")
+        a = _adapter(client)
+        res = a.submit_market_order("SPY", 5, "sell")
+        assert res["side"] == "sell"
+        assert client.submit_order.call_count == 1
+
+    def test_sell_below_held_passes(self):
+        client = MagicMock()
+        client.get_all_positions.return_value = [_position(qty="10")]
+        client.submit_order.return_value = _order(side="sell")
+        a = _adapter(client)
+        res = a.submit_market_order("SPY", 3, "sell")
+        assert res["side"] == "sell"
+        assert client.submit_order.call_count == 1
+
+    def test_sell_with_no_position_blocks(self):
+        client = MagicMock()
+        client.get_all_positions.return_value = []
+        a = _adapter(client)
+        with pytest.raises(AlpacaPaperAdapterError) as ei:
+            a.submit_market_order("SPY", 1, "sell")
+        assert "no SPY position" in str(ei.value)
+        assert client.submit_order.call_count == 0
+
+    def test_sell_above_held_blocks(self):
+        client = MagicMock()
+        client.get_all_positions.return_value = [_position(qty="3")]
+        a = _adapter(client)
+        with pytest.raises(AlpacaPaperAdapterError) as ei:
+            a.submit_market_order("SPY", 5, "sell")
+        assert "exceeds held" in str(ei.value)
+        assert client.submit_order.call_count == 0
+
+    def test_short_position_blocks(self):
+        client = MagicMock()
+        client.get_all_positions.return_value = [_position(qty="5", side="short")]
+        a = _adapter(client)
+        with pytest.raises(AlpacaPaperAdapterError) as ei:
+            a.submit_market_order("SPY", 1, "sell")
+        assert "not long" in str(ei.value)
+        assert client.submit_order.call_count == 0
+
+    @pytest.mark.parametrize("bad_qty", [
+        None, "abc", float("nan"), float("inf"), float("-inf"), -1, 0,
+    ])
+    def test_malformed_position_qty_blocks(self, bad_qty):
+        client = MagicMock()
+        client.get_all_positions.return_value = [_position(qty=bad_qty)]
+        a = _adapter(client)
+        with pytest.raises(AlpacaPaperAdapterError) as ei:
+            a.submit_market_order("SPY", 1, "sell")
+        msg = str(ei.value)
+        assert "malformed" in msg or "no SPY position" in msg
+        assert client.submit_order.call_count == 0
+
+    def test_missing_position_side_blocks(self):
+        client = MagicMock()
+        pos = _ns(symbol="SPY", qty="5")
+        client.get_all_positions.return_value = [pos]
+        a = _adapter(client)
+        with pytest.raises(AlpacaPaperAdapterError) as ei:
+            a.submit_market_order("SPY", 1, "sell")
+        assert "not long" in str(ei.value)
+        assert client.submit_order.call_count == 0
+
+    def test_unrelated_symbol_position_ignored(self):
+        client = MagicMock()
+        client.get_all_positions.return_value = [_position(symbol="QQQ", qty="100")]
+        a = _adapter(client)
+        with pytest.raises(AlpacaPaperAdapterError) as ei:
+            a.submit_market_order("SPY", 1, "sell")
+        assert "no SPY position" in str(ei.value)
+        assert client.submit_order.call_count == 0
+
+    def test_buy_does_not_consult_positions(self):
+        client = MagicMock()
+        client.submit_order.return_value = _order()
+        a = _adapter(client)
+        a.submit_market_order("SPY", 1, "buy")
+        assert client.get_all_positions.call_count == 0
+
+    def test_position_read_exception_blocks_and_no_submit(self):
+        client = MagicMock()
+        client.get_all_positions.side_effect = RuntimeError("net")
+        a = _adapter(client)
+        with pytest.raises(AlpacaPaperAdapterError):
+            a.submit_market_order("SPY", 1, "sell")
+        assert client.submit_order.call_count == 0
 
 
 class TestCancelOrder:
