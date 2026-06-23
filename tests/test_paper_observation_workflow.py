@@ -674,6 +674,368 @@ class TestTamperedChildSafetyFlagsBlock:
         assert r.stages_failed == ("snapshot",)
 
 
+class TestStageStatusConsistencyChecks:
+    @staticmethod
+    def _tampered_cred(wrong_status):
+        from src.broker.credential_metadata import (
+            CredentialMetadataValidationResult,
+        )
+        return CredentialMetadataValidationResult(
+            result="PASS",
+            status=wrong_status,
+            blocker=None,
+            profile_name="x",
+            declared_environment="paper",
+            expires_at_utc="2099-01-01T00:00:00Z",
+            rotation_required=False,
+            criteria_checked=(),
+            criteria_failed=(),
+            broker_calls_made=False,
+            credentials_read=False,
+            network_calls_made=False,
+            order_action_requested=False,
+            live_trading_allowed=False,
+        )
+
+    @staticmethod
+    def _tampered_env(wrong_status):
+        from src.broker.account_environment_guard import (
+            AccountEnvironmentVerificationResult,
+        )
+        return AccountEnvironmentVerificationResult(
+            result="PASS",
+            status=wrong_status,
+            blocker=None,
+            expected_environment="paper",
+            credential_environment="paper",
+            adapter_environment="paper",
+            broker_reported_environment="paper",
+            criteria_checked=(),
+            criteria_failed=(),
+            broker_calls_made=False,
+            credentials_read=False,
+            network_calls_made=False,
+            order_action_requested=False,
+            live_trading_allowed=False,
+        )
+
+    @staticmethod
+    def _tampered_snap(wrong_status):
+        from src.broker.paper_account_snapshot import PaperAccountSnapshotResult
+        return PaperAccountSnapshotResult(
+            result="PASS",
+            status=wrong_status,
+            blocker=None,
+            environment="paper",
+            account_status="active",
+            cash=100000.0,
+            buying_power=100000.0,
+            equity=100000.0,
+            positions=(),
+            open_orders=(),
+            market_clock={"is_open": True},
+            broker_timestamp="2026-06-01T00:00:00Z",
+            request_id=_REQUEST_ID,
+            criteria_checked=(),
+            criteria_failed=(),
+            broker_calls_made=False,
+            credentials_read=False,
+            network_calls_made=False,
+            order_action_requested=False,
+            live_trading_allowed=False,
+        )
+
+    @staticmethod
+    def _tampered_recon(wrong_status):
+        from src.broker.paper_snapshot_reconciliation import (
+            PaperSnapshotReconciliationResult,
+        )
+        return PaperSnapshotReconciliationResult(
+            result="PASS",
+            status=wrong_status,
+            blocker=None,
+            request_id=_REQUEST_ID,
+            cash_difference=0.0,
+            buying_power_difference=0.0,
+            equity_difference=0.0,
+            position_differences=(),
+            open_order_differences=(),
+            criteria_checked=(),
+            criteria_failed=(),
+            broker_calls_made=False,
+            credentials_read=False,
+            network_calls_made=False,
+            order_action_requested=False,
+            live_trading_allowed=False,
+        )
+
+    def test_credential_pass_wrong_status_blocks(self):
+        tampered = self._tampered_cred(CredentialMetadataStatus.NOT_VALIDATED)
+        with patch(
+            "src.broker.paper_observation_workflow.validate_credential_metadata",
+            return_value=tampered,
+        ):
+            r = _run_workflow()
+        assert r.result == "BLOCKED"
+        assert r.status is WS.BLOCKED_CREDENTIAL
+        assert r.credential_status is CredentialMetadataStatus.NOT_VALIDATED
+        assert r.environment_status is None
+        assert r.snapshot_status is None
+        assert r.reconciliation_status is None
+        assert r.report_status is None
+        assert r.stages_failed == ("credential",)
+        assert r.stages_checked == ("top_level.schema", "credential")
+
+    def test_credential_pass_wrong_status_does_not_invoke_downstream(self):
+        tampered = self._tampered_cred(CredentialMetadataStatus.BLOCKED_SCHEMA)
+        with patch(
+            "src.broker.paper_observation_workflow.validate_credential_metadata",
+            return_value=tampered,
+        ), patch(
+            "src.broker.paper_observation_workflow.verify_account_environment",
+        ) as env_m, patch(
+            "src.broker.paper_observation_workflow.read_fake_paper_account_snapshot",
+        ) as snap_m, patch(
+            "src.broker.paper_observation_workflow.reconcile_paper_account_snapshot",
+        ) as recon_m, patch(
+            "src.broker.paper_observation_workflow.render_paper_reconciliation_report",
+        ) as rpt_m:
+            _run_workflow()
+            assert env_m.call_count == 0
+            assert snap_m.call_count == 0
+            assert recon_m.call_count == 0
+            assert rpt_m.call_count == 0
+
+    def test_environment_pass_wrong_status_blocks(self):
+        tampered = self._tampered_env(AccountEnvironmentStatus.NOT_VERIFIED)
+        with patch(
+            "src.broker.paper_observation_workflow.verify_account_environment",
+            return_value=tampered,
+        ):
+            r = _run_workflow()
+        assert r.result == "BLOCKED"
+        assert r.status is WS.BLOCKED_ENVIRONMENT
+        assert r.credential_status is CredentialMetadataStatus.CREDENTIAL_METADATA_READY_PAPER
+        assert r.environment_status is AccountEnvironmentStatus.NOT_VERIFIED
+        assert r.snapshot_status is None
+        assert r.reconciliation_status is None
+        assert r.report_status is None
+        assert r.stages_failed == ("environment",)
+        assert r.stages_checked == ("top_level.schema", "credential", "environment")
+
+    def test_environment_pass_wrong_status_does_not_invoke_downstream(self):
+        tampered = self._tampered_env(AccountEnvironmentStatus.BLOCKED_SAFETY)
+        with patch(
+            "src.broker.paper_observation_workflow.verify_account_environment",
+            return_value=tampered,
+        ), patch(
+            "src.broker.paper_observation_workflow.read_fake_paper_account_snapshot",
+        ) as snap_m, patch(
+            "src.broker.paper_observation_workflow.reconcile_paper_account_snapshot",
+        ) as recon_m, patch(
+            "src.broker.paper_observation_workflow.render_paper_reconciliation_report",
+        ) as rpt_m:
+            _run_workflow()
+            assert snap_m.call_count == 0
+            assert recon_m.call_count == 0
+            assert rpt_m.call_count == 0
+
+    def test_snapshot_pass_wrong_status_blocks(self):
+        tampered = self._tampered_snap(PaperAccountSnapshotStatus.NOT_READ)
+        with patch(
+            "src.broker.paper_observation_workflow.read_fake_paper_account_snapshot",
+            return_value=tampered,
+        ):
+            r = _run_workflow()
+        assert r.result == "BLOCKED"
+        assert r.status is WS.BLOCKED_SNAPSHOT
+        assert r.snapshot_status is PaperAccountSnapshotStatus.NOT_READ
+        assert r.reconciliation_status is None
+        assert r.report_status is None
+        assert r.stages_failed == ("snapshot",)
+        assert r.stages_checked == (
+            "top_level.schema", "credential", "environment", "snapshot",
+        )
+
+    def test_snapshot_pass_wrong_status_does_not_invoke_downstream(self):
+        tampered = self._tampered_snap(PaperAccountSnapshotStatus.BLOCKED_SAFETY)
+        with patch(
+            "src.broker.paper_observation_workflow.read_fake_paper_account_snapshot",
+            return_value=tampered,
+        ), patch(
+            "src.broker.paper_observation_workflow.reconcile_paper_account_snapshot",
+        ) as recon_m, patch(
+            "src.broker.paper_observation_workflow.render_paper_reconciliation_report",
+        ) as rpt_m:
+            _run_workflow()
+            assert recon_m.call_count == 0
+            assert rpt_m.call_count == 0
+
+    def test_reconciliation_pass_wrong_status_blocks(self):
+        tampered = self._tampered_recon(
+            PaperSnapshotReconciliationStatus.NOT_RECONCILED,
+        )
+        with patch(
+            "src.broker.paper_observation_workflow.reconcile_paper_account_snapshot",
+            return_value=tampered,
+        ):
+            r = _run_workflow()
+        assert r.result == "BLOCKED"
+        assert r.status is WS.BLOCKED_RECONCILIATION
+        assert r.reconciliation_status is PaperSnapshotReconciliationStatus.NOT_RECONCILED
+        assert r.report_status is None
+        assert r.stages_failed == ("reconciliation",)
+        assert r.stages_checked == (
+            "top_level.schema", "credential", "environment", "snapshot",
+            "reconciliation",
+        )
+
+    def test_reconciliation_pass_wrong_status_does_not_invoke_report(self):
+        tampered = self._tampered_recon(
+            PaperSnapshotReconciliationStatus.BLOCKED_SAFETY,
+        )
+        with patch(
+            "src.broker.paper_observation_workflow.reconcile_paper_account_snapshot",
+            return_value=tampered,
+        ), patch(
+            "src.broker.paper_observation_workflow.render_paper_reconciliation_report",
+        ) as rpt_m:
+            _run_workflow()
+            assert rpt_m.call_count == 0
+
+    def test_credential_wrong_status_no_report_content(self):
+        tampered = self._tampered_cred(CredentialMetadataStatus.NOT_VALIDATED)
+        with patch(
+            "src.broker.paper_observation_workflow.validate_credential_metadata",
+            return_value=tampered,
+        ):
+            r = _run_workflow()
+        assert r.summary is None
+        assert r.financial_lines is None
+        assert r.position_lines is None
+        assert r.open_order_lines is None
+
+    def test_environment_wrong_status_no_report_content(self):
+        tampered = self._tampered_env(AccountEnvironmentStatus.NOT_VERIFIED)
+        with patch(
+            "src.broker.paper_observation_workflow.verify_account_environment",
+            return_value=tampered,
+        ):
+            r = _run_workflow()
+        assert r.summary is None
+        assert r.financial_lines is None
+
+    def test_snapshot_wrong_status_no_report_content(self):
+        tampered = self._tampered_snap(PaperAccountSnapshotStatus.NOT_READ)
+        with patch(
+            "src.broker.paper_observation_workflow.read_fake_paper_account_snapshot",
+            return_value=tampered,
+        ):
+            r = _run_workflow()
+        assert r.summary is None
+        assert r.financial_lines is None
+
+    def test_reconciliation_wrong_status_no_report_content(self):
+        tampered = self._tampered_recon(
+            PaperSnapshotReconciliationStatus.NOT_RECONCILED,
+        )
+        with patch(
+            "src.broker.paper_observation_workflow.reconcile_paper_account_snapshot",
+            return_value=tampered,
+        ):
+            r = _run_workflow()
+        assert r.summary is None
+        assert r.financial_lines is None
+
+    @pytest.mark.parametrize("stage,wrong_status_member", [
+        ("credential", CredentialMetadataStatus.NOT_VALIDATED),
+        ("environment", AccountEnvironmentStatus.NOT_VERIFIED),
+        ("snapshot", PaperAccountSnapshotStatus.NOT_READ),
+        ("reconciliation", PaperSnapshotReconciliationStatus.NOT_RECONCILED),
+    ])
+    def test_safety_flags_false_on_wrong_status(self, stage, wrong_status_member):
+        helper = {
+            "credential": (
+                "src.broker.paper_observation_workflow.validate_credential_metadata",
+                self._tampered_cred,
+            ),
+            "environment": (
+                "src.broker.paper_observation_workflow.verify_account_environment",
+                self._tampered_env,
+            ),
+            "snapshot": (
+                "src.broker.paper_observation_workflow.read_fake_paper_account_snapshot",
+                self._tampered_snap,
+            ),
+            "reconciliation": (
+                "src.broker.paper_observation_workflow.reconcile_paper_account_snapshot",
+                self._tampered_recon,
+            ),
+        }
+        target, builder = helper[stage]
+        with patch(target, return_value=builder(wrong_status_member)):
+            r = _run_workflow()
+        _assert_all_safety_flags_false(r)
+
+    def test_credential_wrong_status_deterministic(self):
+        tampered = self._tampered_cred(CredentialMetadataStatus.NOT_VALIDATED)
+        with patch(
+            "src.broker.paper_observation_workflow.validate_credential_metadata",
+            return_value=tampered,
+        ):
+            r1 = _run_workflow()
+        with patch(
+            "src.broker.paper_observation_workflow.validate_credential_metadata",
+            return_value=tampered,
+        ):
+            r2 = _run_workflow()
+        assert r1 == r2
+
+    def test_environment_wrong_status_deterministic(self):
+        tampered = self._tampered_env(AccountEnvironmentStatus.NOT_VERIFIED)
+        with patch(
+            "src.broker.paper_observation_workflow.verify_account_environment",
+            return_value=tampered,
+        ):
+            r1 = _run_workflow()
+        with patch(
+            "src.broker.paper_observation_workflow.verify_account_environment",
+            return_value=tampered,
+        ):
+            r2 = _run_workflow()
+        assert r1 == r2
+
+    def test_snapshot_wrong_status_deterministic(self):
+        tampered = self._tampered_snap(PaperAccountSnapshotStatus.NOT_READ)
+        with patch(
+            "src.broker.paper_observation_workflow.read_fake_paper_account_snapshot",
+            return_value=tampered,
+        ):
+            r1 = _run_workflow()
+        with patch(
+            "src.broker.paper_observation_workflow.read_fake_paper_account_snapshot",
+            return_value=tampered,
+        ):
+            r2 = _run_workflow()
+        assert r1 == r2
+
+    def test_reconciliation_wrong_status_deterministic(self):
+        tampered = self._tampered_recon(
+            PaperSnapshotReconciliationStatus.NOT_RECONCILED,
+        )
+        with patch(
+            "src.broker.paper_observation_workflow.reconcile_paper_account_snapshot",
+            return_value=tampered,
+        ):
+            r1 = _run_workflow()
+        with patch(
+            "src.broker.paper_observation_workflow.reconcile_paper_account_snapshot",
+            return_value=tampered,
+        ):
+            r2 = _run_workflow()
+        assert r1 == r2
+
+
 class TestDeterministicOutputs:
     def test_no_difference_deterministic(self):
         r1 = _run_workflow()

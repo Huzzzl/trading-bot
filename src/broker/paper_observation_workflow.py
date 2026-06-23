@@ -187,10 +187,18 @@ def run_fake_paper_observation_workflow(
             request_id=preserved_request_id,
             credential_status=cred_result.status,
         )
-    if cred_result.result != "PASS":
+    _cred_ready = CredentialMetadataStatus.CREDENTIAL_METADATA_READY_PAPER
+    if cred_result.result != "PASS" or cred_result.status is not _cred_ready:
+        if cred_result.result == "PASS":
+            cred_blocker = (
+                f"credential validation status is {cred_result.status.name} "
+                f"but expected {_cred_ready.name}"
+            )
+        else:
+            cred_blocker = cred_result.blocker or "credential validation blocked"
         return _blocked(
             PaperObservationWorkflowStatus.BLOCKED_CREDENTIAL,
-            cred_result.blocker or "credential validation blocked",
+            cred_blocker,
             checked,
             "credential",
             request_id=preserved_request_id,
@@ -217,10 +225,18 @@ def run_fake_paper_observation_workflow(
             credential_status=cred_result.status,
             environment_status=env_result.status,
         )
-    if env_result.result != "PASS":
+    _env_ready = AccountEnvironmentStatus.VERIFIED_PAPER
+    if env_result.result != "PASS" or env_result.status is not _env_ready:
+        if env_result.result == "PASS":
+            env_blocker = (
+                f"environment guard status is {env_result.status.name} "
+                f"but expected {_env_ready.name}"
+            )
+        else:
+            env_blocker = env_result.blocker or "environment verification blocked"
         return _blocked(
             PaperObservationWorkflowStatus.BLOCKED_ENVIRONMENT,
-            env_result.blocker or "environment verification blocked",
+            env_blocker,
             checked,
             "environment",
             request_id=preserved_request_id,
@@ -250,10 +266,18 @@ def run_fake_paper_observation_workflow(
             environment_status=env_result.status,
             snapshot_status=snap_result.status,
         )
-    if snap_result.result != "PASS":
+    _snap_ready = PaperAccountSnapshotStatus.SNAPSHOT_READY_PAPER
+    if snap_result.result != "PASS" or snap_result.status is not _snap_ready:
+        if snap_result.result == "PASS":
+            snap_blocker = (
+                f"snapshot reader status is {snap_result.status.name} "
+                f"but expected {_snap_ready.name}"
+            )
+        else:
+            snap_blocker = snap_result.blocker or "snapshot read blocked"
         return _blocked(
             PaperObservationWorkflowStatus.BLOCKED_SNAPSHOT,
-            snap_result.blocker or "snapshot read blocked",
+            snap_blocker,
             checked,
             "snapshot",
             request_id=preserved_request_id,
@@ -284,10 +308,22 @@ def run_fake_paper_observation_workflow(
             snapshot_status=snap_result.status,
             reconciliation_status=recon_result.status,
         )
-    if recon_result.result != "PASS":
+    _recon_ready = {
+        PaperSnapshotReconciliationStatus.RECONCILED_NO_DIFFERENCE,
+        PaperSnapshotReconciliationStatus.RECONCILED_DIFFERENCE_FOUND,
+    }
+    if recon_result.result != "PASS" or recon_result.status not in _recon_ready:
+        if recon_result.result == "PASS":
+            recon_blocker = (
+                f"reconciliation status is {recon_result.status.name} "
+                f"but expected RECONCILED_NO_DIFFERENCE or "
+                f"RECONCILED_DIFFERENCE_FOUND"
+            )
+        else:
+            recon_blocker = recon_result.blocker or "reconciliation blocked"
         return _blocked(
             PaperObservationWorkflowStatus.BLOCKED_RECONCILIATION,
-            recon_result.blocker or "reconciliation blocked",
+            recon_blocker,
             checked,
             "reconciliation",
             request_id=preserved_request_id,
