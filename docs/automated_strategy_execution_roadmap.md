@@ -2458,6 +2458,62 @@ Paper trading remains not approved. Live trading remains blocked.
 
 Full suite: 7,457 passed.
 
+**PR S47 — Pure offline paper snapshot reconciliation — implemented**
+`src/broker/paper_snapshot_reconciliation.py` created. Fully offline; no
+broker/API/credential/env/network/order/live/paper access. No live/paper
+trading approved. No account accessed. No current_state wiring. No order
+or broker payload creation. No account identifiers.
+
+`PaperSnapshotReconciliationStatus` (str, Enum) with 6 values: NOT_RECONCILED,
+RECONCILED_NO_DIFFERENCE, RECONCILED_DIFFERENCE_FOUND, BLOCKED_SNAPSHOT,
+BLOCKED_SCHEMA, BLOCKED_SAFETY.
+
+`PaperSnapshotReconciliationResult` frozen dataclass (16 fields): result,
+status, blocker, request_id, cash_difference, buying_power_difference,
+equity_difference, position_differences, open_order_differences,
+criteria_checked, criteria_failed, and 5 safety flags (always False).
+
+`reconcile_paper_account_snapshot(snapshot_result, *, expected_cash,
+expected_buying_power, expected_equity, expected_positions,
+expected_open_orders)` pure in-memory function with 9 deterministic
+criteria: accepts only a SNAPSHOT_READY_PAPER PASS result; blocks on
+non-snapshot type, non-PASS snapshot, or any safety flag set; rejects
+expected financial values that are not finite non-negative numbers
+(bool/NaN/inf/negative all blocked); rejects non-list/non-tuple expected
+collections; compares financial values deterministically (snapshot minus
+expected); diffs positions by symbol key and open orders by id key with
+deterministic sorted ordering and three diff kinds
+(missing_from_snapshot, extra_in_snapshot, changed); returns immutable
+tuples for difference collections; deep-copies values into diffs;
+inputs not mutated; raw snapshot/dict not retained.
+
+`tests/test_paper_snapshot_reconciliation.py` added: 152 tests across
+17 classes covering exact-match no-difference, cash/buying-power/equity
+differences, position added/removed/changed, open order
+added/removed/changed, multiple-difference combinations, blocked
+snapshot rejection (including tampered safety flag → BLOCKED_SAFETY),
+malformed expected-value rejection (NaN/inf/negative/bool/string/None),
+non-collection expected positions/open_orders blocked, deterministic
+output (including sorted diff-key order), immutable result and
+collections, input immutability (snapshot, expected positions, expected
+open_orders, deep-copy isolation in diffs), all five safety flags False
+on every PASS/BLOCKED result (parametrised), no order-chain function
+invoked under PASS/no-diff, PASS/diff-found, or BLOCKED (mock-patched
+across 7 chain functions × 3 outcomes), result has no
+approval/plan/gate/lifecycle/preview/ledger/submit/execution/order-action
+field names, status value contains no APPROVED/SUBMIT/EXECUTE/LIFECYCLE/
+PLAN/ORDER substrings, forbidden-pattern source scan, no
+runtime/main/execution wiring, no current_state reference, src imports
+limited to paper_account_snapshot, no order-action methods, no
+account_id/account_number/broker_payload field.
+
+Reconciliation is observation only. Difference found is not an order
+signal. Reconciliation does not approve paper trading. Reconciliation
+does not advance lifecycle. Paper trading remains not approved. Live
+trading remains blocked.
+
+Full suite: 7,609 passed.
+
 ### Phase C — Paper trading execution
 
 - Paper account executor: applies approved signal on Alpaca paper account
