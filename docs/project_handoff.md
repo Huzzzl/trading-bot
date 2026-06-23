@@ -36,10 +36,10 @@ Rules:
 |---|---|
 | Repository | `Huzzzl/trading-bot` |
 | Current phase | Pure offline / paper-preparation |
-| Latest completed milestone | S47 |
-| Latest merged PR | #251 |
-| Current main SHA | `fc3d465` |
-| Full-suite test count | 7,861 passed |
+| Latest completed milestone | S48 |
+| Latest merged PR | #252 |
+| Current main SHA | `6fce805` |
+| Full-suite test count | 8,087 passed |
 | Paper trading | **Not approved** |
 | Live trading | **Blocked** |
 | Broker connection | Not implemented |
@@ -73,6 +73,7 @@ The following components are implemented and tested:
 - S46 paper account snapshot isolation integration tests (tests-only)
 - S47 pure offline paper snapshot reconciliation
 - S48 pure offline reconciliation report renderer
+- S49 pure offline broker observation workflow coordinator
 
 ---
 
@@ -247,16 +248,24 @@ separate design and review sequence:
   readiness is observation only. Difference found is not an order
   signal. Report rendering does not advance lifecycle. No file writes,
   no JSON export to disk, no logging side effects, no ledger append.
+- S49 paper observation workflow coordinator runs the existing S43-S48
+  observation chain (credential → environment → snapshot →
+  reconciliation → report) in a single explicit, pure in-memory
+  function. Stops at the first blocked stage and never enters the
+  order-preparation chain. Verifies all child safety flags exactly
+  False before proceeding. Output exposes only stage statuses and
+  final read-only report lines; no raw child objects retained.
 
 ---
 
 ## Current milestone
 
-S47 complete (PR #251 merged). S48 in progress.
+S48 complete (PR #252 merged). S49 in progress.
 
-- S47 implemented pure offline paper snapshot reconciliation with
-  230 tests
-- S48 adds pure offline reconciliation report renderer with 174 tests
+- S48 implemented pure offline reconciliation report renderer with
+  195 tests
+- S49 adds pure offline broker observation workflow coordinator with
+  205 tests
 - No broker connection implemented
 - No credentials loaded
 - No environment variables read
@@ -269,11 +278,11 @@ S47 complete (PR #251 merged). S48 in progress.
 
 ## Next phase
 
-Current task: S48 pure offline reconciliation report renderer.
+Current task: S49 pure offline broker observation workflow coordinator.
 
-After S48:
+After S49:
 
-- S49+: Implementation only after design review and explicit approval
+- S50+: Implementation only after design review and explicit approval
 
 Explicit constraints:
 
@@ -296,7 +305,8 @@ Explicit constraints:
 | S45 | Pure offline paper account snapshot reader -- **done** |
 | S46 | Paper account snapshot isolation integration tests (tests-only) -- **done** |
 | S47 | Pure offline paper snapshot reconciliation -- **done** |
-| S48 | Pure offline reconciliation report renderer -- **in progress** |
+| S48 | Pure offline reconciliation report renderer -- **done** |
+| S49 | Pure offline broker observation workflow coordinator -- **in progress** |
 | Later | Implementation only after design review and explicit approval |
 
 ---
