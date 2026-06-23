@@ -2568,6 +2568,82 @@ remains blocked.
 
 Full suite: 7,861 passed.
 
+**PR S49 — Pure offline broker observation workflow coordinator — implemented**
+`src/broker/paper_observation_workflow.py` created. Fully offline; no broker/API/
+credential/env/network/order/live/paper access. No live/paper trading approved.
+No planner, no approval validator, no order-plan validator, no safety gate, no
+lifecycle, no preview, no ledger, no current_state wiring, no order or broker
+payload creation, no account identifiers, no main/runtime wiring, no real
+credential provider, no real adapter.
+
+`PaperObservationWorkflowStatus` (str, Enum, 10 members): NOT_RUN,
+OBSERVATION_READY_NO_DIFFERENCE, OBSERVATION_READY_DIFFERENCE_FOUND,
+BLOCKED_CREDENTIAL, BLOCKED_ENVIRONMENT, BLOCKED_SNAPSHOT,
+BLOCKED_RECONCILIATION, BLOCKED_REPORT, BLOCKED_SCHEMA, BLOCKED_SAFETY.
+
+`PaperObservationWorkflowResult` frozen dataclass (20 fields): result, status,
+blocker, request_id, per-stage statuses (credential_status, environment_status,
+snapshot_status, reconciliation_status, report_status), report content
+(summary, financial_lines, position_lines, open_order_lines), stages_checked,
+stages_failed, and 5 safety flags (always False).
+
+`run_fake_paper_observation_workflow(...)` pure in-memory coordinator: validates
+top-level input shapes enough to avoid exceptions (credential_metadata dict,
+snapshot dict, expected_environment str, now_utc str) then executes the
+existing S43-S48 public functions in this exact order — (1) credential
+validation via S43 validate_credential_metadata, (2) account environment
+verification via S43 verify_account_environment using the validated declared
+environment, (3) snapshot validation via S45 read_fake_paper_account_snapshot,
+(4) reconciliation via S47 reconcile_paper_account_snapshot using the snapshot
+result, (5) report rendering via S48 render_paper_reconciliation_report using
+the reconciliation result. Stops immediately at the first blocked stage; never
+calls downstream stages after a blocked result. After each child call,
+defensively verifies all five child safety flags are exactly False before
+proceeding (any True → BLOCKED_SAFETY with the failing stage in stages_failed).
+Preserves request_id only when it is a valid non-empty string. Final PASS
+status is OBSERVATION_READY_NO_DIFFERENCE or OBSERVATION_READY_DIFFERENCE_FOUND
+based on the report status. Output exposes only the final read-only report
+lines and per-stage enum statuses; no raw child dataclass instances retained
+or reachable on the result. Inputs never mutated. Never silently corrects
+malformed child results.
+
+`tests/test_paper_observation_workflow.py` added: 205 tests across 18 classes
+covering complete no-difference workflow PASS, complete difference-found
+workflow PASS, report summary retains the not-order-signal notice, credential/
+environment/snapshot/reconciliation/report block each stop all downstream
+functions (proved per stage with mock-patched downstream callees), exact stage
+order in stages_checked, malformed top-level inputs (None/non-dict
+credential_metadata; None/non-dict snapshot; non-string expected_environment;
+non-string now_utc; never raises; safety flags False; preserves valid
+request_id and drops invalid), invalid request_id blocks at snapshot stage,
+tampered child safety flags (credential/environment/snapshot) → BLOCKED_SAFETY
+with correct stages_failed (mock-patched child returning a tampered frozen
+result), deterministic outputs (PASS-no-diff, PASS-diff, credential block,
+top-level block), input immutability (credential_metadata, snapshot,
+expected_positions, expected_open_orders), raw child objects not retained
+(no credential_result/snapshot_result/reconciliation_result/report_result field
+names; no field holds a child dataclass instance), immutable output tuples
+(frozen result; stages_checked/stages_failed/financial_lines/position_lines
+all tuples rejecting .append()), all five safety flags False on every PASS/
+BLOCKED outcome (parametrised across 6 outcomes × 5 flags), all 7 order-chain
+functions remain uninvoked under PASS-no-diff, PASS-diff, and 4 block outcomes
+(35 mock-patched cases × functions), workflow source does not reference any
+chain module name, 33-pattern forbidden source scan (includes logging,
+json.dump, current_state, all 7 chain module names, paper_approval_validator,
+fake_credential_provider, Alpaca, all order-action methods), no runtime/main/
+execution wiring, src imports limited to src.broker subpackage, no order-action
+function on module, no approval/plan/gate/lifecycle/preview/ledger/submit/
+execution/order-action/account_id/broker_payload/current_state field names on
+the result, no status value contains APPROVED/SUBMIT/EXECUTE/LIFECYCLE/PLAN/
+ORDER substrings.
+
+Workflow readiness is observation only. Difference found is not an order
+signal. Workflow readiness is not paper-trading approval. Workflow readiness
+is not order approval. Workflow does not advance lifecycle. Paper trading
+remains not approved. Live trading remains blocked.
+
+Full suite: 8,087 passed.
+
 ### Phase C — Paper trading execution
 
 - Paper account executor: applies approved signal on Alpaca paper account
