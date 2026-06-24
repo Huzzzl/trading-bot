@@ -49,16 +49,57 @@ class _CliError(Exception):
     pass
 
 
+def _peek_latest_timestamp(path: Path):
+    """Best-effort: return the largest tz-aware timestamp in a cache file.
+
+    Returns None if the file is unreadable, has no DatetimeIndex, or has
+    no valid tz-aware timestamps. Used only to rank candidate files; the
+    strict loader (_load_cached_bars) revalidates the chosen file.
+    """
+    try:
+        import pandas as pd
+        if path.suffix == ".parquet":
+            df = pd.read_parquet(path)
+        else:
+            df = pd.read_csv(path, index_col=0)
+            df.index = pd.to_datetime(df.index, utc=True, errors="coerce")
+        if not isinstance(df.index, pd.DatetimeIndex):
+            return None
+        if df.index.empty or df.index.isna().all():
+            return None
+        if df.index.tz is None:
+            return None
+        return df.index.max()
+    except Exception:
+        return None
+
+
 def _find_cache_file(cache_dir: Path, symbol: str, interval: str) -> Path | None:
+    """Select the cache file with the greatest latest-bar timestamp.
+
+    Considers both .parquet and .csv together; does not prefer one
+    extension or filename order over the other. If no candidate has a
+    valid latest timestamp, falls back to the first candidate so the
+    strict loader can emit a precise blocker.
+    """
     if not cache_dir.is_dir():
         return None
     safe_iv = re.sub(r"[^\w\-]", "_", interval)
-    parquets = sorted(cache_dir.glob(f"{symbol}_*_{safe_iv}.parquet"))
-    csvs = sorted(cache_dir.glob(f"{symbol}_*_{safe_iv}.csv"))
-    candidates = parquets + csvs
+    candidates = (
+        list(cache_dir.glob(f"{symbol}_*_{safe_iv}.parquet"))
+        + list(cache_dir.glob(f"{symbol}_*_{safe_iv}.csv"))
+    )
     if not candidates:
         return None
-    return candidates[-1]
+    scored = []
+    for path in candidates:
+        ts = _peek_latest_timestamp(path)
+        if ts is not None:
+            scored.append((ts, path))
+    if not scored:
+        return sorted(candidates)[0]
+    scored.sort(key=lambda item: item[0])
+    return scored[-1][1]
 
 
 def _load_cached_bars(

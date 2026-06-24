@@ -529,6 +529,115 @@ class TestNoCredentialLogging:
                 assert "secret-key-value" not in str(e)
 
 
+class TestEnumNormalization:
+    """Cover real Alpaca SDK enum values at the _to_str boundary."""
+
+    def test_account_status_active_enum_normalized(self):
+        from enum import Enum
+        from src.broker.alpaca_paper_adapter import _to_str
+
+        class AccountStatus(str, Enum):
+            ACTIVE = "ACTIVE"
+            ACCOUNT_CLOSED = "ACCOUNT_CLOSED"
+        assert _to_str(AccountStatus.ACTIVE) == "ACTIVE"
+
+    def test_account_status_closed_enum_normalized(self):
+        from enum import Enum
+        from src.broker.alpaca_paper_adapter import _to_str
+
+        class AccountStatus(str, Enum):
+            ACTIVE = "ACTIVE"
+            ACCOUNT_CLOSED = "ACCOUNT_CLOSED"
+        assert _to_str(AccountStatus.ACCOUNT_CLOSED) == "ACCOUNT_CLOSED"
+
+    def test_plain_active_string_unchanged(self):
+        from src.broker.alpaca_paper_adapter import _to_str
+        assert _to_str("ACTIVE") == "ACTIVE"
+
+    def test_order_side_buy_enum_normalized(self):
+        from enum import Enum
+        from src.broker.alpaca_paper_adapter import _to_str
+
+        class OrderSide(str, Enum):
+            BUY = "buy"
+            SELL = "sell"
+        # Alpaca-py exposes the SDK string via .value.
+        assert _to_str(OrderSide.BUY) == "buy"
+        assert _to_str(OrderSide.SELL) == "sell"
+
+    def test_order_status_new_enum_normalized(self):
+        from enum import Enum
+        from src.broker.alpaca_paper_adapter import _to_str
+
+        class OrderStatus(str, Enum):
+            NEW = "new"
+            FILLED = "filled"
+        assert _to_str(OrderStatus.NEW) == "new"
+        assert _to_str(OrderStatus.FILLED) == "filled"
+
+    def test_time_in_force_day_enum_normalized(self):
+        from enum import Enum
+        from src.broker.alpaca_paper_adapter import _to_str
+
+        class TimeInForce(str, Enum):
+            DAY = "day"
+            GTC = "gtc"
+        assert _to_str(TimeInForce.DAY) == "day"
+
+    def test_order_type_market_enum_normalized(self):
+        from enum import Enum
+        from src.broker.alpaca_paper_adapter import _to_str
+
+        class OrderType(str, Enum):
+            MARKET = "market"
+            LIMIT = "limit"
+        assert _to_str(OrderType.MARKET) == "market"
+
+    def test_string_prefix_path_still_works(self):
+        # Plain strings that look like enum reprs should still be stripped.
+        from src.broker.alpaca_paper_adapter import _to_str
+        assert _to_str("OrderSide.BUY") == "BUY"
+        assert _to_str("OrderStatus.PENDING_NEW") == "PENDING_NEW"
+
+    def test_datetime_value_preserved(self):
+        from datetime import datetime, timezone
+        from src.broker.alpaca_paper_adapter import _to_str
+        dt = datetime(2026, 6, 23, 14, 30, tzinfo=timezone.utc)
+        # Not an Enum; str() representation is preserved.
+        assert _to_str(dt) == str(dt)
+
+    def test_uuid_value_preserved(self):
+        import uuid
+        from src.broker.alpaca_paper_adapter import _to_str
+        u = uuid.UUID("12345678-1234-5678-1234-567812345678")
+        assert _to_str(u) == str(u)
+
+    def test_get_account_with_enum_returns_active(self):
+        from enum import Enum
+        from types import SimpleNamespace
+
+        class AccountStatus(str, Enum):
+            ACTIVE = "ACTIVE"
+        client = MagicMock()
+        client.get_account.return_value = SimpleNamespace(
+            status=AccountStatus.ACTIVE,
+            cash="100000.0",
+            buying_power="200000.0",
+            equity="150000.0",
+            currency="USD",
+            pattern_day_trader=False,
+        )
+        a = AlpacaPaperAdapter(client=client, paper=True)
+        res = a.get_account()
+        assert res["status"] == "ACTIVE"
+
+    def test_no_substring_match_on_status(self):
+        # "ACTIVE" as a substring of a longer string must not match.
+        from src.broker.alpaca_paper_adapter import _to_str
+        assert _to_str("INACTIVE") == "INACTIVE"
+        assert _to_str("ACCOUNT_ACTIVE_PENDING") == "ACCOUNT_ACTIVE_PENDING"
+
+
 class TestNoLiveTradingSupport:
     def test_module_has_no_live_methods(self):
         import src.broker.alpaca_paper_adapter as mod
