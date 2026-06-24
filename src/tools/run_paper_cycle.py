@@ -49,32 +49,14 @@ class _CliError(Exception):
     pass
 
 
-def _find_cache_file(cache_dir: Path, symbol: str, interval: str) -> Path | None:
-    if not cache_dir.is_dir():
-        return None
-    safe_iv = re.sub(r"[^\w\-]", "_", interval)
-    parquets = sorted(cache_dir.glob(f"{symbol}_*_{safe_iv}.parquet"))
-    csvs = sorted(cache_dir.glob(f"{symbol}_*_{safe_iv}.csv"))
-    candidates = parquets + csvs
-    if not candidates:
-        return None
-    return candidates[-1]
+def _validate_cache_file(path: Path) -> tuple[list[Bar], datetime]:
+    """Fully validate a single cache file and return ``(bars, latest_ts)``.
 
-
-def _load_cached_bars(
-    cache_dir: Path, symbol: str, interval: str,
-) -> tuple[list[Bar], datetime]:
-    """Load cached bars and the latest bar's timestamp.
-
-    Validates strictly: every row must parse to finite OHLCV; timestamps
-    must be timezone-aware, unique, and sorted ascending. Any malformed
-    row blocks rather than being silently skipped.
+    Raises :class:`_CliError` on any validation failure. This is the
+    single source of validation truth — candidate scoring and final
+    loading both go through this function, so a "valid candidate" by
+    the scorer is guaranteed loadable.
     """
-    path = _find_cache_file(cache_dir, symbol, interval)
-    if path is None:
-        raise _CliError(
-            f"no cached bars found for {symbol}/{interval} under {cache_dir}"
-        )
     try:
         import pandas as pd
     except ImportError as exc:
@@ -139,10 +121,55 @@ def _load_cached_bars(
         raise _CliError(f"cache file {path.name} contained no rows")
 
     latest_ts_pd = df.index[-1]
-    # Convert to a stdlib UTC datetime — the index is guaranteed tz-aware above.
     latest_ts = latest_ts_pd.to_pydatetime()
     if latest_ts.tzinfo is None:
         latest_ts = latest_ts.replace(tzinfo=timezone.utc)
+    return bars, latest_ts
+
+
+def _load_cached_bars(
+    cache_dir: Path, symbol: str, interval: str,
+) -> tuple[list[Bar], datetime]:
+    """Return bars + latest_ts of the most recent fully valid cache file.
+
+    Scores candidates by ``latest_ts`` from the shared validator so a
+    malformed-but-newer file can never beat a fully valid older one.
+    If at least one candidate is fully valid, that one wins. If no
+    candidate is fully valid, surfaces the most recent candidate's
+    validation error so the operator sees a precise blocker.
+    """
+    if not cache_dir.is_dir():
+        raise _CliError(
+            f"no cached bars found for {symbol}/{interval} under {cache_dir}"
+        )
+    safe_iv = re.sub(r"[^\w\-]", "_", interval)
+    candidates = (
+        list(cache_dir.glob(f"{symbol}_*_{safe_iv}.parquet"))
+        + list(cache_dir.glob(f"{symbol}_*_{safe_iv}.csv"))
+    )
+    if not candidates:
+        raise _CliError(
+            f"no cached bars found for {symbol}/{interval} under {cache_dir}"
+        )
+
+    valid: list[tuple[datetime, list[Bar]]] = []
+    last_error: str | None = None
+    for path in candidates:
+        try:
+            bars, latest_ts = _validate_cache_file(path)
+        except _CliError as exc:
+            last_error = str(exc)
+            continue
+        valid.append((latest_ts, bars))
+
+    if not valid:
+        raise _CliError(
+            last_error
+            or f"no valid cached bars found for {symbol}/{interval} under {cache_dir}"
+        )
+
+    valid.sort(key=lambda item: item[0])
+    latest_ts, bars = valid[-1]
     return bars, latest_ts
 
 

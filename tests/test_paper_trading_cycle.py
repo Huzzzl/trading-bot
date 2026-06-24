@@ -699,6 +699,76 @@ class TestDryRunDefault:
         assert a.submit_market_order.call_count == 1
 
 
+class TestRealEnumPropagationThroughAdapter:
+    """End-to-end proof that a real Alpaca SDK enum value normalizes to
+    the canonical broker string and lets the cycle proceed past account
+    validation."""
+
+    def test_cycle_accepts_enum_active_through_real_adapter(self):
+        from enum import Enum
+        from types import SimpleNamespace
+        from src.broker.alpaca_paper_adapter import AlpacaPaperAdapter
+
+        class AccountStatus(str, Enum):
+            ACTIVE = "ACTIVE"
+
+        client = MagicMock()
+        client.get_clock.return_value = SimpleNamespace(
+            timestamp="t", is_open=True,
+            next_open=None, next_close=None,
+        )
+        client.get_account.return_value = SimpleNamespace(
+            status=AccountStatus.ACTIVE,
+            cash="100000.0",
+            buying_power="200000.0",
+            equity="100000.0",
+            currency="USD",
+            pattern_day_trader=False,
+        )
+        client.get_all_positions.return_value = []
+        client.get_orders.return_value = []
+        adapter = AlpacaPaperAdapter(client=client, paper=True)
+        r = run_paper_trading_cycle(
+            adapter=adapter, bars=_bars_bullish(), signal_config=_config(),
+        )
+        # Account was ACTIVE — cycle proceeded past account validation
+        # and produced a buy plan.
+        assert r["result"] == "PASS"
+        assert r["action"] == "buy_planned"
+
+    def test_cycle_blocks_on_non_active_enum_through_real_adapter(self):
+        from enum import Enum
+        from types import SimpleNamespace
+        from src.broker.alpaca_paper_adapter import AlpacaPaperAdapter
+
+        class AccountStatus(str, Enum):
+            ACCOUNT_CLOSED = "ACCOUNT_CLOSED"
+
+        client = MagicMock()
+        client.get_clock.return_value = SimpleNamespace(
+            timestamp="t", is_open=True,
+            next_open=None, next_close=None,
+        )
+        client.get_account.return_value = SimpleNamespace(
+            status=AccountStatus.ACCOUNT_CLOSED,
+            cash="100000.0",
+            buying_power="200000.0",
+            equity="100000.0",
+            currency="USD",
+            pattern_day_trader=False,
+        )
+        client.get_all_positions.return_value = []
+        client.get_orders.return_value = []
+        adapter = AlpacaPaperAdapter(client=client, paper=True)
+        r = run_paper_trading_cycle(
+            adapter=adapter, bars=_bars_bullish(), signal_config=_config(),
+            submit_enabled=True,
+        )
+        assert r["result"] == "BLOCKED"
+        assert "ACTIVE" in r["blocker"]
+        assert client.submit_order.call_count == 0
+
+
 class TestNoNetworkInModule:
     def test_module_imports_only_known_modules(self):
         import inspect

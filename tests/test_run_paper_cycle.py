@@ -587,6 +587,334 @@ class TestTimestampValidation:
         assert a.submit_market_order.call_count == 0
 
 
+class TestCacheSelectionByLatestTimestamp:
+    """The CLI must pick the file with the greatest latest-bar timestamp,
+    independent of extension or filename order."""
+
+    def _write_with_filename(
+        self, cache_dir: Path, closes: list[float], *, end: datetime, filename: str,
+    ) -> Path:
+        ts = _timestamps_ending(end, len(closes))
+        rows = [{
+            "open": float(c), "high": float(c), "low": float(c),
+            "close": float(c), "volume": 1000.0,
+        } for c in closes]
+        df = pd.DataFrame(rows, index=pd.DatetimeIndex(ts, name="timestamp"))
+        path = cache_dir / filename
+        df.to_csv(path)
+        return path
+
+    def test_picks_latest_csv_over_older_csv(self, tmp_path):
+        # Older alphabetically-later name; newer alphabetically-earlier name.
+        # File-naming order would pick the OLDER one; greatest-timestamp
+        # selection must pick the NEWER one.
+        old_end = _FIXED_NOW - timedelta(hours=3)
+        new_end = _FIXED_NOW - timedelta(hours=1)
+        self._write_with_filename(
+            tmp_path, [float(c) for c in range(100, 120)],
+            end=old_end, filename="SPY_2026-01-01_2026-06-01_60m.csv",
+        )
+        self._write_with_filename(
+            tmp_path, [float(c) for c in range(200, 220)],
+            end=new_end, filename="SPY_2025-01-01_2025-06-01_60m.csv",
+        )
+        a = _mock_adapter()
+        code, out = _run_cli([], adapter=a, cache_dir=tmp_path)
+        result = _parse_result(out)
+        # Closes 200..219 → latest_close=219; equity 100000 * 0.10 / 219 = 45.
+        assert result["result"] == "PASS"
+        assert result["order_plan"]["qty"] == 45
+        assert code == 0
+
+    def test_picks_latest_regardless_of_extension(self, tmp_path):
+        # Build a recent CSV alongside an older parquet (if pyarrow
+        # available); otherwise build two CSVs.
+        try:
+            import pyarrow  # noqa: F401
+            have_parquet = True
+        except ImportError:
+            have_parquet = False
+
+        old_end = _FIXED_NOW - timedelta(hours=3)
+        new_end = _FIXED_NOW - timedelta(hours=1)
+        # Newer CSV
+        self._write_with_filename(
+            tmp_path, [float(c) for c in range(200, 220)],
+            end=new_end, filename="SPY_2026-01-01_2026-06-01_60m.csv",
+        )
+        # Older file: parquet if available, otherwise another CSV.
+        if have_parquet:
+            ts = _timestamps_ending(old_end, 20)
+            df = pd.DataFrame(
+                [{
+                    "open": float(c), "high": float(c), "low": float(c),
+                    "close": float(c), "volume": 1000.0,
+                } for c in range(100, 120)],
+                index=pd.DatetimeIndex(ts, name="timestamp"),
+            )
+            df.to_parquet(tmp_path / "SPY_2024-01-01_2024-06-01_60m.parquet")
+        else:
+            self._write_with_filename(
+                tmp_path, [float(c) for c in range(100, 120)],
+                end=old_end, filename="SPY_2024-01-01_2024-06-01_60m.csv",
+            )
+
+        a = _mock_adapter()
+        code, out = _run_cli([], adapter=a, cache_dir=tmp_path)
+        result = _parse_result(out)
+        # Must have picked the newer file (closes 200..219, qty 45).
+        assert result["result"] == "PASS"
+        assert result["order_plan"]["qty"] == 45
+
+    def test_single_file_still_picked(self, tmp_path):
+        _write_bullish_cache(tmp_path)
+        a = _mock_adapter()
+        code, _ = _run_cli([], adapter=a, cache_dir=tmp_path)
+        assert code == 0
+
+    def test_invalid_file_falls_back_so_loader_reports_clear_error(self, tmp_path):
+        # An unreadable file plus no other candidates → loader still runs
+        # on the only candidate and emits a precise blocker.
+        garbage = tmp_path / "SPY_2026-01-01_2026-06-01_60m.csv"
+        garbage.write_text("not,a,real,csv\n")
+        a = _mock_adapter()
+        code, out = _run_cli([], adapter=a, cache_dir=tmp_path)
+        result = _parse_result(out)
+        assert result["result"] == "BLOCKED"
+        assert code == 1
+
+    def test_picks_valid_over_invalid_when_both_present(self, tmp_path):
+        # Invalid CSV with the higher alphabetical name; valid CSV with
+        # the lower alphabetical name. Old behavior (last alphabetical)
+        # would pick the invalid one. New behavior peeks each file's
+        # latest timestamp and picks the valid one.
+        garbage = tmp_path / "SPY_zzzz_60m.csv"
+        garbage.write_text("garbage,nonsense\n1,2\n")
+        self._write_with_filename(
+            tmp_path, [float(c) for c in range(200, 220)],
+            end=_FIXED_NOW - timedelta(hours=1),
+            filename="SPY_aaaa_60m.csv",
+        )
+        a = _mock_adapter()
+        code, out = _run_cli([], adapter=a, cache_dir=tmp_path)
+        result = _parse_result(out)
+        assert result["result"] == "PASS"
+        assert result["order_plan"]["qty"] == 45
+
+
+class TestCandidateFullValidityScoring:
+    """A candidate must be fully valid (timestamps AND OHLCV) to win the
+    latest-bar selection — otherwise an older fully valid file is
+    chosen instead."""
+
+    def _write_valid(self, path: Path, closes: list[float], *, end: datetime) -> Path:
+        ts = _timestamps_ending(end, len(closes))
+        df = pd.DataFrame(
+            [{
+                "open": float(c), "high": float(c), "low": float(c),
+                "close": float(c), "volume": 1000.0,
+            } for c in closes],
+            index=pd.DatetimeIndex(ts, name="timestamp"),
+        )
+        df.to_csv(path)
+        return path
+
+    def _write_valid_parquet(self, path: Path, closes: list[float], *, end: datetime) -> Path:
+        ts = _timestamps_ending(end, len(closes))
+        df = pd.DataFrame(
+            [{
+                "open": float(c), "high": float(c), "low": float(c),
+                "close": float(c), "volume": 1000.0,
+            } for c in closes],
+            index=pd.DatetimeIndex(ts, name="timestamp"),
+        )
+        df.to_parquet(path)
+        return path
+
+    def test_newer_with_malformed_final_row_loses_to_older_valid(self, tmp_path):
+        # Older valid file: closes 200..219 (latest_close 219) at end-3h
+        # Newer "candidate": timestamp-valid but malformed final OHLCV row
+        # at end-1h. Old scoring would have picked the newer one and
+        # blocked. New scoring picks the older fully valid file.
+        old_end = _FIXED_NOW - timedelta(hours=3)
+        new_end = _FIXED_NOW - timedelta(hours=1)
+        self._write_valid(
+            tmp_path / "SPY_2025-01-01_2025-06-01_60m.csv",
+            [float(c) for c in range(200, 220)],
+            end=old_end,
+        )
+        new_ts = _timestamps_ending(new_end, 20)
+        rows = [{
+            "open": float(c), "high": float(c), "low": float(c),
+            "close": float(c), "volume": 1000.0,
+        } for c in range(100, 119)]
+        rows.append({
+            "open": "nan", "high": "x", "low": "y",
+            "close": "z", "volume": "w",
+        })
+        df = pd.DataFrame(rows, index=pd.DatetimeIndex(new_ts, name="timestamp"))
+        df.to_csv(tmp_path / "SPY_2026-01-01_2026-06-01_60m.csv")
+
+        a = _mock_adapter()
+        code, out = _run_cli([], adapter=a, cache_dir=tmp_path)
+        result = _parse_result(out)
+        assert result["result"] == "PASS"
+        # Older valid file's qty: equity 100000 * 0.10 / 219 = 45
+        assert result["order_plan"]["qty"] == 45
+        assert code == 0
+
+    def test_newer_missing_column_loses_to_older_valid(self, tmp_path):
+        old_end = _FIXED_NOW - timedelta(hours=3)
+        new_end = _FIXED_NOW - timedelta(hours=1)
+        self._write_valid(
+            tmp_path / "SPY_2025-01-01_2025-06-01_60m.csv",
+            [float(c) for c in range(200, 220)],
+            end=old_end,
+        )
+        # Newer candidate is missing the 'volume' column.
+        new_ts = _timestamps_ending(new_end, 20)
+        df = pd.DataFrame(
+            [{
+                "open": float(c), "high": float(c), "low": float(c),
+                "close": float(c),
+            } for c in range(100, 120)],
+            index=pd.DatetimeIndex(new_ts, name="timestamp"),
+        )
+        df.to_csv(tmp_path / "SPY_2026-01-01_2026-06-01_60m.csv")
+
+        a = _mock_adapter()
+        code, out = _run_cli([], adapter=a, cache_dir=tmp_path)
+        result = _parse_result(out)
+        assert result["result"] == "PASS"
+        assert result["order_plan"]["qty"] == 45
+
+    def test_newer_unsorted_timestamps_lose_to_older_valid(self, tmp_path):
+        old_end = _FIXED_NOW - timedelta(hours=3)
+        new_end = _FIXED_NOW - timedelta(hours=1)
+        self._write_valid(
+            tmp_path / "SPY_2025-01-01_2025-06-01_60m.csv",
+            [float(c) for c in range(200, 220)],
+            end=old_end,
+        )
+        new_ts = _timestamps_ending(new_end, 20)
+        new_ts[5], new_ts[6] = new_ts[6], new_ts[5]  # break monotonicity
+        df = pd.DataFrame(
+            [{
+                "open": float(c), "high": float(c), "low": float(c),
+                "close": float(c), "volume": 1000.0,
+            } for c in range(100, 120)],
+            index=pd.DatetimeIndex(new_ts, name="timestamp"),
+        )
+        df.to_csv(tmp_path / "SPY_2026-01-01_2026-06-01_60m.csv")
+
+        a = _mock_adapter()
+        code, out = _run_cli([], adapter=a, cache_dir=tmp_path)
+        result = _parse_result(out)
+        assert result["result"] == "PASS"
+        assert result["order_plan"]["qty"] == 45
+
+    def test_newer_duplicate_timestamps_lose_to_older_valid(self, tmp_path):
+        old_end = _FIXED_NOW - timedelta(hours=3)
+        new_end = _FIXED_NOW - timedelta(hours=1)
+        self._write_valid(
+            tmp_path / "SPY_2025-01-01_2025-06-01_60m.csv",
+            [float(c) for c in range(200, 220)],
+            end=old_end,
+        )
+        new_ts = _timestamps_ending(new_end, 20)
+        new_ts[10] = new_ts[11]  # duplicate
+        df = pd.DataFrame(
+            [{
+                "open": float(c), "high": float(c), "low": float(c),
+                "close": float(c), "volume": 1000.0,
+            } for c in range(100, 120)],
+            index=pd.DatetimeIndex(new_ts, name="timestamp"),
+        )
+        df.to_csv(tmp_path / "SPY_2026-01-01_2026-06-01_60m.csv")
+
+        a = _mock_adapter()
+        code, out = _run_cli([], adapter=a, cache_dir=tmp_path)
+        result = _parse_result(out)
+        assert result["result"] == "PASS"
+        assert result["order_plan"]["qty"] == 45
+
+    def test_all_timestamp_valid_but_ohlcv_invalid_candidates_block(self, tmp_path):
+        # Two candidates, both with valid tz-aware timestamps but
+        # malformed OHLCV. With no fully valid candidate, the CLI
+        # must block (not silently succeed).
+        end_a = _FIXED_NOW - timedelta(hours=3)
+        end_b = _FIXED_NOW - timedelta(hours=1)
+        for end, name in [(end_a, "a"), (end_b, "b")]:
+            ts = _timestamps_ending(end, 20)
+            rows = [{
+                "open": "x", "high": "x", "low": "x",
+                "close": "x", "volume": "x",
+            } for _ in range(20)]
+            df = pd.DataFrame(rows, index=pd.DatetimeIndex(ts, name="timestamp"))
+            df.to_csv(tmp_path / f"SPY_{name}_60m.csv")
+
+        a = _mock_adapter()
+        code, out = _run_cli([], adapter=a, cache_dir=tmp_path)
+        result = _parse_result(out)
+        assert result["result"] == "BLOCKED"
+        assert "malformed" in result["blocker"]
+        assert code == 1
+        assert a.submit_market_order.call_count == 0
+
+    def test_newest_fully_valid_still_selected_across_csv_and_parquet(self, tmp_path):
+        try:
+            import pyarrow  # noqa: F401
+        except ImportError:
+            pytest.skip("pyarrow not available")
+
+        # Older valid CSV; newer valid parquet → parquet must win
+        # because it has the greater latest-bar timestamp.
+        old_end = _FIXED_NOW - timedelta(hours=3)
+        new_end = _FIXED_NOW - timedelta(hours=1)
+        self._write_valid(
+            tmp_path / "SPY_2025-01-01_2025-06-01_60m.csv",
+            [float(c) for c in range(100, 120)],
+            end=old_end,
+        )
+        self._write_valid_parquet(
+            tmp_path / "SPY_2026-01-01_2026-06-01_60m.parquet",
+            [float(c) for c in range(200, 220)],
+            end=new_end,
+        )
+
+        a = _mock_adapter()
+        code, out = _run_cli([], adapter=a, cache_dir=tmp_path)
+        result = _parse_result(out)
+        assert result["result"] == "PASS"
+        # Parquet's closes 200..219 win → qty 45.
+        assert result["order_plan"]["qty"] == 45
+
+    def test_newest_valid_csv_beats_older_valid_parquet(self, tmp_path):
+        try:
+            import pyarrow  # noqa: F401
+        except ImportError:
+            pytest.skip("pyarrow not available")
+
+        old_end = _FIXED_NOW - timedelta(hours=3)
+        new_end = _FIXED_NOW - timedelta(hours=1)
+        self._write_valid_parquet(
+            tmp_path / "SPY_2025-01-01_2025-06-01_60m.parquet",
+            [float(c) for c in range(100, 120)],
+            end=old_end,
+        )
+        self._write_valid(
+            tmp_path / "SPY_2026-01-01_2026-06-01_60m.csv",
+            [float(c) for c in range(200, 220)],
+            end=new_end,
+        )
+
+        a = _mock_adapter()
+        code, out = _run_cli([], adapter=a, cache_dir=tmp_path)
+        result = _parse_result(out)
+        assert result["result"] == "PASS"
+        assert result["order_plan"]["qty"] == 45
+
+
 class TestArgParsing:
     def test_interval_only_60m_supported(self, tmp_path, capsys):
         with pytest.raises(SystemExit):

@@ -14,6 +14,7 @@ adapter with `paper=False` or with a live base URL raises immediately.
 from __future__ import annotations
 
 import os
+from enum import Enum
 from typing import Any
 
 _ALLOWED_SYMBOLS = frozenset({"SPY"})
@@ -44,6 +45,12 @@ def _to_float(val: Any) -> float | None:
 def _to_str(val: Any) -> str | None:
     if val is None:
         return None
+    # Handle generic Python Enum instances: real Alpaca SDK enum values like
+    # AccountStatus.ACTIVE expose the broker's underlying string via .value
+    # (e.g. "ACTIVE"). Returning str(val.value) gives the canonical broker
+    # string without relying on a hard-coded class-name prefix list.
+    if isinstance(val, Enum):
+        return str(val.value)
     s = str(val)
     if "." in s and s.startswith(("OrderSide.", "OrderStatus.", "TimeInForce.", "OrderType.")):
         s = s.rsplit(".", 1)[-1]
