@@ -19,8 +19,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +37,12 @@ _SYMBOL = "SPY"
 _DEFAULT_CACHE_DIR = Path("data/cache")
 _INTERVAL_TO_TIMEFRAME = {"60m": "1h"}
 _REQUIRED_COLS = ("open", "high", "low", "close", "volume")
+# A 60m bar older than this is considered stale for trading-decision purposes.
+_STALE_BAR_THRESHOLD_SECONDS = 4 * 3600
+
+
+def _default_now_utc() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class _CliError(Exception):
@@ -53,7 +61,15 @@ def _find_cache_file(cache_dir: Path, symbol: str, interval: str) -> Path | None
     return candidates[-1]
 
 
-def _load_cached_bars(cache_dir: Path, symbol: str, interval: str) -> list[Bar]:
+def _load_cached_bars(
+    cache_dir: Path, symbol: str, interval: str,
+) -> tuple[list[Bar], datetime]:
+    """Load cached bars and the latest bar's timestamp.
+
+    Validates strictly: every row must parse to finite OHLCV; timestamps
+    must be timezone-aware, unique, and sorted ascending. Any malformed
+    row blocks rather than being silently skipped.
+    """
     path = _find_cache_file(cache_dir, symbol, interval)
     if path is None:
         raise _CliError(
@@ -69,6 +85,7 @@ def _load_cached_bars(cache_dir: Path, symbol: str, interval: str) -> list[Bar]:
             df = pd.read_parquet(path)
         else:
             df = pd.read_csv(path, index_col=0)
+            df.index = pd.to_datetime(df.index, utc=True, errors="coerce")
     except Exception as exc:
         raise _CliError(f"failed to read cache file {path.name}: {exc}") from exc
 
@@ -79,23 +96,54 @@ def _load_cached_bars(cache_dir: Path, symbol: str, interval: str) -> list[Bar]:
             f"cache file {path.name} missing required columns: {missing}"
         )
 
+    if not isinstance(df.index, pd.DatetimeIndex):
+        raise _CliError(
+            f"cache file {path.name} index is not a DatetimeIndex"
+        )
+    if df.index.isna().any():
+        raise _CliError(
+            f"cache file {path.name} has invalid or unparseable timestamps"
+        )
+    if df.index.tz is None:
+        raise _CliError(
+            f"cache file {path.name} timestamps are not timezone-aware"
+        )
+    if not df.index.is_unique:
+        raise _CliError(
+            f"cache file {path.name} has duplicate timestamps"
+        )
+    if not df.index.is_monotonic_increasing:
+        raise _CliError(
+            f"cache file {path.name} timestamps are not sorted ascending"
+        )
+
     bars: list[Bar] = []
-    for _, row in df.iterrows():
+    for idx, (_, row) in enumerate(df.iterrows()):
         try:
-            bars.append(
-                Bar(
-                    open=float(row["open"]),
-                    high=float(row["high"]),
-                    low=float(row["low"]),
-                    close=float(row["close"]),
-                    volume=float(row["volume"]),
-                )
-            )
+            o = float(row["open"])
+            h = float(row["high"])
+            l = float(row["low"])
+            c = float(row["close"])
+            v = float(row["volume"])
         except (TypeError, ValueError):
-            continue
+            raise _CliError(
+                f"cache file {path.name} has a malformed OHLCV row at index {idx}"
+            )
+        if any(math.isnan(x) or math.isinf(x) for x in (o, h, l, c, v)):
+            raise _CliError(
+                f"cache file {path.name} has a non-finite OHLCV value at index {idx}"
+            )
+        bars.append(Bar(open=o, high=h, low=l, close=c, volume=v))
+
     if not bars:
-        raise _CliError(f"cache file {path.name} contained no valid bars")
-    return bars
+        raise _CliError(f"cache file {path.name} contained no rows")
+
+    latest_ts_pd = df.index[-1]
+    # Convert to a stdlib UTC datetime — the index is guaranteed tz-aware above.
+    latest_ts = latest_ts_pd.to_pydatetime()
+    if latest_ts.tzinfo is None:
+        latest_ts = latest_ts.replace(tzinfo=timezone.utc)
+    return bars, latest_ts
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -157,7 +205,19 @@ def _print_result(result: dict[str, Any]) -> None:
     sys.stdout.write(json.dumps(safe, default=str) + "\n")
 
 
-def main(argv: list[str] | None = None) -> int:
+def _blocked_result(blocker: str) -> dict[str, Any]:
+    return {
+        "result": "BLOCKED",
+        "action": "none",
+        "signal": None,
+        "reason_codes": [],
+        "order_plan": None,
+        "order": None,
+        "blocker": blocker,
+    }
+
+
+def main(argv: list[str] | None = None, *, now_utc_fn=_default_now_utc) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
 
@@ -180,18 +240,35 @@ def main(argv: list[str] | None = None) -> int:
 
     cache_dir = Path(args.cache_dir)
     try:
-        bars = _load_cached_bars(cache_dir, _SYMBOL, args.interval)
+        bars, latest_ts = _load_cached_bars(cache_dir, _SYMBOL, args.interval)
     except _CliError as exc:
-        err = {
-            "result": "BLOCKED",
-            "action": "none",
-            "signal": None,
-            "reason_codes": [],
-            "order_plan": None,
-            "order": None,
-            "blocker": str(exc),
-        }
-        _print_result(err)
+        _print_result(_blocked_result(str(exc)))
+        return _exit_code_for("BLOCKED")
+
+    # Staleness check: latest bar must be recent enough to base a decision on.
+    # Applied to both DRY_RUN and PAPER_SUBMIT — stale cache must never
+    # produce a trading plan or a submission.
+    try:
+        now = now_utc_fn()
+    except Exception as exc:
+        _print_result(_blocked_result(f"now_utc_fn failed: {exc}"))
+        return _exit_code_for("BLOCKED")
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    age_seconds = (now - latest_ts).total_seconds()
+    if age_seconds < 0:
+        _print_result(_blocked_result(
+            "cached latest bar is in the future relative to now"
+        ))
+        return _exit_code_for("BLOCKED")
+    if age_seconds > _STALE_BAR_THRESHOLD_SECONDS:
+        # Blocker message names hours only — never raw prices, symbols, or
+        # credentials.
+        _print_result(_blocked_result(
+            f"cached latest bar is stale "
+            f"({int(age_seconds // 3600)}h old, "
+            f"threshold {_STALE_BAR_THRESHOLD_SECONDS // 3600}h)"
+        ))
         return _exit_code_for("BLOCKED")
 
     signal_config = _build_signal_config(args.interval)

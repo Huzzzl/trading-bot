@@ -126,6 +126,8 @@ def run_paper_trading_cycle(
     client_order_id: str | None = None,
     submit_enabled: bool = False,
 ) -> dict[str, Any]:
+    if not isinstance(submit_enabled, bool):
+        return _blocked("submit_enabled must be exactly bool")
     if not isinstance(bars, list) or not bars:
         return _blocked("bars must be a non-empty list")
     latest_close = getattr(bars[-1], "close", None)

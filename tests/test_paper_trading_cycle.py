@@ -560,6 +560,71 @@ class TestInputImmutability:
         assert cfg == original
 
 
+class TestStrictSubmitEnabledValidation:
+    @pytest.mark.parametrize("bad", [
+        "false", "true", "False", "True",
+        0, 1, -1, 0.0, 1.0,
+        None, [], {}, object(),
+    ])
+    def test_non_bool_submit_enabled_blocks(self, bad):
+        a = _mock_adapter()
+        r = run_paper_trading_cycle(
+            adapter=a, bars=_bars_bullish(), signal_config=_config(),
+            submit_enabled=bad,
+        )
+        assert r["result"] == "BLOCKED"
+        assert "submit_enabled" in r["blocker"]
+        assert a.submit_market_order.call_count == 0
+
+    @pytest.mark.parametrize("bad", [
+        "true", 1, "yes", object(), [True], {"x": True},
+    ])
+    def test_truthy_non_bool_never_enables_submission(self, bad):
+        a = _mock_adapter()
+        r = run_paper_trading_cycle(
+            adapter=a, bars=_bars_bullish(), signal_config=_config(),
+            submit_enabled=bad,
+        )
+        # Critical: a truthy non-bool must NOT be coerced to True.
+        assert a.submit_market_order.call_count == 0
+        assert r["action"] != "buy_submitted"
+
+    def test_non_bool_blocks_before_any_adapter_call(self):
+        a = _mock_adapter()
+        r = run_paper_trading_cycle(
+            adapter=a, bars=_bars_bullish(), signal_config=_config(),
+            submit_enabled="true",
+        )
+        assert r["result"] == "BLOCKED"
+        # No adapter method consulted at all — block happens before reads.
+        assert a.get_clock.call_count == 0
+        assert a.get_account.call_count == 0
+        assert a.get_positions.call_count == 0
+        assert a.get_open_orders.call_count == 0
+        assert a.submit_market_order.call_count == 0
+
+    def test_non_bool_blocks_before_signal_evaluation(self):
+        from unittest.mock import patch
+        a = _mock_adapter()
+        with patch("src.runtime.paper_trading_cycle.evaluate_signal") as m:
+            run_paper_trading_cycle(
+                adapter=a, bars=_bars_bullish(), signal_config=_config(),
+                submit_enabled=None,
+            )
+            assert m.call_count == 0
+
+    @pytest.mark.parametrize("bad", ["false", 0, None, object()])
+    def test_safety_flags_on_block(self, bad):
+        a = _mock_adapter()
+        r = run_paper_trading_cycle(
+            adapter=a, bars=_bars_bullish(), signal_config=_config(),
+            submit_enabled=bad,
+        )
+        # The cycle result dict has no safety flags itself; the assertion is
+        # simply that the cycle returned BLOCKED and never reached submission.
+        assert r["result"] == "BLOCKED"
+
+
 class TestDryRunDefault:
     def test_buy_dry_run_returns_buy_planned(self):
         a = _mock_adapter()
