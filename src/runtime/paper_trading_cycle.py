@@ -46,6 +46,7 @@ def _blocked(blocker: str, **extra) -> dict[str, Any]:
         "action": "none",
         "signal": None,
         "reason_codes": [],
+        "order_plan": None,
         "order": None,
         "blocker": blocker,
     }
@@ -59,17 +60,26 @@ def _error(blocker: str) -> dict[str, Any]:
         "action": "error",
         "signal": None,
         "reason_codes": [],
+        "order_plan": None,
         "order": None,
         "blocker": blocker,
     }
 
 
-def _signal_dict(signal_result, action: str, order: dict | None, result: str) -> dict[str, Any]:
+def _signal_dict(
+    signal_result,
+    action: str,
+    *,
+    order_plan: dict | None = None,
+    order: dict | None = None,
+    result: str = "PASS",
+) -> dict[str, Any]:
     return {
         "result": result,
         "action": action,
         "signal": signal_result.signal,
         "reason_codes": list(signal_result.reason_codes),
+        "order_plan": order_plan,
         "order": order,
         "blocker": None,
     }
@@ -114,7 +124,10 @@ def run_paper_trading_cycle(
     signal_config: SignalEngineConfig,
     max_position_fraction: float = 0.10,
     client_order_id: str | None = None,
+    submit_enabled: bool = False,
 ) -> dict[str, Any]:
+    if not isinstance(submit_enabled, bool):
+        return _blocked("submit_enabled must be exactly bool")
     if not isinstance(bars, list) or not bars:
         return _blocked("bars must be a non-empty list")
     latest_close = getattr(bars[-1], "close", None)
@@ -198,7 +211,7 @@ def run_paper_trading_cycle(
 
     # 7. act
     if sig in ("BLOCK", "HOLD"):
-        return _signal_dict(signal_result, action="none", order=None, result="PASS")
+        return _signal_dict(signal_result, action="none")
 
     if sig == "BUY":
         if not is_open:
@@ -215,13 +228,16 @@ def run_paper_trading_cycle(
         if qty < 1:
             return _blocked("calculated buy qty is below 1", signal=sig,
                             reason_codes=list(signal_result.reason_codes))
+        plan = {"symbol": _SYMBOL, "qty": qty, "side": "buy", "type": "market"}
+        if not submit_enabled:
+            return _signal_dict(signal_result, action="buy_planned", order_plan=plan)
         try:
             order = adapter.submit_market_order(
                 _SYMBOL, qty, "buy", client_order_id=client_order_id,
             )
         except AlpacaPaperAdapterError as exc:
             return _error(f"buy submission failed: {exc}")
-        return _signal_dict(signal_result, action="buy_submitted", order=order, result="PASS")
+        return _signal_dict(signal_result, action="buy_submitted", order_plan=plan, order=order)
 
     if sig == "SELL":
         if not has_position or held_qty is None or held_qty <= 0:
@@ -230,13 +246,16 @@ def run_paper_trading_cycle(
         if has_open_order:
             return _blocked("SPY open order already present", signal=sig,
                             reason_codes=list(signal_result.reason_codes))
+        plan = {"symbol": _SYMBOL, "qty": held_qty, "side": "sell", "type": "market"}
+        if not submit_enabled:
+            return _signal_dict(signal_result, action="sell_planned", order_plan=plan)
         try:
             order = adapter.submit_market_order(
                 _SYMBOL, held_qty, "sell", client_order_id=client_order_id,
             )
         except AlpacaPaperAdapterError as exc:
             return _error(f"sell submission failed: {exc}")
-        return _signal_dict(signal_result, action="sell_submitted", order=order, result="PASS")
+        return _signal_dict(signal_result, action="sell_submitted", order_plan=plan, order=order)
 
     return _blocked(f"unexpected signal: {sig}", signal=sig,
                     reason_codes=list(signal_result.reason_codes))

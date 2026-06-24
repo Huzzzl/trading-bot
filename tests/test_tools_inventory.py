@@ -85,6 +85,8 @@ ACTIVE_RUNTIME_CANDIDATE_TOOLS: tuple[str, ...] = (
     "live_trading_approval",
     # --- Reclassified from ARCHIVE_MANUAL after PR R4 dependency scan ---
     "paper_status",               # imported by 5 active FREEZE_DEFERRED tools
+    # --- Added in PR S52 ---
+    "run_paper_cycle",            # runnable Alpaca paper cycle CLI
 )
 
 # May be needed by automated runtime; keep in place.
@@ -292,13 +294,13 @@ class TestToolsInventory:
         assert len(ACTIVE_RESEARCH_TOOLS) == 3
 
     def test_active_runtime_candidate_tools_count(self) -> None:
-        assert len(ACTIVE_RUNTIME_CANDIDATE_TOOLS) == 16
+        assert len(ACTIVE_RUNTIME_CANDIDATE_TOOLS) == 17
 
     def test_preserve_runtime_support_tools_count(self) -> None:
         assert len(PRESERVE_RUNTIME_SUPPORT_TOOLS) == 1
 
     def test_active_tools_count(self) -> None:
-        assert len(ACTIVE_TOOLS) == 20
+        assert len(ACTIVE_TOOLS) == 21
 
     def test_archived_tools_count(self) -> None:
         assert len(ARCHIVED_TOOLS) == 20

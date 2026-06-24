@@ -36,11 +36,11 @@ Rules:
 |---|---|
 | Repository | `Huzzzl/trading-bot` |
 | Current phase | Pure offline / paper-preparation |
-| Latest completed milestone | S50 |
-| Latest merged PR | #254 |
-| Current main SHA | `e65815a` |
-| Full-suite test count | 8,257 passed |
-| Paper trading | **Allowed via AlpacaPaperAdapter (S50) + run_paper_trading_cycle (S51)** |
+| Latest completed milestone | S51 |
+| Latest merged PR | #255 |
+| Current main SHA | `8e74473` |
+| Full-suite test count | 8,341 passed |
+| Paper trading | **Allowed via AlpacaPaperAdapter (S50) + run_paper_trading_cycle (S51) + `python -m src.tools.run_paper_cycle --submit-paper` (S52)** |
 | Live trading | **Blocked** |
 | Broker connection | Not implemented |
 | Credentials / network / runtime / order-submission | Not implemented |
@@ -76,6 +76,7 @@ The following components are implemented and tested:
 - S49 pure offline broker observation workflow coordinator
 - S50 minimal Alpaca paper trading adapter (SPY only, long only, market only)
 - S51 minimal automated paper trading cycle (clock/account/positions/open_orders -> signal -> at most one order)
+- S52 runnable Alpaca paper cycle CLI (`python -m src.tools.run_paper_cycle`; dry-run by default; `--submit-paper` is the only path that submits)
 
 ---
 
