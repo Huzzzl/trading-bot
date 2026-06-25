@@ -203,6 +203,11 @@ def run_fetch(
     pairs = [(symbol, interval) for symbol in symbols for interval in intervals]
     entries: list[dict[str, Any]] = []
     blocked_entries: list[dict[str, Any]] = []
+    # Tracks whether the underlying Yahoo provider was invoked at least
+    # once across all pairs. True for any pair where the cache was
+    # missing or force-refresh displaced it — regardless of whether the
+    # provider call ultimately succeeded.
+    network_attempted = False
 
     for idx, (symbol, interval) in enumerate(pairs):
         start, end = _default_date_range(interval)
@@ -224,6 +229,14 @@ def run_fetch(
                 backup_path.unlink()
             cache_path.rename(backup_path)
             file_existed = False  # cache key is now absent for the fetch
+
+        # The provider will hit the network whenever the cache key is
+        # absent. For a raw injected provider (no cache path detected)
+        # every call also reaches the network. Record the attempt BEFORE
+        # the call so the flag survives provider exceptions.
+        pair_network_attempted = (cache_path is None) or (not file_existed)
+        if pair_network_attempted:
+            network_attempted = True
 
         df, error = _fetch_one_with_retry(
             provider, symbol, start, end, interval,
@@ -288,14 +301,17 @@ def run_fetch(
     # -----------------------------------------------------------------------
     # Overall result
     # -----------------------------------------------------------------------
-    # files_written counts successful entries (FETCHED + CACHE_HIT) — a
-    # CACHE_HIT did not write a new file but did produce a usable cache
-    # row, consistent with the previous "OK" semantic.
-    success_statuses = {"FETCHED", "CACHE_HIT"}
-    files_written = sum(1 for e in entries if e.get("status") in success_statuses)
+    # files_written counts only cache files newly written or replaced
+    # successfully on this run. CACHE_HIT did NOT write a file. A
+    # restored backup (failed force-refresh) also counts as zero
+    # writes — the previous good file is what is on disk.
     fetched_count = sum(1 for e in entries if e.get("status") == "FETCHED")
     cache_hit_count = sum(1 for e in entries if e.get("status") == "CACHE_HIT")
-    network_calls_made = fetched_count > 0
+    files_written = fetched_count
+    # Reflect whether the underlying Yahoo provider was actually invoked
+    # at least once — true for fresh fetches AND for force-refreshes or
+    # missing-cache fetches that ultimately failed.
+    network_calls_made = network_attempted
     overall = (
         "PASS"
         if (not blocked_entries and availability_check_result == "PASS")

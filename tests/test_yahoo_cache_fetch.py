@@ -775,6 +775,222 @@ class TestForceRefreshAndCacheHitReporting:
         assert code == 1
 
 
+class TestNetworkAttemptedReporting:
+    """network_calls_made must track whether the inner provider was
+    actually invoked, not whether final entries succeeded."""
+
+    def _failing_cached(self, tmp_path):
+        from src.data.base import BaseDataProvider
+        from src.data.cached_provider import CachedMarketDataProvider
+        inner = MagicMock(spec=BaseDataProvider)
+        inner.fetch_bars.side_effect = RuntimeError("yahoo down")
+        return CachedMarketDataProvider(inner, cache_dir=tmp_path), inner
+
+    def _passing_cached(self, tmp_path, df):
+        from src.data.base import BaseDataProvider
+        from src.data.cached_provider import CachedMarketDataProvider
+        inner = MagicMock(spec=BaseDataProvider)
+        inner.fetch_bars.return_value = df.copy()
+        return CachedMarketDataProvider(inner, cache_dir=tmp_path), inner
+
+    def test_failed_fresh_fetch_reports_network_attempt(self, tmp_path: pathlib.Path) -> None:
+        # No cache file exists; provider raises. The fetch attempt
+        # itself happened, so network_calls_made must be True even
+        # though the final entry is BLOCKED.
+        cached, inner = self._failing_cached(tmp_path)
+        r = run_fetch(
+            tmp_path, symbols=["SPY"], intervals=["1d"],
+            allow_network=True, _provider=cached,
+            _inter_fetch_delay=0.0, _retry_delays=(),
+        )
+        assert r["entries"][0]["status"] == "BLOCKED"
+        assert r["network_calls_made"] is True
+        assert r["fetched_count"] == 0
+        assert inner.fetch_bars.call_count >= 1
+
+    def test_failed_force_refresh_reports_network_attempt(self, tmp_path: pathlib.Path) -> None:
+        # Pre-fill cache, then force-refresh with a failing provider.
+        # The previous cache is preserved, but a network attempt was
+        # made, so network_calls_made=True.
+        df = _make_test_df(5)
+        cached, _ = self._passing_cached(tmp_path, df)
+        run_fetch(
+            tmp_path, symbols=["SPY"], intervals=["1d"],
+            allow_network=True, _provider=cached,
+            _inter_fetch_delay=0.0, _retry_delays=(),
+        )
+
+        failing_cached, failing_inner = self._failing_cached(tmp_path)
+        r = run_fetch(
+            tmp_path, symbols=["SPY"], intervals=["1d"],
+            allow_network=True, force_refresh=True,
+            _provider=failing_cached,
+            _inter_fetch_delay=0.0, _retry_delays=(),
+        )
+        assert r["entries"][0]["status"] == "BLOCKED"
+        assert r["network_calls_made"] is True
+        assert r["fetched_count"] == 0
+        assert failing_inner.fetch_bars.call_count >= 1
+
+    def test_pure_cache_hit_reports_no_network(self, tmp_path: pathlib.Path) -> None:
+        df = _make_test_df(5)
+        cached, _ = self._passing_cached(tmp_path, df)
+        # Fill the cache.
+        run_fetch(
+            tmp_path, symbols=["SPY"], intervals=["1d"],
+            allow_network=True, _provider=cached,
+            _inter_fetch_delay=0.0, _retry_delays=(),
+        )
+        # Second run: cache hit, no provider call.
+        cached2, inner2 = self._passing_cached(tmp_path, df)
+        r = run_fetch(
+            tmp_path, symbols=["SPY"], intervals=["1d"],
+            allow_network=True, _provider=cached2,
+            _inter_fetch_delay=0.0, _retry_delays=(),
+        )
+        assert r["entries"][0]["status"] == "CACHE_HIT"
+        assert r["network_calls_made"] is False
+        assert inner2.fetch_bars.call_count == 0
+
+    def test_blocked_no_network_path_reports_no_network(self, tmp_path: pathlib.Path) -> None:
+        r = run_fetch(tmp_path, allow_network=False)
+        assert r["result"] == "BLOCKED"
+        assert r["network_calls_made"] is False
+
+    def test_mixed_cache_hit_and_failed_fetch_reports_network_attempt(
+        self, tmp_path: pathlib.Path,
+    ) -> None:
+        # Pre-fill SPY/1d only.
+        df = _make_test_df(5)
+        cached, _ = self._passing_cached(tmp_path, df)
+        run_fetch(
+            tmp_path, symbols=["SPY"], intervals=["1d"],
+            allow_network=True, _provider=cached,
+            _inter_fetch_delay=0.0, _retry_delays=(),
+        )
+
+        # Now request SPY/1d (cache hit) + QQQ/1d (fresh, will fail).
+        from src.data.base import BaseDataProvider
+        from src.data.cached_provider import CachedMarketDataProvider
+        inner2 = MagicMock(spec=BaseDataProvider)
+        def _side_effect(symbol, start, end, interval):
+            if symbol == "SPY":
+                return df.copy()
+            raise RuntimeError("QQQ unavailable")
+        inner2.fetch_bars.side_effect = _side_effect
+        cached2 = CachedMarketDataProvider(inner2, cache_dir=tmp_path)
+
+        r = run_fetch(
+            tmp_path, symbols=["SPY", "QQQ"], intervals=["1d"],
+            allow_network=True, _provider=cached2,
+            _inter_fetch_delay=0.0, _retry_delays=(),
+        )
+        by_symbol = {e["symbol"]: e for e in r["entries"]}
+        assert by_symbol["SPY"]["status"] == "CACHE_HIT"
+        assert by_symbol["QQQ"]["status"] == "BLOCKED"
+        # QQQ network call was attempted, so network_calls_made=True
+        # even though the QQQ entry is BLOCKED.
+        assert r["network_calls_made"] is True
+
+
+class TestFilesWrittenSemantics:
+    """files_written must count only newly written/replaced files."""
+
+    def _passing_cached(self, tmp_path, df):
+        from src.data.base import BaseDataProvider
+        from src.data.cached_provider import CachedMarketDataProvider
+        inner = MagicMock(spec=BaseDataProvider)
+        inner.fetch_bars.return_value = df.copy()
+        return CachedMarketDataProvider(inner, cache_dir=tmp_path), inner
+
+    def _failing_cached(self, tmp_path):
+        from src.data.base import BaseDataProvider
+        from src.data.cached_provider import CachedMarketDataProvider
+        inner = MagicMock(spec=BaseDataProvider)
+        inner.fetch_bars.side_effect = RuntimeError("down")
+        return CachedMarketDataProvider(inner, cache_dir=tmp_path), inner
+
+    def test_pure_cache_hit_files_written_zero(self, tmp_path: pathlib.Path) -> None:
+        df = _make_test_df(5)
+        cached, _ = self._passing_cached(tmp_path, df)
+        run_fetch(
+            tmp_path, symbols=["SPY"], intervals=["1d"],
+            allow_network=True, _provider=cached,
+            _inter_fetch_delay=0.0, _retry_delays=(),
+        )
+        # Second run is a pure cache hit.
+        cached2, _ = self._passing_cached(tmp_path, df)
+        r = run_fetch(
+            tmp_path, symbols=["SPY"], intervals=["1d"],
+            allow_network=True, _provider=cached2,
+            _inter_fetch_delay=0.0, _retry_delays=(),
+        )
+        assert r["entries"][0]["status"] == "CACHE_HIT"
+        assert r["files_written"] == 0
+        assert r["cache_hit_count"] == 1
+        assert r["fetched_count"] == 0
+
+    def test_one_successful_fetch_files_written_one(self, tmp_path: pathlib.Path) -> None:
+        df = _make_test_df(5)
+        cached, _ = self._passing_cached(tmp_path, df)
+        r = run_fetch(
+            tmp_path, symbols=["SPY"], intervals=["1d"],
+            allow_network=True, _provider=cached,
+            _inter_fetch_delay=0.0, _retry_delays=(),
+        )
+        assert r["entries"][0]["status"] == "FETCHED"
+        assert r["files_written"] == 1
+        assert r["fetched_count"] == 1
+        assert r["cache_hit_count"] == 0
+
+    def test_mixed_cache_hit_and_fetch_files_written_one(self, tmp_path: pathlib.Path) -> None:
+        # Pre-fill SPY only.
+        df = _make_test_df(5)
+        cached, _ = self._passing_cached(tmp_path, df)
+        run_fetch(
+            tmp_path, symbols=["SPY"], intervals=["1d"],
+            allow_network=True, _provider=cached,
+            _inter_fetch_delay=0.0, _retry_delays=(),
+        )
+        # Now SPY hits cache and QQQ is fresh.
+        from src.data.base import BaseDataProvider
+        from src.data.cached_provider import CachedMarketDataProvider
+        inner2 = MagicMock(spec=BaseDataProvider)
+        inner2.fetch_bars.return_value = df.copy()
+        cached2 = CachedMarketDataProvider(inner2, cache_dir=tmp_path)
+        r = run_fetch(
+            tmp_path, symbols=["SPY", "QQQ"], intervals=["1d"],
+            allow_network=True, _provider=cached2,
+            _inter_fetch_delay=0.0, _retry_delays=(),
+        )
+        assert r["files_written"] == 1
+        assert r["fetched_count"] == 1
+        assert r["cache_hit_count"] == 1
+
+    def test_failed_force_refresh_files_written_zero(self, tmp_path: pathlib.Path) -> None:
+        # Fill cache, then force-refresh with a failing provider.
+        df = _make_test_df(5)
+        cached, _ = self._passing_cached(tmp_path, df)
+        run_fetch(
+            tmp_path, symbols=["SPY"], intervals=["1d"],
+            allow_network=True, _provider=cached,
+            _inter_fetch_delay=0.0, _retry_delays=(),
+        )
+
+        failing_cached, _ = self._failing_cached(tmp_path)
+        r = run_fetch(
+            tmp_path, symbols=["SPY"], intervals=["1d"],
+            allow_network=True, force_refresh=True,
+            _provider=failing_cached,
+            _inter_fetch_delay=0.0, _retry_delays=(),
+        )
+        assert r["entries"][0]["status"] == "BLOCKED"
+        # Force-refresh failed and the backup was restored — no file
+        # was newly written or replaced.
+        assert r["files_written"] == 0
+        assert r["fetched_count"] == 0
+
+
 class TestSourceScan:
     """AST-based safety scan of the tool source file."""
 
