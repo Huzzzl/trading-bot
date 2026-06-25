@@ -99,6 +99,22 @@ def _fetch_one_with_retry(
     return None, last_error
 
 
+def _detect_cache_path(provider, symbol: str, start: str, end: str, interval: str):
+    """Return the cache file Path used by *provider* for this key, or None.
+
+    Probes only the public-ish ``_cache_path`` helper on the project's
+    ``CachedMarketDataProvider``. Raw injected providers return None and
+    are treated as always-fetched.
+    """
+    try:
+        from src.data.cached_provider import CachedMarketDataProvider
+    except ImportError:
+        return None
+    if isinstance(provider, CachedMarketDataProvider):
+        return provider._cache_path(symbol, start, end, interval)
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Core function
 # ---------------------------------------------------------------------------
@@ -110,6 +126,7 @@ def run_fetch(
     intervals: list[str] | None = None,
     *,
     allow_network: bool = False,
+    force_refresh: bool = False,
     _provider=None,                          # injectable for tests (BaseDataProvider)
     _inter_fetch_delay: float = 1.0,         # seconds between fetches (0 in tests)
     _retry_delays: tuple[float, ...] = (2.0, 4.0, 8.0),  # backoff (all 0 in tests)
@@ -161,6 +178,9 @@ def run_fetch(
             "intervals_requested": list(intervals),
             "entries": [],
             "files_written": 0,
+            "fetched_count": 0,
+            "cache_hit_count": 0,
+            "force_refresh": bool(force_refresh),
             "availability_check_result": "SKIPPED",
             "network_calls_made": False,
             "broker_calls_made": False,
@@ -183,9 +203,40 @@ def run_fetch(
     pairs = [(symbol, interval) for symbol in symbols for interval in intervals]
     entries: list[dict[str, Any]] = []
     blocked_entries: list[dict[str, Any]] = []
+    # Tracks whether the underlying Yahoo provider was invoked at least
+    # once across all pairs. True for any pair where the cache was
+    # missing or force-refresh displaced it — regardless of whether the
+    # provider call ultimately succeeded.
+    network_attempted = False
 
     for idx, (symbol, interval) in enumerate(pairs):
         start, end = _default_date_range(interval)
+
+        # Probe whether this exact cache key already exists. Only the
+        # CachedMarketDataProvider exposes the path; raw injected
+        # providers always count as fetched.
+        cache_path = _detect_cache_path(provider, symbol, start, end, interval)
+        file_existed = cache_path is not None and cache_path.exists()
+
+        # If the operator asked for a forced refresh, atomically displace
+        # ONLY this exact file so the wrapped provider sees a cache miss
+        # and issues a real Yahoo request. We rename to a sibling .bak
+        # so a fetch failure can restore the previous good data.
+        backup_path = None
+        if force_refresh and file_existed:
+            backup_path = cache_path.with_suffix(cache_path.suffix + ".bak")
+            if backup_path.exists():
+                backup_path.unlink()
+            cache_path.rename(backup_path)
+            file_existed = False  # cache key is now absent for the fetch
+
+        # The provider will hit the network whenever the cache key is
+        # absent. For a raw injected provider (no cache path detected)
+        # every call also reaches the network. Record the attempt BEFORE
+        # the call so the flag survives provider exceptions.
+        pair_network_attempted = (cache_path is None) or (not file_existed)
+        if pair_network_attempted:
+            network_attempted = True
 
         df, error = _fetch_one_with_retry(
             provider, symbol, start, end, interval,
@@ -193,16 +244,35 @@ def run_fetch(
         )
 
         if df is not None and len(df) > 0:
+            # Successful fetch (or successful cache hit). Discard the
+            # backup — the freshly-written file replaces it atomically.
+            if backup_path is not None and backup_path.exists():
+                backup_path.unlink()
+            if force_refresh:
+                status = "FETCHED"
+            elif cache_path is None:
+                # Raw provider — no cache probe possible; treat as fetched.
+                status = "FETCHED"
+            elif file_existed:
+                status = "CACHE_HIT"
+            else:
+                status = "FETCHED"
             entry: dict[str, Any] = {
                 "symbol": symbol,
                 "interval": interval,
-                "status": "OK",
+                "status": status,
                 "rows": int(len(df)),
                 "inferred_start": df.index[0].date().isoformat(),
                 "inferred_end": df.index[-1].date().isoformat(),
             }
             entries.append(entry)
         else:
+            # Fetch failed. Restore the backup if we had displaced one
+            # so the previous good cache is preserved.
+            if backup_path is not None and backup_path.exists():
+                if cache_path is not None and cache_path.exists():
+                    cache_path.unlink()
+                backup_path.rename(cache_path)
             reason = error if error else "empty dataframe returned"
             blocked_entry: dict[str, Any] = {
                 "symbol": symbol,
@@ -231,7 +301,17 @@ def run_fetch(
     # -----------------------------------------------------------------------
     # Overall result
     # -----------------------------------------------------------------------
-    files_written = sum(1 for e in entries if e.get("status") == "OK")
+    # files_written counts only cache files newly written or replaced
+    # successfully on this run. CACHE_HIT did NOT write a file. A
+    # restored backup (failed force-refresh) also counts as zero
+    # writes — the previous good file is what is on disk.
+    fetched_count = sum(1 for e in entries if e.get("status") == "FETCHED")
+    cache_hit_count = sum(1 for e in entries if e.get("status") == "CACHE_HIT")
+    files_written = fetched_count
+    # Reflect whether the underlying Yahoo provider was actually invoked
+    # at least once — true for fresh fetches AND for force-refreshes or
+    # missing-cache fetches that ultimately failed.
+    network_calls_made = network_attempted
     overall = (
         "PASS"
         if (not blocked_entries and availability_check_result == "PASS")
@@ -246,8 +326,11 @@ def run_fetch(
         "intervals_requested": list(intervals),
         "entries": entries,
         "files_written": files_written,
+        "fetched_count": fetched_count,
+        "cache_hit_count": cache_hit_count,
+        "force_refresh": bool(force_refresh),
         "availability_check_result": availability_check_result,
-        "network_calls_made": True,
+        "network_calls_made": network_calls_made,
         "broker_calls_made": False,
         "credentials_read": False,
         "order_action_requested": False,
@@ -280,14 +363,24 @@ def _print_summary(result: dict[str, Any]) -> None:
     print(f"  Fetched at    : {result['fetched_at']}")
     print()
 
-    ok_entries = [e for e in result["entries"] if e.get("status") == "OK"]
+    fetched_entries = [e for e in result["entries"] if e.get("status") == "FETCHED"]
+    cache_hit_entries = [e for e in result["entries"] if e.get("status") == "CACHE_HIT"]
     blocked = [e for e in result["entries"] if e.get("status") == "BLOCKED"]
 
-    if ok_entries:
-        print("  Fetched successfully:")
-        for e in ok_entries:
+    if fetched_entries:
+        print("  Fetched from Yahoo:")
+        for e in fetched_entries:
             print(
-                f"    OK    {e['symbol']}/{e['interval']}  "
+                f"    FETCHED   {e['symbol']}/{e['interval']}  "
+                f"rows={e['rows']}  "
+                f"{e['inferred_start']} → {e['inferred_end']}"
+            )
+
+    if cache_hit_entries:
+        print("  Served from local cache (no network call):")
+        for e in cache_hit_entries:
+            print(
+                f"    CACHE_HIT {e['symbol']}/{e['interval']}  "
                 f"rows={e['rows']}  "
                 f"{e['inferred_start']} → {e['inferred_end']}"
             )
@@ -295,10 +388,13 @@ def _print_summary(result: dict[str, Any]) -> None:
     if blocked:
         print("  Failed:")
         for e in blocked:
-            print(f"    BLOCKED  {e['symbol']}/{e['interval']}  {e.get('reason', '')}")
+            print(f"    BLOCKED   {e['symbol']}/{e['interval']}  {e.get('reason', '')}")
 
     print()
     print(f"  files_written            : {result['files_written']}")
+    print(f"  fetched_count            : {result.get('fetched_count', 0)}")
+    print(f"  cache_hit_count          : {result.get('cache_hit_count', 0)}")
+    print(f"  force_refresh            : {result.get('force_refresh', False)}")
     print(f"  availability_check_result: {result['availability_check_result']}")
     print(f"  network_calls_made       : {result['network_calls_made']}")
     print(f"  broker_calls_made        : {result['broker_calls_made']}")
@@ -325,6 +421,17 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="Enable network fetch (default: BLOCKED)",
+    )
+    parser.add_argument(
+        "--force-refresh",
+        action="store_true",
+        default=False,
+        help=(
+            "Atomically replace the cache file for each requested "
+            "(symbol, start, end, interval) key before fetching, so an "
+            "existing cache hit is bypassed and Yahoo is called. "
+            "Unrelated cache files are never touched."
+        ),
     )
     parser.add_argument(
         "--symbols",
@@ -361,6 +468,7 @@ def main(argv: list[str] | None = None) -> int:
         symbols=args.symbols,
         intervals=args.intervals,
         allow_network=args.allow_network,
+        force_refresh=args.force_refresh,
     )
 
     _print_summary(result)
