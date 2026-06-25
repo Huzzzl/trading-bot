@@ -22,7 +22,7 @@ import json
 import math
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -37,12 +37,122 @@ _SYMBOL = "SPY"
 _DEFAULT_CACHE_DIR = Path("data/cache")
 _INTERVAL_TO_TIMEFRAME = {"60m": "1h"}
 _REQUIRED_COLS = ("open", "high", "low", "close", "volume")
-# A 60m bar older than this is considered stale for trading-decision purposes.
-_STALE_BAR_THRESHOLD_SECONDS = 4 * 3600
+
+# Session-aware freshness thresholds.
+#   - Open market: a 60m bar more than 2 hours old is stale.
+#   - Closed market with no clock.next_open: conservative wall-clock fallback.
+#   - Closed market with clock.next_open: any bar within 96 hours before
+#     next_open is considered to belong to the most recent completed
+#     session. 96h covers regular overnight (~17.5h), weekend (~65.5h),
+#     and most US-equity holiday gaps with a comfortable buffer.
+_OPEN_MARKET_MAX_AGE = timedelta(hours=2)
+# 120h covers regular overnight (~17h), weekend (~65h), and US holiday gaps
+# extending across a weekend (e.g. Thu close → Tue open ≈ 115h for July 4
+# falling on Friday).
+_CLOSED_NO_NEXT_OPEN_MAX_AGE = timedelta(hours=120)
+_CLOSED_PRE_NEXT_OPEN_WINDOW = timedelta(hours=120)
 
 
 def _default_now_utc() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _parse_clock_dt(value: Any) -> datetime | None:
+    """Parse a clock timestamp value into a tz-aware datetime.
+
+    Returns None on any failure or naive value. Accepts ISO-8601 strings
+    (with ``Z`` suffix or ``±HH:MM`` offset) or datetime instances.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo is not None else None
+    if not isinstance(value, str):
+        return None
+    s = value.strip()
+    if not s:
+        return None
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(s)
+    except (TypeError, ValueError):
+        return None
+    return dt if dt.tzinfo is not None else None
+
+
+def _fmt_age(delta: timedelta) -> str:
+    """Format a timedelta as ``"Hh Mm"`` (clamped to non-negative)."""
+    total = max(0, int(delta.total_seconds()))
+    hours = total // 3600
+    minutes = (total % 3600) // 60
+    return f"{hours}h {minutes}m"
+
+
+def validate_bar_freshness(
+    *,
+    latest_ts: datetime,
+    now: datetime,
+    clock: Any,
+    interval: str = "60m",
+) -> str | None:
+    """Return None when the latest bar is fresh enough; else a blocker string.
+
+    Session-aware: while the market is open requires a 60m bar no more
+    than 2h old; while closed, accepts any bar belonging to the most
+    recent completed regular trading session (overnight, weekend,
+    holiday gaps included) using ``clock["next_open"]`` as the anchor.
+    """
+    if latest_ts.tzinfo is None or now.tzinfo is None:
+        return "freshness check requires timezone-aware timestamps"
+    if latest_ts > now:
+        return "cached latest bar is in the future relative to now"
+    if not isinstance(clock, dict):
+        return "clock is not a dict"
+    is_open = clock.get("is_open")
+    if not isinstance(is_open, bool):
+        return "clock is_open must be exactly bool"
+
+    next_open_raw = clock.get("next_open")
+    next_close_raw = clock.get("next_close")
+
+    next_open_dt = _parse_clock_dt(next_open_raw)
+    if next_open_raw is not None and next_open_dt is None:
+        return "clock next_open is malformed"
+    next_close_dt = _parse_clock_dt(next_close_raw)
+    if next_close_raw is not None and next_close_dt is None:
+        return "clock next_close is malformed"
+
+    age = now - latest_ts
+
+    if is_open:
+        if age > _OPEN_MARKET_MAX_AGE:
+            return (
+                f"cached latest bar is stale "
+                f"({_fmt_age(age)} old, "
+                f"threshold {_fmt_age(_OPEN_MARKET_MAX_AGE)} while market is open)"
+            )
+        return None
+
+    # Market closed.
+    if next_open_dt is None:
+        if age > _CLOSED_NO_NEXT_OPEN_MAX_AGE:
+            return (
+                f"cached latest bar is stale "
+                f"({_fmt_age(age)} old, threshold "
+                f"{_fmt_age(_CLOSED_NO_NEXT_OPEN_MAX_AGE)} "
+                f"while market is closed and next_open is unknown)"
+            )
+        return None
+
+    earliest_allowed = next_open_dt - _CLOSED_PRE_NEXT_OPEN_WINDOW
+    if latest_ts < earliest_allowed:
+        return (
+            f"cached latest bar is stale "
+            f"({_fmt_age(age)} old, "
+            f"predates the most recent completed session before next_open)"
+        )
+    return None
 
 
 class _CliError(Exception):
@@ -265,6 +375,23 @@ def main(argv: list[str] | None = None, *, now_utc_fn=_default_now_utc) -> int:
         _print_result(err)
         return _exit_code_for("ERROR")
 
+    # Fetch the Alpaca clock once so freshness validation can use real
+    # session state (next_open/next_close) instead of a wall-clock fallback.
+    try:
+        clock = adapter.get_clock()
+    except AlpacaPaperAdapterError as exc:
+        err = {
+            "result": "ERROR",
+            "action": "error",
+            "signal": None,
+            "reason_codes": [],
+            "order_plan": None,
+            "order": None,
+            "blocker": f"clock read failed: {exc}",
+        }
+        _print_result(err)
+        return _exit_code_for("ERROR")
+
     cache_dir = Path(args.cache_dir)
     try:
         bars, latest_ts = _load_cached_bars(cache_dir, _SYMBOL, args.interval)
@@ -272,9 +399,7 @@ def main(argv: list[str] | None = None, *, now_utc_fn=_default_now_utc) -> int:
         _print_result(_blocked_result(str(exc)))
         return _exit_code_for("BLOCKED")
 
-    # Staleness check: latest bar must be recent enough to base a decision on.
-    # Applied to both DRY_RUN and PAPER_SUBMIT — stale cache must never
-    # produce a trading plan or a submission.
+    # Session-aware freshness: applied to both DRY_RUN and PAPER_SUBMIT.
     try:
         now = now_utc_fn()
     except Exception as exc:
@@ -282,20 +407,11 @@ def main(argv: list[str] | None = None, *, now_utc_fn=_default_now_utc) -> int:
         return _exit_code_for("BLOCKED")
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
-    age_seconds = (now - latest_ts).total_seconds()
-    if age_seconds < 0:
-        _print_result(_blocked_result(
-            "cached latest bar is in the future relative to now"
-        ))
-        return _exit_code_for("BLOCKED")
-    if age_seconds > _STALE_BAR_THRESHOLD_SECONDS:
-        # Blocker message names hours only — never raw prices, symbols, or
-        # credentials.
-        _print_result(_blocked_result(
-            f"cached latest bar is stale "
-            f"({int(age_seconds // 3600)}h old, "
-            f"threshold {_STALE_BAR_THRESHOLD_SECONDS // 3600}h)"
-        ))
+    freshness_blocker = validate_bar_freshness(
+        latest_ts=latest_ts, now=now, clock=clock, interval=args.interval,
+    )
+    if freshness_blocker is not None:
+        _print_result(_blocked_result(freshness_blocker))
         return _exit_code_for("BLOCKED")
 
     signal_config = _build_signal_config(args.interval)
