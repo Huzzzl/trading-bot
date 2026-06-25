@@ -103,51 +103,116 @@ def _fmt_age(delta: timedelta) -> str:
     return f"{hours}h {minutes}m"
 
 
+# Substrings whose presence in a sanitized error message will cause it
+# to be redacted entirely. Calendar exceptions don't normally include
+# secrets, but the redaction is defense-in-depth so that any future
+# upstream change cannot leak credentials, prices, or account data
+# through the freshness blocker.
+_REDACT_SUBSTRINGS = (
+    "api_key", "api-key", "apikey",
+    "secret", "token", "password", "passwd",
+    "authorization", "bearer ",
+    "account_id", "account-id", "account_number",
+    "/home/", "/root/", "/users/",
+)
+_MAX_SAFE_EXC_MESSAGE_LEN = 200
+
+
+def _sanitize_exc_message(exc: BaseException) -> str:
+    """Return a short, credential-safe representation of an exception.
+
+    Truncated to a fixed length; entirely redacted when any forbidden
+    substring is present.
+    """
+    raw = str(exc)
+    short = raw[:_MAX_SAFE_EXC_MESSAGE_LEN]
+    lower = short.lower()
+    for sub in _REDACT_SUBSTRINGS:
+        if sub in lower:
+            return "<redacted>"
+    return short
+
+
 def _most_recent_completed_nyse_session(
     now: datetime,
-) -> tuple[datetime, datetime] | None:
-    """Return (market_open, market_close) of the most recent NYSE session
-    whose ``market_close`` is at or before ``now``.
+) -> tuple[tuple[datetime, datetime] | None, str | None]:
+    """Resolve the most recent completed NYSE session.
 
-    Returns ``None`` if the exchange schedule cannot be determined
-    safely (calendar import fails, schedule query raises, no completed
-    session in the lookback window). All returned datetimes are
-    timezone-aware in UTC.
+    Returns ``((open_dt, close_dt), None)`` on success or
+    ``(None, error_reason)`` on failure. The error_reason is a short,
+    credential-safe string distinguishing:
+
+      * missing pandas_market_calendars dependency
+      * NYSE calendar lookup failure
+      * schedule query failure
+      * no completed session found in the lookback window
+      * malformed schedule (missing columns / invalid timestamps)
     """
     try:
         import pandas_market_calendars as mcal
         import pandas as pd
-    except ImportError:
-        return None
+    except ImportError as exc:
+        return None, (
+            "pandas_market_calendars dependency is not installed "
+            f"({exc.__class__.__name__})"
+        )
+
     try:
         nyse = mcal.get_calendar("NYSE")
+    except Exception as exc:
+        return None, (
+            f"NYSE calendar lookup failed: "
+            f"{exc.__class__.__name__}: {_sanitize_exc_message(exc)}"
+        )
+
+    try:
         start = (now - timedelta(days=_CALENDAR_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
         end = (now + timedelta(days=1)).strftime("%Y-%m-%d")
         sched = nyse.schedule(start_date=start, end_date=end)
-    except Exception:
-        return None
+    except Exception as exc:
+        return None, (
+            f"NYSE schedule query failed: "
+            f"{exc.__class__.__name__}: {_sanitize_exc_message(exc)}"
+        )
+
     if sched is None or len(sched) == 0:
-        return None
-    now_ts = pd.Timestamp(now)
-    if now_ts.tz is None:
-        now_ts = now_ts.tz_localize("UTC")
-    else:
-        now_ts = now_ts.tz_convert("UTC")
-    completed = sched[sched["market_close"] <= now_ts]
-    if completed.empty:
-        return None
-    last = completed.iloc[-1]
-    open_dt = last["market_open"].to_pydatetime()
-    close_dt = last["market_close"].to_pydatetime()
-    if open_dt.tzinfo is None:
-        open_dt = open_dt.replace(tzinfo=timezone.utc)
-    else:
-        open_dt = open_dt.astimezone(timezone.utc)
-    if close_dt.tzinfo is None:
-        close_dt = close_dt.replace(tzinfo=timezone.utc)
-    else:
-        close_dt = close_dt.astimezone(timezone.utc)
-    return open_dt, close_dt
+        return None, (
+            f"no NYSE sessions found in {_CALENDAR_LOOKBACK_DAYS}-day "
+            f"lookback window"
+        )
+
+    if "market_open" not in sched.columns or "market_close" not in sched.columns:
+        return None, (
+            "NYSE schedule is missing required market_open/market_close columns"
+        )
+
+    try:
+        now_ts = pd.Timestamp(now)
+        if now_ts.tz is None:
+            now_ts = now_ts.tz_localize("UTC")
+        else:
+            now_ts = now_ts.tz_convert("UTC")
+        completed = sched[sched["market_close"] <= now_ts]
+        if completed.empty:
+            return None, "no completed NYSE session found before now"
+        last = completed.iloc[-1]
+        open_dt = last["market_open"].to_pydatetime()
+        close_dt = last["market_close"].to_pydatetime()
+        if open_dt.tzinfo is None:
+            open_dt = open_dt.replace(tzinfo=timezone.utc)
+        else:
+            open_dt = open_dt.astimezone(timezone.utc)
+        if close_dt.tzinfo is None:
+            close_dt = close_dt.replace(tzinfo=timezone.utc)
+        else:
+            close_dt = close_dt.astimezone(timezone.utc)
+    except Exception as exc:
+        return None, (
+            f"NYSE schedule contained invalid timestamps: "
+            f"{exc.__class__.__name__}: {_sanitize_exc_message(exc)}"
+        )
+
+    return (open_dt, close_dt), None
 
 
 def _expected_final_60m_bar_range(
@@ -219,9 +284,18 @@ def validate_bar_freshness(
     # recent completed regular session, then require the latest cached
     # bar to match that session's FINAL 60m bar label (with a small
     # Yahoo-labeling tolerance). A morning or midday bar from the
-    # correct session still blocks.
-    session = _most_recent_completed_nyse_session(now)
+    # correct session still blocks. Calendar failures surface a
+    # structured diagnostic reason rather than a silent generic block.
+    session, calendar_error = _most_recent_completed_nyse_session(now)
+    if calendar_error is not None:
+        return (
+            f"freshness check could not determine the most recent "
+            f"completed NYSE session: {calendar_error}"
+        )
     if session is None:
+        # Defensive: helper contract returns a reason whenever session
+        # is None. This branch should be unreachable; keep a clear
+        # fail-closed message just in case.
         return (
             "freshness check could not determine the most recent "
             "completed NYSE session"

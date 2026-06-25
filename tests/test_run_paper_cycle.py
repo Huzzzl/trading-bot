@@ -1319,13 +1319,15 @@ class TestNYSECalendarFreshness:
         now = datetime(2026, 6, 27, 14, 0, tzinfo=timezone.utc)
         latest = datetime(2026, 6, 26, 19, 30, tzinfo=timezone.utc)
         with patch.object(
-            cli, "_most_recent_completed_nyse_session", return_value=None,
+            cli, "_most_recent_completed_nyse_session",
+            return_value=(None, "simulated calendar failure"),
         ):
             blocker = cli.validate_bar_freshness(
                 latest_ts=latest, now=now, clock=self._closed_clock(),
             )
         assert blocker is not None
         assert "NYSE" in blocker
+        assert "simulated calendar failure" in blocker
 
 
 class TestSingleClockSnapshotInCLI:
@@ -1588,6 +1590,238 @@ class TestFinalBarFreshnessRequirement:
         assert result["result"] == "BLOCKED"
         assert a.submit_market_order.call_count == 0
         assert a.get_clock.call_count == 1
+        assert code == 1
+
+
+class TestCalendarFreshnessDiagnostics:
+    """Calendar / dependency failures must surface a specific blocker
+    reason, fail closed, and never submit an order."""
+
+    def _closed_clock(self):
+        return {
+            "timestamp": "t", "is_open": False,
+            "next_open": None, "next_close": None,
+        }
+
+    # -------- direct helper diagnostics --------
+
+    def test_missing_dependency_returns_structured_reason(self):
+        from unittest.mock import patch
+        import builtins
+
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "pandas_market_calendars":
+                raise ImportError("no module named 'pandas_market_calendars'")
+            return real_import(name, *args, **kwargs)
+
+        now = datetime(2026, 6, 27, 14, 0, tzinfo=timezone.utc)
+        with patch.object(builtins, "__import__", fake_import):
+            session, reason = cli._most_recent_completed_nyse_session(now)
+        assert session is None
+        assert reason is not None
+        assert "pandas_market_calendars" in reason
+        assert "not installed" in reason
+        assert "ImportError" in reason
+
+    def test_calendar_lookup_exception_returns_structured_reason(self):
+        from unittest.mock import patch
+        import pandas_market_calendars as mcal
+        now = datetime(2026, 6, 27, 14, 0, tzinfo=timezone.utc)
+        with patch.object(
+            mcal, "get_calendar",
+            side_effect=RuntimeError("calendar broken"),
+        ):
+            session, reason = cli._most_recent_completed_nyse_session(now)
+        assert session is None
+        assert reason is not None
+        assert "calendar lookup failed" in reason
+        assert "RuntimeError" in reason
+        assert "calendar broken" in reason
+
+    def test_schedule_query_exception_returns_structured_reason(self):
+        from unittest.mock import patch, MagicMock
+        import pandas_market_calendars as mcal
+
+        fake_nyse = MagicMock()
+        fake_nyse.schedule.side_effect = ValueError("schedule unavailable")
+        now = datetime(2026, 6, 27, 14, 0, tzinfo=timezone.utc)
+        with patch.object(mcal, "get_calendar", return_value=fake_nyse):
+            session, reason = cli._most_recent_completed_nyse_session(now)
+        assert session is None
+        assert reason is not None
+        assert "schedule query failed" in reason
+        assert "ValueError" in reason
+        assert "schedule unavailable" in reason
+
+    def test_no_completed_session_returns_structured_reason(self):
+        from unittest.mock import patch, MagicMock
+        import pandas_market_calendars as mcal
+        import pandas as pd
+
+        empty_sched = pd.DataFrame(
+            {"market_open": [], "market_close": []},
+            index=pd.DatetimeIndex([], name="day"),
+        )
+        fake_nyse = MagicMock()
+        fake_nyse.schedule.return_value = empty_sched
+        now = datetime(2026, 6, 27, 14, 0, tzinfo=timezone.utc)
+        with patch.object(mcal, "get_calendar", return_value=fake_nyse):
+            session, reason = cli._most_recent_completed_nyse_session(now)
+        assert session is None
+        assert reason is not None
+        assert "no NYSE sessions found" in reason
+
+    def test_no_completed_session_before_now_returns_structured_reason(self):
+        from unittest.mock import patch, MagicMock
+        import pandas_market_calendars as mcal
+        import pandas as pd
+
+        # Every row's market_close is AFTER now.
+        future_close = pd.Timestamp("2099-01-01", tz="UTC")
+        future_open = pd.Timestamp("2099-01-01 13:30:00", tz="UTC")
+        sched = pd.DataFrame(
+            {
+                "market_open": [future_open],
+                "market_close": [future_close],
+            },
+            index=pd.DatetimeIndex([pd.Timestamp("2099-01-01")], name="day"),
+        )
+        fake_nyse = MagicMock()
+        fake_nyse.schedule.return_value = sched
+        now = datetime(2026, 6, 27, 14, 0, tzinfo=timezone.utc)
+        with patch.object(mcal, "get_calendar", return_value=fake_nyse):
+            session, reason = cli._most_recent_completed_nyse_session(now)
+        assert session is None
+        assert "no completed NYSE session found before now" in reason
+
+    def test_malformed_schedule_missing_columns_returns_structured_reason(self):
+        from unittest.mock import patch, MagicMock
+        import pandas_market_calendars as mcal
+        import pandas as pd
+
+        # No market_open/market_close columns at all.
+        sched = pd.DataFrame({"foo": [1, 2, 3]})
+        fake_nyse = MagicMock()
+        fake_nyse.schedule.return_value = sched
+        now = datetime(2026, 6, 27, 14, 0, tzinfo=timezone.utc)
+        with patch.object(mcal, "get_calendar", return_value=fake_nyse):
+            session, reason = cli._most_recent_completed_nyse_session(now)
+        assert session is None
+        assert "missing required market_open/market_close columns" in reason
+
+    def test_malformed_timestamps_returns_structured_reason(self):
+        from unittest.mock import patch, MagicMock
+        import pandas_market_calendars as mcal
+        import pandas as pd
+
+        # Columns present but values are strings → .to_pydatetime fails.
+        sched = pd.DataFrame(
+            {
+                "market_open": ["not-a-ts"],
+                "market_close": ["not-a-ts"],
+            },
+            index=pd.DatetimeIndex([pd.Timestamp("2026-06-26", tz="UTC")]),
+        )
+        fake_nyse = MagicMock()
+        fake_nyse.schedule.return_value = sched
+        now = datetime(2026, 6, 27, 14, 0, tzinfo=timezone.utc)
+        with patch.object(mcal, "get_calendar", return_value=fake_nyse):
+            session, reason = cli._most_recent_completed_nyse_session(now)
+        assert session is None
+        assert "invalid timestamps" in reason
+
+    def test_credential_substring_in_exception_is_redacted(self):
+        from unittest.mock import patch
+        import pandas_market_calendars as mcal
+        now = datetime(2026, 6, 27, 14, 0, tzinfo=timezone.utc)
+        with patch.object(
+            mcal, "get_calendar",
+            side_effect=RuntimeError("oops api_key=leaked-key-do-not-print"),
+        ):
+            session, reason = cli._most_recent_completed_nyse_session(now)
+        assert session is None
+        assert reason is not None
+        assert "leaked-key-do-not-print" not in reason
+        assert "<redacted>" in reason
+
+    def test_exception_message_truncated(self):
+        from unittest.mock import patch
+        import pandas_market_calendars as mcal
+        long_msg = "x" * 10000
+        now = datetime(2026, 6, 27, 14, 0, tzinfo=timezone.utc)
+        with patch.object(
+            mcal, "get_calendar",
+            side_effect=RuntimeError(long_msg),
+        ):
+            session, reason = cli._most_recent_completed_nyse_session(now)
+        assert session is None
+        # Reason should be short overall.
+        assert len(reason) < 500
+
+    def test_normal_session_returns_session_with_no_reason(self):
+        now = datetime(2026, 6, 27, 14, 0, tzinfo=timezone.utc)
+        session, reason = cli._most_recent_completed_nyse_session(now)
+        assert reason is None
+        assert session is not None
+        open_dt, close_dt = session
+        assert open_dt.tzinfo is not None
+        assert close_dt.tzinfo is not None
+        # Most recent completed session relative to Sat is Friday 2026-06-26.
+        assert open_dt.date() == datetime(2026, 6, 26).date()
+        assert close_dt.date() == datetime(2026, 6, 26).date()
+
+    # -------- end-to-end through validate_bar_freshness --------
+
+    def test_freshness_blocker_includes_calendar_reason(self):
+        from unittest.mock import patch
+        now = datetime(2026, 6, 27, 14, 0, tzinfo=timezone.utc)
+        latest = datetime(2026, 6, 26, 19, 30, tzinfo=timezone.utc)
+        with patch.object(
+            cli, "_most_recent_completed_nyse_session",
+            return_value=(None, "schedule query failed: RuntimeError: down"),
+        ):
+            blocker = cli.validate_bar_freshness(
+                latest_ts=latest, now=now, clock=self._closed_clock(),
+            )
+        assert blocker is not None
+        assert "NYSE" in blocker
+        assert "schedule query failed" in blocker
+        assert "RuntimeError" in blocker
+
+    # -------- CLI exit code and zero-submission proofs --------
+
+    @pytest.mark.parametrize("reason", [
+        "pandas_market_calendars dependency is not installed (ImportError)",
+        "NYSE calendar lookup failed: RuntimeError: broken",
+        "NYSE schedule query failed: ValueError: down",
+        "no completed NYSE session found before now",
+        "NYSE schedule is missing required market_open/market_close columns",
+        "NYSE schedule contained invalid timestamps: AttributeError: x",
+    ])
+    def test_cli_zero_submissions_on_calendar_failure(
+        self, tmp_path, reason,
+    ) -> None:
+        from unittest.mock import patch
+        # Saturday: market closed, freshness path uses the calendar.
+        sat_now = datetime(2026, 6, 27, 14, 0, tzinfo=timezone.utc)
+        # Cache with a Friday final bar — would normally pass.
+        fri_end = datetime(2026, 6, 26, 19, 30, tzinfo=timezone.utc)
+        _write_cache_csv(tmp_path, [float(c) for c in range(100, 120)], end=fri_end)
+        a = _mock_adapter(clock_open=False)
+        with patch.object(
+            cli, "_most_recent_completed_nyse_session",
+            return_value=(None, reason),
+        ):
+            code, out = _run_cli(
+                ["--submit-paper"], adapter=a, cache_dir=tmp_path,
+                now_utc_fn=lambda: sat_now,
+            )
+        result = _parse_result(out)
+        assert result["result"] == "BLOCKED"
+        assert reason in result["blocker"]
+        assert a.submit_market_order.call_count == 0
         assert code == 1
 
 
