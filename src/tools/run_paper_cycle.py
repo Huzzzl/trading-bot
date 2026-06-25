@@ -40,22 +40,31 @@ _REQUIRED_COLS = ("open", "high", "low", "close", "volume")
 
 # Session-aware freshness thresholds.
 #   - Open market: a 60m bar more than 2 hours old is stale.
-#   - Closed market: the latest bar must belong to the most recent
-#     completed regular NYSE session (resolved via
+#   - Closed market: the latest bar must match the FINAL completed
+#     60m bar of the most recent NYSE session (resolved via
 #     pandas_market_calendars), so weekends and exchange holidays are
 #     handled correctly. There is no wall-clock fallback.
 _OPEN_MARKET_MAX_AGE = timedelta(hours=2)
-# Yahoo's 60m bars are labeled by the start of the bar period, so the
-# final completed bar of a session sits near the open or close edge of
-# that session depending on the provider's convention. A 1-hour
-# tolerance on both ends accommodates this without admitting bars from
-# adjacent sessions (NYSE has at least ~17.5 hours between consecutive
-# regular sessions, well outside this tolerance).
-_BAR_LABEL_TOLERANCE = timedelta(hours=1)
+# Yahoo's 60m bars are labeled by the start of the bar period. For a
+# regular 13:30–20:00 UTC NYSE session the last bar is labeled
+# 19:30 UTC (covering 19:30–20:00 as the final half-bar). For an
+# early-close session ending 18:00 UTC the last bar is labeled
+# 17:30 UTC (17:30–18:00). The expected label is therefore always
+# ``session_close - 30 minutes`` for the 60m interval.
+_FINAL_60M_BAR_OFFSET_BEFORE_CLOSE = timedelta(minutes=30)
+# Tolerance around the expected final-bar label. A 30-minute window on
+# either side accepts:
+#   * Yahoo's start-of-bar convention (label = session_close - 30m)
+#   * top-of-hour labeling (label = session_close - 60m)
+#   * end-of-bar labeling (label = session_close)
+# A morning bar (e.g. label = session_open) is well outside this window.
+_FINAL_BAR_TOLERANCE = timedelta(minutes=30)
 # Calendar lookback window when locating the most recent completed
-# NYSE session. 30 days is more than enough to cover any holiday or
-# weekend gap.
+# NYSE session. 30 days covers any holiday or weekend gap.
 _CALENDAR_LOOKBACK_DAYS = 30
+# Supported intervals — unsupported intervals must block the cycle
+# rather than silently falling through to 60m logic.
+_SUPPORTED_INTERVALS = frozenset({"60m"})
 
 
 def _default_now_utc() -> datetime:
@@ -141,6 +150,19 @@ def _most_recent_completed_nyse_session(
     return open_dt, close_dt
 
 
+def _expected_final_60m_bar_range(
+    session_close: datetime,
+) -> tuple[datetime, datetime]:
+    """Return ``(earliest, latest)`` accepted labels for the final 60m bar
+    of a session that closes at ``session_close``.
+    """
+    expected_label = session_close - _FINAL_60M_BAR_OFFSET_BEFORE_CLOSE
+    return (
+        expected_label - _FINAL_BAR_TOLERANCE,
+        expected_label + _FINAL_BAR_TOLERANCE,
+    )
+
+
 def validate_bar_freshness(
     *,
     latest_ts: datetime,
@@ -151,10 +173,17 @@ def validate_bar_freshness(
     """Return None when the latest bar is fresh enough; else a blocker string.
 
     Session-aware: while the market is open requires a 60m bar no more
-    than 2h old; while closed, accepts any bar belonging to the most
-    recent completed regular trading session (overnight, weekend,
-    holiday gaps included) using ``clock["next_open"]`` as the anchor.
+    than 2h old; while closed, requires the latest bar to match the
+    final 60m bar label of the most recent completed NYSE session
+    (resolved via pandas_market_calendars). A morning or midday bar
+    from the correct session still blocks. Unsupported intervals
+    block immediately rather than silently using 60m logic.
     """
+    if interval not in _SUPPORTED_INTERVALS:
+        return (
+            f"freshness validation does not support interval {interval!r}; "
+            f"supported intervals: {sorted(_SUPPORTED_INTERVALS)}"
+        )
     if latest_ts.tzinfo is None or now.tzinfo is None:
         return "freshness check requires timezone-aware timestamps"
     if latest_ts > now:
@@ -187,22 +216,24 @@ def validate_bar_freshness(
         return None
 
     # Market closed. Use the NYSE exchange calendar to resolve the most
-    # recent completed regular session; the latest cached bar must fall
-    # within that session's window (with a small Yahoo-labeling tolerance).
+    # recent completed regular session, then require the latest cached
+    # bar to match that session's FINAL 60m bar label (with a small
+    # Yahoo-labeling tolerance). A morning or midday bar from the
+    # correct session still blocks.
     session = _most_recent_completed_nyse_session(now)
     if session is None:
         return (
             "freshness check could not determine the most recent "
             "completed NYSE session"
         )
-    session_open, session_close = session
-    earliest = session_open - _BAR_LABEL_TOLERANCE
-    latest_allowed = session_close + _BAR_LABEL_TOLERANCE
+    _session_open, session_close = session
+    earliest, latest_allowed = _expected_final_60m_bar_range(session_close)
     if latest_ts < earliest or latest_ts > latest_allowed:
         return (
-            f"cached latest bar ({_fmt_age(age)} old) does not belong "
-            f"to the most recent completed NYSE session "
-            f"({session_open.isoformat()} to {session_close.isoformat()})"
+            f"cached latest bar ({_fmt_age(age)} old) is not the final "
+            f"60m bar of the most recent completed NYSE session "
+            f"(session_close {session_close.isoformat()}; expected final "
+            f"bar in [{earliest.isoformat()}, {latest_allowed.isoformat()}])"
         )
     return None
 
