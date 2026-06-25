@@ -40,17 +40,22 @@ _REQUIRED_COLS = ("open", "high", "low", "close", "volume")
 
 # Session-aware freshness thresholds.
 #   - Open market: a 60m bar more than 2 hours old is stale.
-#   - Closed market with no clock.next_open: conservative wall-clock fallback.
-#   - Closed market with clock.next_open: any bar within 96 hours before
-#     next_open is considered to belong to the most recent completed
-#     session. 96h covers regular overnight (~17.5h), weekend (~65.5h),
-#     and most US-equity holiday gaps with a comfortable buffer.
+#   - Closed market: the latest bar must belong to the most recent
+#     completed regular NYSE session (resolved via
+#     pandas_market_calendars), so weekends and exchange holidays are
+#     handled correctly. There is no wall-clock fallback.
 _OPEN_MARKET_MAX_AGE = timedelta(hours=2)
-# 120h covers regular overnight (~17h), weekend (~65h), and US holiday gaps
-# extending across a weekend (e.g. Thu close → Tue open ≈ 115h for July 4
-# falling on Friday).
-_CLOSED_NO_NEXT_OPEN_MAX_AGE = timedelta(hours=120)
-_CLOSED_PRE_NEXT_OPEN_WINDOW = timedelta(hours=120)
+# Yahoo's 60m bars are labeled by the start of the bar period, so the
+# final completed bar of a session sits near the open or close edge of
+# that session depending on the provider's convention. A 1-hour
+# tolerance on both ends accommodates this without admitting bars from
+# adjacent sessions (NYSE has at least ~17.5 hours between consecutive
+# regular sessions, well outside this tolerance).
+_BAR_LABEL_TOLERANCE = timedelta(hours=1)
+# Calendar lookback window when locating the most recent completed
+# NYSE session. 30 days is more than enough to cover any holiday or
+# weekend gap.
+_CALENDAR_LOOKBACK_DAYS = 30
 
 
 def _default_now_utc() -> datetime:
@@ -87,6 +92,53 @@ def _fmt_age(delta: timedelta) -> str:
     hours = total // 3600
     minutes = (total % 3600) // 60
     return f"{hours}h {minutes}m"
+
+
+def _most_recent_completed_nyse_session(
+    now: datetime,
+) -> tuple[datetime, datetime] | None:
+    """Return (market_open, market_close) of the most recent NYSE session
+    whose ``market_close`` is at or before ``now``.
+
+    Returns ``None`` if the exchange schedule cannot be determined
+    safely (calendar import fails, schedule query raises, no completed
+    session in the lookback window). All returned datetimes are
+    timezone-aware in UTC.
+    """
+    try:
+        import pandas_market_calendars as mcal
+        import pandas as pd
+    except ImportError:
+        return None
+    try:
+        nyse = mcal.get_calendar("NYSE")
+        start = (now - timedelta(days=_CALENDAR_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+        end = (now + timedelta(days=1)).strftime("%Y-%m-%d")
+        sched = nyse.schedule(start_date=start, end_date=end)
+    except Exception:
+        return None
+    if sched is None or len(sched) == 0:
+        return None
+    now_ts = pd.Timestamp(now)
+    if now_ts.tz is None:
+        now_ts = now_ts.tz_localize("UTC")
+    else:
+        now_ts = now_ts.tz_convert("UTC")
+    completed = sched[sched["market_close"] <= now_ts]
+    if completed.empty:
+        return None
+    last = completed.iloc[-1]
+    open_dt = last["market_open"].to_pydatetime()
+    close_dt = last["market_close"].to_pydatetime()
+    if open_dt.tzinfo is None:
+        open_dt = open_dt.replace(tzinfo=timezone.utc)
+    else:
+        open_dt = open_dt.astimezone(timezone.utc)
+    if close_dt.tzinfo is None:
+        close_dt = close_dt.replace(tzinfo=timezone.utc)
+    else:
+        close_dt = close_dt.astimezone(timezone.utc)
+    return open_dt, close_dt
 
 
 def validate_bar_freshness(
@@ -134,23 +186,23 @@ def validate_bar_freshness(
             )
         return None
 
-    # Market closed.
-    if next_open_dt is None:
-        if age > _CLOSED_NO_NEXT_OPEN_MAX_AGE:
-            return (
-                f"cached latest bar is stale "
-                f"({_fmt_age(age)} old, threshold "
-                f"{_fmt_age(_CLOSED_NO_NEXT_OPEN_MAX_AGE)} "
-                f"while market is closed and next_open is unknown)"
-            )
-        return None
-
-    earliest_allowed = next_open_dt - _CLOSED_PRE_NEXT_OPEN_WINDOW
-    if latest_ts < earliest_allowed:
+    # Market closed. Use the NYSE exchange calendar to resolve the most
+    # recent completed regular session; the latest cached bar must fall
+    # within that session's window (with a small Yahoo-labeling tolerance).
+    session = _most_recent_completed_nyse_session(now)
+    if session is None:
         return (
-            f"cached latest bar is stale "
-            f"({_fmt_age(age)} old, "
-            f"predates the most recent completed session before next_open)"
+            "freshness check could not determine the most recent "
+            "completed NYSE session"
+        )
+    session_open, session_close = session
+    earliest = session_open - _BAR_LABEL_TOLERANCE
+    latest_allowed = session_close + _BAR_LABEL_TOLERANCE
+    if latest_ts < earliest or latest_ts > latest_allowed:
+        return (
+            f"cached latest bar ({_fmt_age(age)} old) does not belong "
+            f"to the most recent completed NYSE session "
+            f"({session_open.isoformat()} to {session_close.isoformat()})"
         )
     return None
 
@@ -422,6 +474,7 @@ def main(argv: list[str] | None = None, *, now_utc_fn=_default_now_utc) -> int:
         max_position_fraction=args.max_position_fraction,
         client_order_id=args.client_order_id,
         submit_enabled=args.submit_paper,
+        clock_snapshot=clock,
     )
 
     _print_result(result)

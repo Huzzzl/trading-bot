@@ -186,9 +186,17 @@ class TestHoldOrBlockNoPlan:
         assert code == 0
 
     def test_block_market_closed_no_plan(self, tmp_path):
-        _write_bullish_cache(tmp_path)
+        # Saturday now with Friday-final-bar cache → freshness passes
+        # (Friday is the most recent completed NYSE session); cycle's
+        # signal engine then returns BLOCK with MARKET_NOT_OPEN.
+        sat_now = datetime(2026, 6, 27, 14, 0, tzinfo=timezone.utc)
+        fri_end = datetime(2026, 6, 26, 19, 0, tzinfo=timezone.utc)
+        _write_cache_csv(tmp_path, [float(c) for c in range(100, 120)], end=fri_end)
         a = _mock_adapter(clock_open=False)
-        code, out = _run_cli([], adapter=a, cache_dir=tmp_path)
+        code, out = _run_cli(
+            [], adapter=a, cache_dir=tmp_path,
+            now_utc_fn=lambda: sat_now,
+        )
         result = _parse_result(out)
         assert result["action"] == "none"
         assert result["order_plan"] is None
@@ -1015,19 +1023,16 @@ class TestSessionAwareFreshness:
         ) is None
 
     def test_bar_older_than_most_recent_completed_session_blocks(self):
-        # Stale weekly+ gap: latest bar from 2 weeks before next_open.
+        # Stale weekly+ gap: latest bar from 2 weeks ago.
+        # Monday premarket: most recent completed session is the previous Friday.
         now = datetime(2026, 6, 29, 12, 0, tzinfo=timezone.utc)
         latest = datetime(2026, 6, 15, 19, 0, tzinfo=timezone.utc)
-        clock = self._clock(
-            is_open=False,
-            next_open="2026-06-29T13:30:00+00:00",
-        )
+        clock = self._clock(is_open=False)
         blocker = cli.validate_bar_freshness(
             latest_ts=latest, now=now, clock=clock,
         )
         assert blocker is not None
-        assert "stale" in blocker
-        assert "predates" in blocker
+        assert "does not belong to the most recent completed NYSE session" in blocker
 
     def test_future_bar_blocks(self):
         latest = _FIXED_NOW + timedelta(hours=1)
@@ -1090,23 +1095,6 @@ class TestSessionAwareFreshness:
         )
         assert blocker is not None
         assert "4h 12m" in blocker
-
-    def test_closed_with_no_next_open_under_threshold_passes(self):
-        # 100h old bar, market closed, no next_open → should pass (under 120h).
-        latest = _FIXED_NOW - timedelta(hours=100)
-        assert cli.validate_bar_freshness(
-            latest_ts=latest, now=_FIXED_NOW,
-            clock=self._clock(is_open=False),
-        ) is None
-
-    def test_closed_with_no_next_open_over_threshold_blocks(self):
-        latest = _FIXED_NOW - timedelta(hours=130)
-        blocker = cli.validate_bar_freshness(
-            latest_ts=latest, now=_FIXED_NOW,
-            clock=self._clock(is_open=False),
-        )
-        assert blocker is not None
-        assert "next_open is unknown" in blocker
 
     # ------- end-to-end CLI tests through main() -------
 
@@ -1206,6 +1194,200 @@ class TestSessionAwareFreshness:
             _, out = _run_cli([], adapter=a, cache_dir=tmp_path)
         assert "no-leak-key" not in out
         assert "no-leak-secret" not in out
+
+
+class TestNYSECalendarFreshness:
+    """Exchange-calendar-aware closed-market freshness via NYSE."""
+
+    def _closed_clock(self):
+        return {
+            "timestamp": "t", "is_open": False,
+            "next_open": None, "next_close": None,
+        }
+
+    def test_wednesday_after_close_with_wednesday_final_bar_passes(self):
+        # 2026-06-24 is Wednesday. NYSE session: 13:30 → 20:00 UTC.
+        now = datetime(2026, 6, 24, 21, 0, tzinfo=timezone.utc)
+        latest = datetime(2026, 6, 24, 19, 30, tzinfo=timezone.utc)
+        assert cli.validate_bar_freshness(
+            latest_ts=latest, now=now, clock=self._closed_clock(),
+        ) is None
+
+    def test_wednesday_after_close_with_tuesday_final_bar_blocks(self):
+        now = datetime(2026, 6, 24, 21, 0, tzinfo=timezone.utc)
+        latest = datetime(2026, 6, 23, 19, 30, tzinfo=timezone.utc)
+        blocker = cli.validate_bar_freshness(
+            latest_ts=latest, now=now, clock=self._closed_clock(),
+        )
+        assert blocker is not None
+        assert "does not belong" in blocker
+
+    def test_tuesday_premarket_with_monday_final_bar_passes(self):
+        # 2026-06-30 is Tuesday. Premarket 12:00 UTC = 08:00 ET.
+        now = datetime(2026, 6, 30, 12, 0, tzinfo=timezone.utc)
+        latest = datetime(2026, 6, 29, 19, 30, tzinfo=timezone.utc)
+        assert cli.validate_bar_freshness(
+            latest_ts=latest, now=now, clock=self._closed_clock(),
+        ) is None
+
+    def test_tuesday_premarket_with_previous_friday_bar_blocks(self):
+        # Monday 2026-06-29 was a regular session, so on Tuesday premarket
+        # the most recent completed session is Monday — not the prior Friday.
+        now = datetime(2026, 6, 30, 12, 0, tzinfo=timezone.utc)
+        latest = datetime(2026, 6, 26, 19, 30, tzinfo=timezone.utc)
+        blocker = cli.validate_bar_freshness(
+            latest_ts=latest, now=now, clock=self._closed_clock(),
+        )
+        assert blocker is not None
+        assert "does not belong" in blocker
+
+    def test_saturday_with_friday_final_bar_passes_calendar(self):
+        # Saturday 2026-06-27; most recent session is Friday 2026-06-26.
+        now = datetime(2026, 6, 27, 14, 0, tzinfo=timezone.utc)
+        latest = datetime(2026, 6, 26, 19, 30, tzinfo=timezone.utc)
+        assert cli.validate_bar_freshness(
+            latest_ts=latest, now=now, clock=self._closed_clock(),
+        ) is None
+
+    def test_monday_premarket_with_friday_final_bar_passes_calendar(self):
+        # Monday 2026-06-29 premarket 12:00 UTC; most recent completed
+        # session = Friday 2026-06-26 (Monday hasn't completed yet).
+        now = datetime(2026, 6, 29, 12, 0, tzinfo=timezone.utc)
+        latest = datetime(2026, 6, 26, 19, 30, tzinfo=timezone.utc)
+        assert cli.validate_bar_freshness(
+            latest_ts=latest, now=now, clock=self._closed_clock(),
+        ) is None
+
+    def test_holiday_uses_actual_prior_nyse_session(self):
+        # 2026-07-03 (Friday) is the observed July 4 holiday — NOT a
+        # trading day. Now: Saturday morning. Most recent completed
+        # session = Thursday 2026-07-02 (not Friday). Thursday bar passes.
+        now = datetime(2026, 7, 4, 12, 0, tzinfo=timezone.utc)
+        latest = datetime(2026, 7, 2, 19, 30, tzinfo=timezone.utc)
+        assert cli.validate_bar_freshness(
+            latest_ts=latest, now=now, clock=self._closed_clock(),
+        ) is None
+
+    def test_holiday_friday_bar_blocks_because_friday_not_a_session(self):
+        # Even though Friday 2026-07-03 is calendar-Friday, NYSE was closed
+        # that day. A "Friday bar" is malformed/missing data → blocks.
+        now = datetime(2026, 7, 4, 12, 0, tzinfo=timezone.utc)
+        latest = datetime(2026, 7, 3, 19, 30, tzinfo=timezone.utc)
+        blocker = cli.validate_bar_freshness(
+            latest_ts=latest, now=now, clock=self._closed_clock(),
+        )
+        assert blocker is not None
+        assert "does not belong" in blocker
+
+    def test_long_holiday_weekend_passes_only_immediately_previous_session(self):
+        # July 3 holiday + weekend → Monday morning's most recent
+        # completed session is Thursday 2026-07-02. Thursday bar passes.
+        now = datetime(2026, 7, 6, 12, 0, tzinfo=timezone.utc)
+        latest = datetime(2026, 7, 2, 19, 30, tzinfo=timezone.utc)
+        assert cli.validate_bar_freshness(
+            latest_ts=latest, now=now, clock=self._closed_clock(),
+        ) is None
+
+    def test_long_holiday_weekend_blocks_earlier_session_bar(self):
+        # The Wednesday before the long weekend is NOT the most recent
+        # completed session. Even though Wednesday's bar (2026-07-01) is
+        # well under 120 wall-clock hours before next_open (Mon 2026-07-06
+        # = ~118h), it belongs to a skipped session and must block.
+        now = datetime(2026, 7, 6, 12, 0, tzinfo=timezone.utc)
+        latest = datetime(2026, 7, 1, 19, 30, tzinfo=timezone.utc)
+        blocker = cli.validate_bar_freshness(
+            latest_ts=latest, now=now, clock=self._closed_clock(),
+        )
+        assert blocker is not None
+        assert "does not belong" in blocker
+
+    def test_bar_within_120h_but_from_skipped_session_blocks(self):
+        # Tuesday after close. Friday 2026-06-19 bar is ~96h before Friday's
+        # close, well under 120h. But the most recent completed session is
+        # Monday 2026-06-22. Friday's bar is from an earlier session.
+        now = datetime(2026, 6, 23, 21, 0, tzinfo=timezone.utc)
+        latest = datetime(2026, 6, 19, 19, 30, tzinfo=timezone.utc)
+        blocker = cli.validate_bar_freshness(
+            latest_ts=latest, now=now, clock=self._closed_clock(),
+        )
+        assert blocker is not None
+        assert "does not belong" in blocker
+
+    def test_calendar_unavailable_returns_blocked(self):
+        # Simulate a missing exchange-calendar dependency.
+        from unittest.mock import patch
+        now = datetime(2026, 6, 27, 14, 0, tzinfo=timezone.utc)
+        latest = datetime(2026, 6, 26, 19, 30, tzinfo=timezone.utc)
+        with patch.object(
+            cli, "_most_recent_completed_nyse_session", return_value=None,
+        ):
+            blocker = cli.validate_bar_freshness(
+                latest_ts=latest, now=now, clock=self._closed_clock(),
+            )
+        assert blocker is not None
+        assert "NYSE" in blocker
+
+
+class TestSingleClockSnapshotInCLI:
+    """The CLI must read the broker clock exactly once per cycle and share
+    the same snapshot with both the freshness check and the cycle."""
+
+    def test_cli_calls_get_clock_exactly_once(self, tmp_path):
+        _write_bullish_cache(tmp_path)
+        a = _mock_adapter()
+        _run_cli([], adapter=a, cache_dir=tmp_path)
+        assert a.get_clock.call_count == 1
+
+    def test_cli_calls_get_clock_once_in_paper_submit_mode(self, tmp_path):
+        _write_bullish_cache(tmp_path)
+        a = _mock_adapter()
+        _run_cli(["--submit-paper"], adapter=a, cache_dir=tmp_path)
+        assert a.get_clock.call_count == 1
+
+    def test_cli_calls_get_clock_once_on_hold_signal(self, tmp_path):
+        _write_flat_cache(tmp_path)
+        a = _mock_adapter()
+        _run_cli([], adapter=a, cache_dir=tmp_path)
+        assert a.get_clock.call_count == 1
+
+    def test_second_clock_value_never_consumed(self, tmp_path):
+        # If the cycle were to call get_clock a second time it would
+        # receive clock2 (with is_open=False) and produce a BLOCK signal
+        # from MARKET_NOT_OPEN. Because the CLI shares its single
+        # snapshot, the cycle must see the open-market clock1 and
+        # produce buy_planned.
+        _write_bullish_cache(tmp_path)
+        clock1 = {
+            "timestamp": "t1", "is_open": True,
+            "next_open": None, "next_close": None,
+        }
+        clock2 = {
+            "timestamp": "t2", "is_open": False,
+            "next_open": "2026-06-24T13:30:00+00:00",
+            "next_close": "2026-06-24T20:00:00+00:00",
+        }
+        a = _mock_adapter()
+        a.get_clock.side_effect = [clock1, clock2]
+        code, out = _run_cli([], adapter=a, cache_dir=tmp_path)
+        result = _parse_result(out)
+        assert a.get_clock.call_count == 1
+        assert result["result"] == "PASS"
+        assert result["action"] == "buy_planned"
+        assert result["signal"] == "BUY"
+
+    def test_no_submission_when_clock_validation_fails(self, tmp_path):
+        _write_bullish_cache(tmp_path)
+        a = _mock_adapter()
+        # Return a malformed clock (is_open not exactly bool).
+        a.get_clock.return_value = {
+            "timestamp": "t", "is_open": "true",
+            "next_open": None, "next_close": None,
+        }
+        code, out = _run_cli(["--submit-paper"], adapter=a, cache_dir=tmp_path)
+        result = _parse_result(out)
+        assert result["result"] == "BLOCKED"
+        assert a.submit_market_order.call_count == 0
+        assert code == 1
 
 
 class TestArgParsing:

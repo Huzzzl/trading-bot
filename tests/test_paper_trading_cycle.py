@@ -699,6 +699,95 @@ class TestDryRunDefault:
         assert a.submit_market_order.call_count == 1
 
 
+class TestClockSnapshotParameter:
+    """run_paper_trading_cycle accepts an optional pre-fetched clock snapshot."""
+
+    def test_snapshot_used_instead_of_adapter_call(self):
+        a = _mock_adapter()
+        snap = {
+            "timestamp": "t-snap", "is_open": True,
+            "next_open": None, "next_close": None,
+        }
+        r = run_paper_trading_cycle(
+            adapter=a, bars=_bars_bullish(), signal_config=_config(),
+            clock_snapshot=snap,
+        )
+        assert r["result"] == "PASS"
+        assert r["action"] == "buy_planned"
+        assert a.get_clock.call_count == 0
+
+    def test_snapshot_with_is_open_false_drives_signal(self):
+        a = _mock_adapter()
+        snap = {
+            "timestamp": "t-snap", "is_open": False,
+            "next_open": None, "next_close": None,
+        }
+        r = run_paper_trading_cycle(
+            adapter=a, bars=_bars_bullish(), signal_config=_config(),
+            clock_snapshot=snap,
+        )
+        assert r["signal"] == "BLOCK"
+        assert "MARKET_NOT_OPEN" in r["reason_codes"]
+        assert a.get_clock.call_count == 0
+
+    @pytest.mark.parametrize("bad_snap", [
+        None,  # falls back to adapter.get_clock
+    ])
+    def test_no_snapshot_falls_back_to_adapter(self, bad_snap):
+        a = _mock_adapter()
+        run_paper_trading_cycle(
+            adapter=a, bars=_bars_bullish(), signal_config=_config(),
+            clock_snapshot=bad_snap,
+        )
+        assert a.get_clock.call_count == 1
+
+    def test_malformed_snapshot_blocks_without_adapter_call(self):
+        a = _mock_adapter()
+        r = run_paper_trading_cycle(
+            adapter=a, bars=_bars_bullish(), signal_config=_config(),
+            clock_snapshot="not-a-dict",
+        )
+        assert r["result"] == "BLOCKED"
+        assert a.get_clock.call_count == 0
+
+    def test_snapshot_missing_is_open_blocks(self):
+        a = _mock_adapter()
+        r = run_paper_trading_cycle(
+            adapter=a, bars=_bars_bullish(), signal_config=_config(),
+            clock_snapshot={"timestamp": "t"},
+        )
+        assert r["result"] == "BLOCKED"
+        assert "malformed clock" in r["blocker"]
+
+    def test_snapshot_non_bool_is_open_blocks(self):
+        a = _mock_adapter()
+        r = run_paper_trading_cycle(
+            adapter=a, bars=_bars_bullish(), signal_config=_config(),
+            submit_enabled=True,
+            clock_snapshot={
+                "timestamp": "t", "is_open": "true",
+                "next_open": None, "next_close": None,
+            },
+        )
+        assert r["result"] == "BLOCKED"
+        assert "is_open" in r["blocker"]
+        assert a.submit_market_order.call_count == 0
+
+    def test_snapshot_pass_buy_submit_with_submit_enabled(self):
+        a = _mock_adapter()
+        snap = {
+            "timestamp": "t", "is_open": True,
+            "next_open": None, "next_close": None,
+        }
+        r = run_paper_trading_cycle(
+            adapter=a, bars=_bars_bullish(), signal_config=_config(),
+            submit_enabled=True, clock_snapshot=snap,
+        )
+        assert r["action"] == "buy_submitted"
+        assert a.get_clock.call_count == 0
+        assert a.submit_market_order.call_count == 1
+
+
 class TestRealEnumPropagationThroughAdapter:
     """End-to-end proof that a real Alpaca SDK enum value normalizes to
     the canonical broker string and lets the cycle proceed past account
