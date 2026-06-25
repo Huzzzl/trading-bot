@@ -22,7 +22,7 @@ import json
 import math
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -37,12 +37,205 @@ _SYMBOL = "SPY"
 _DEFAULT_CACHE_DIR = Path("data/cache")
 _INTERVAL_TO_TIMEFRAME = {"60m": "1h"}
 _REQUIRED_COLS = ("open", "high", "low", "close", "volume")
-# A 60m bar older than this is considered stale for trading-decision purposes.
-_STALE_BAR_THRESHOLD_SECONDS = 4 * 3600
+
+# Session-aware freshness thresholds.
+#   - Open market: a 60m bar more than 2 hours old is stale.
+#   - Closed market: the latest bar must match the FINAL completed
+#     60m bar of the most recent NYSE session (resolved via
+#     pandas_market_calendars), so weekends and exchange holidays are
+#     handled correctly. There is no wall-clock fallback.
+_OPEN_MARKET_MAX_AGE = timedelta(hours=2)
+# Yahoo's 60m bars are labeled by the start of the bar period. For a
+# regular 13:30–20:00 UTC NYSE session the last bar is labeled
+# 19:30 UTC (covering 19:30–20:00 as the final half-bar). For an
+# early-close session ending 18:00 UTC the last bar is labeled
+# 17:30 UTC (17:30–18:00). The expected label is therefore always
+# ``session_close - 30 minutes`` for the 60m interval.
+_FINAL_60M_BAR_OFFSET_BEFORE_CLOSE = timedelta(minutes=30)
+# Tolerance around the expected final-bar label. A 30-minute window on
+# either side accepts:
+#   * Yahoo's start-of-bar convention (label = session_close - 30m)
+#   * top-of-hour labeling (label = session_close - 60m)
+#   * end-of-bar labeling (label = session_close)
+# A morning bar (e.g. label = session_open) is well outside this window.
+_FINAL_BAR_TOLERANCE = timedelta(minutes=30)
+# Calendar lookback window when locating the most recent completed
+# NYSE session. 30 days covers any holiday or weekend gap.
+_CALENDAR_LOOKBACK_DAYS = 30
+# Supported intervals — unsupported intervals must block the cycle
+# rather than silently falling through to 60m logic.
+_SUPPORTED_INTERVALS = frozenset({"60m"})
 
 
 def _default_now_utc() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _parse_clock_dt(value: Any) -> datetime | None:
+    """Parse a clock timestamp value into a tz-aware datetime.
+
+    Returns None on any failure or naive value. Accepts ISO-8601 strings
+    (with ``Z`` suffix or ``±HH:MM`` offset) or datetime instances.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo is not None else None
+    if not isinstance(value, str):
+        return None
+    s = value.strip()
+    if not s:
+        return None
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(s)
+    except (TypeError, ValueError):
+        return None
+    return dt if dt.tzinfo is not None else None
+
+
+def _fmt_age(delta: timedelta) -> str:
+    """Format a timedelta as ``"Hh Mm"`` (clamped to non-negative)."""
+    total = max(0, int(delta.total_seconds()))
+    hours = total // 3600
+    minutes = (total % 3600) // 60
+    return f"{hours}h {minutes}m"
+
+
+def _most_recent_completed_nyse_session(
+    now: datetime,
+) -> tuple[datetime, datetime] | None:
+    """Return (market_open, market_close) of the most recent NYSE session
+    whose ``market_close`` is at or before ``now``.
+
+    Returns ``None`` if the exchange schedule cannot be determined
+    safely (calendar import fails, schedule query raises, no completed
+    session in the lookback window). All returned datetimes are
+    timezone-aware in UTC.
+    """
+    try:
+        import pandas_market_calendars as mcal
+        import pandas as pd
+    except ImportError:
+        return None
+    try:
+        nyse = mcal.get_calendar("NYSE")
+        start = (now - timedelta(days=_CALENDAR_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+        end = (now + timedelta(days=1)).strftime("%Y-%m-%d")
+        sched = nyse.schedule(start_date=start, end_date=end)
+    except Exception:
+        return None
+    if sched is None or len(sched) == 0:
+        return None
+    now_ts = pd.Timestamp(now)
+    if now_ts.tz is None:
+        now_ts = now_ts.tz_localize("UTC")
+    else:
+        now_ts = now_ts.tz_convert("UTC")
+    completed = sched[sched["market_close"] <= now_ts]
+    if completed.empty:
+        return None
+    last = completed.iloc[-1]
+    open_dt = last["market_open"].to_pydatetime()
+    close_dt = last["market_close"].to_pydatetime()
+    if open_dt.tzinfo is None:
+        open_dt = open_dt.replace(tzinfo=timezone.utc)
+    else:
+        open_dt = open_dt.astimezone(timezone.utc)
+    if close_dt.tzinfo is None:
+        close_dt = close_dt.replace(tzinfo=timezone.utc)
+    else:
+        close_dt = close_dt.astimezone(timezone.utc)
+    return open_dt, close_dt
+
+
+def _expected_final_60m_bar_range(
+    session_close: datetime,
+) -> tuple[datetime, datetime]:
+    """Return ``(earliest, latest)`` accepted labels for the final 60m bar
+    of a session that closes at ``session_close``.
+    """
+    expected_label = session_close - _FINAL_60M_BAR_OFFSET_BEFORE_CLOSE
+    return (
+        expected_label - _FINAL_BAR_TOLERANCE,
+        expected_label + _FINAL_BAR_TOLERANCE,
+    )
+
+
+def validate_bar_freshness(
+    *,
+    latest_ts: datetime,
+    now: datetime,
+    clock: Any,
+    interval: str = "60m",
+) -> str | None:
+    """Return None when the latest bar is fresh enough; else a blocker string.
+
+    Session-aware: while the market is open requires a 60m bar no more
+    than 2h old; while closed, requires the latest bar to match the
+    final 60m bar label of the most recent completed NYSE session
+    (resolved via pandas_market_calendars). A morning or midday bar
+    from the correct session still blocks. Unsupported intervals
+    block immediately rather than silently using 60m logic.
+    """
+    if interval not in _SUPPORTED_INTERVALS:
+        return (
+            f"freshness validation does not support interval {interval!r}; "
+            f"supported intervals: {sorted(_SUPPORTED_INTERVALS)}"
+        )
+    if latest_ts.tzinfo is None or now.tzinfo is None:
+        return "freshness check requires timezone-aware timestamps"
+    if latest_ts > now:
+        return "cached latest bar is in the future relative to now"
+    if not isinstance(clock, dict):
+        return "clock is not a dict"
+    is_open = clock.get("is_open")
+    if not isinstance(is_open, bool):
+        return "clock is_open must be exactly bool"
+
+    next_open_raw = clock.get("next_open")
+    next_close_raw = clock.get("next_close")
+
+    next_open_dt = _parse_clock_dt(next_open_raw)
+    if next_open_raw is not None and next_open_dt is None:
+        return "clock next_open is malformed"
+    next_close_dt = _parse_clock_dt(next_close_raw)
+    if next_close_raw is not None and next_close_dt is None:
+        return "clock next_close is malformed"
+
+    age = now - latest_ts
+
+    if is_open:
+        if age > _OPEN_MARKET_MAX_AGE:
+            return (
+                f"cached latest bar is stale "
+                f"({_fmt_age(age)} old, "
+                f"threshold {_fmt_age(_OPEN_MARKET_MAX_AGE)} while market is open)"
+            )
+        return None
+
+    # Market closed. Use the NYSE exchange calendar to resolve the most
+    # recent completed regular session, then require the latest cached
+    # bar to match that session's FINAL 60m bar label (with a small
+    # Yahoo-labeling tolerance). A morning or midday bar from the
+    # correct session still blocks.
+    session = _most_recent_completed_nyse_session(now)
+    if session is None:
+        return (
+            "freshness check could not determine the most recent "
+            "completed NYSE session"
+        )
+    _session_open, session_close = session
+    earliest, latest_allowed = _expected_final_60m_bar_range(session_close)
+    if latest_ts < earliest or latest_ts > latest_allowed:
+        return (
+            f"cached latest bar ({_fmt_age(age)} old) is not the final "
+            f"60m bar of the most recent completed NYSE session "
+            f"(session_close {session_close.isoformat()}; expected final "
+            f"bar in [{earliest.isoformat()}, {latest_allowed.isoformat()}])"
+        )
+    return None
 
 
 class _CliError(Exception):
@@ -265,6 +458,23 @@ def main(argv: list[str] | None = None, *, now_utc_fn=_default_now_utc) -> int:
         _print_result(err)
         return _exit_code_for("ERROR")
 
+    # Fetch the Alpaca clock once so freshness validation can use real
+    # session state (next_open/next_close) instead of a wall-clock fallback.
+    try:
+        clock = adapter.get_clock()
+    except AlpacaPaperAdapterError as exc:
+        err = {
+            "result": "ERROR",
+            "action": "error",
+            "signal": None,
+            "reason_codes": [],
+            "order_plan": None,
+            "order": None,
+            "blocker": f"clock read failed: {exc}",
+        }
+        _print_result(err)
+        return _exit_code_for("ERROR")
+
     cache_dir = Path(args.cache_dir)
     try:
         bars, latest_ts = _load_cached_bars(cache_dir, _SYMBOL, args.interval)
@@ -272,9 +482,7 @@ def main(argv: list[str] | None = None, *, now_utc_fn=_default_now_utc) -> int:
         _print_result(_blocked_result(str(exc)))
         return _exit_code_for("BLOCKED")
 
-    # Staleness check: latest bar must be recent enough to base a decision on.
-    # Applied to both DRY_RUN and PAPER_SUBMIT — stale cache must never
-    # produce a trading plan or a submission.
+    # Session-aware freshness: applied to both DRY_RUN and PAPER_SUBMIT.
     try:
         now = now_utc_fn()
     except Exception as exc:
@@ -282,20 +490,11 @@ def main(argv: list[str] | None = None, *, now_utc_fn=_default_now_utc) -> int:
         return _exit_code_for("BLOCKED")
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
-    age_seconds = (now - latest_ts).total_seconds()
-    if age_seconds < 0:
-        _print_result(_blocked_result(
-            "cached latest bar is in the future relative to now"
-        ))
-        return _exit_code_for("BLOCKED")
-    if age_seconds > _STALE_BAR_THRESHOLD_SECONDS:
-        # Blocker message names hours only — never raw prices, symbols, or
-        # credentials.
-        _print_result(_blocked_result(
-            f"cached latest bar is stale "
-            f"({int(age_seconds // 3600)}h old, "
-            f"threshold {_STALE_BAR_THRESHOLD_SECONDS // 3600}h)"
-        ))
+    freshness_blocker = validate_bar_freshness(
+        latest_ts=latest_ts, now=now, clock=clock, interval=args.interval,
+    )
+    if freshness_blocker is not None:
+        _print_result(_blocked_result(freshness_blocker))
         return _exit_code_for("BLOCKED")
 
     signal_config = _build_signal_config(args.interval)
@@ -306,6 +505,7 @@ def main(argv: list[str] | None = None, *, now_utc_fn=_default_now_utc) -> int:
         max_position_fraction=args.max_position_fraction,
         client_order_id=args.client_order_id,
         submit_enabled=args.submit_paper,
+        clock_snapshot=clock,
     )
 
     _print_result(result)

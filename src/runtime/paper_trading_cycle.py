@@ -125,6 +125,7 @@ def run_paper_trading_cycle(
     max_position_fraction: float = 0.10,
     client_order_id: str | None = None,
     submit_enabled: bool = False,
+    clock_snapshot: dict | None = None,
 ) -> dict[str, Any]:
     if not isinstance(submit_enabled, bool):
         return _blocked("submit_enabled must be exactly bool")
@@ -136,11 +137,17 @@ def run_paper_trading_cycle(
     if not _is_finite_positive(max_position_fraction) or max_position_fraction > _MAX_FRACTION_CAP:
         return _blocked("max_position_fraction must be in (0, 0.25]")
 
-    # 1. clock
-    try:
-        clock = adapter.get_clock()
-    except AlpacaPaperAdapterError as exc:
-        return _error(f"clock read failed: {exc}")
+    # 1. clock — use the caller-provided snapshot when present so the
+    # CLI (which already read the clock for freshness validation) does
+    # not pay for a second broker round-trip and cannot race against a
+    # later clock value. Strict schema validation runs either way.
+    if clock_snapshot is not None:
+        clock = clock_snapshot
+    else:
+        try:
+            clock = adapter.get_clock()
+        except AlpacaPaperAdapterError as exc:
+            return _error(f"clock read failed: {exc}")
     if not isinstance(clock, dict) or "is_open" not in clock:
         return _blocked("malformed clock response")
     is_open_raw = clock["is_open"]

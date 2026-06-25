@@ -186,9 +186,17 @@ class TestHoldOrBlockNoPlan:
         assert code == 0
 
     def test_block_market_closed_no_plan(self, tmp_path):
-        _write_bullish_cache(tmp_path)
+        # Saturday now with Friday-final-bar cache → freshness passes
+        # (Friday is the most recent completed NYSE session); cycle's
+        # signal engine then returns BLOCK with MARKET_NOT_OPEN.
+        sat_now = datetime(2026, 6, 27, 14, 0, tzinfo=timezone.utc)
+        fri_end = datetime(2026, 6, 26, 19, 0, tzinfo=timezone.utc)
+        _write_cache_csv(tmp_path, [float(c) for c in range(100, 120)], end=fri_end)
         a = _mock_adapter(clock_open=False)
-        code, out = _run_cli([], adapter=a, cache_dir=tmp_path)
+        code, out = _run_cli(
+            [], adapter=a, cache_dir=tmp_path,
+            now_utc_fn=lambda: sat_now,
+        )
         result = _parse_result(out)
         assert result["action"] == "none"
         assert result["order_plan"] is None
@@ -608,7 +616,7 @@ class TestCacheSelectionByLatestTimestamp:
         # Older alphabetically-later name; newer alphabetically-earlier name.
         # File-naming order would pick the OLDER one; greatest-timestamp
         # selection must pick the NEWER one.
-        old_end = _FIXED_NOW - timedelta(hours=3)
+        old_end = _FIXED_NOW - timedelta(hours=1, minutes=30)
         new_end = _FIXED_NOW - timedelta(hours=1)
         self._write_with_filename(
             tmp_path, [float(c) for c in range(100, 120)],
@@ -635,7 +643,7 @@ class TestCacheSelectionByLatestTimestamp:
         except ImportError:
             have_parquet = False
 
-        old_end = _FIXED_NOW - timedelta(hours=3)
+        old_end = _FIXED_NOW - timedelta(hours=1, minutes=30)
         new_end = _FIXED_NOW - timedelta(hours=1)
         # Newer CSV
         self._write_with_filename(
@@ -736,7 +744,7 @@ class TestCandidateFullValidityScoring:
         # Newer "candidate": timestamp-valid but malformed final OHLCV row
         # at end-1h. Old scoring would have picked the newer one and
         # blocked. New scoring picks the older fully valid file.
-        old_end = _FIXED_NOW - timedelta(hours=3)
+        old_end = _FIXED_NOW - timedelta(hours=1, minutes=30)
         new_end = _FIXED_NOW - timedelta(hours=1)
         self._write_valid(
             tmp_path / "SPY_2025-01-01_2025-06-01_60m.csv",
@@ -764,7 +772,7 @@ class TestCandidateFullValidityScoring:
         assert code == 0
 
     def test_newer_missing_column_loses_to_older_valid(self, tmp_path):
-        old_end = _FIXED_NOW - timedelta(hours=3)
+        old_end = _FIXED_NOW - timedelta(hours=1, minutes=30)
         new_end = _FIXED_NOW - timedelta(hours=1)
         self._write_valid(
             tmp_path / "SPY_2025-01-01_2025-06-01_60m.csv",
@@ -789,7 +797,7 @@ class TestCandidateFullValidityScoring:
         assert result["order_plan"]["qty"] == 45
 
     def test_newer_unsorted_timestamps_lose_to_older_valid(self, tmp_path):
-        old_end = _FIXED_NOW - timedelta(hours=3)
+        old_end = _FIXED_NOW - timedelta(hours=1, minutes=30)
         new_end = _FIXED_NOW - timedelta(hours=1)
         self._write_valid(
             tmp_path / "SPY_2025-01-01_2025-06-01_60m.csv",
@@ -814,7 +822,7 @@ class TestCandidateFullValidityScoring:
         assert result["order_plan"]["qty"] == 45
 
     def test_newer_duplicate_timestamps_lose_to_older_valid(self, tmp_path):
-        old_end = _FIXED_NOW - timedelta(hours=3)
+        old_end = _FIXED_NOW - timedelta(hours=1, minutes=30)
         new_end = _FIXED_NOW - timedelta(hours=1)
         self._write_valid(
             tmp_path / "SPY_2025-01-01_2025-06-01_60m.csv",
@@ -869,7 +877,7 @@ class TestCandidateFullValidityScoring:
 
         # Older valid CSV; newer valid parquet → parquet must win
         # because it has the greater latest-bar timestamp.
-        old_end = _FIXED_NOW - timedelta(hours=3)
+        old_end = _FIXED_NOW - timedelta(hours=1, minutes=30)
         new_end = _FIXED_NOW - timedelta(hours=1)
         self._write_valid(
             tmp_path / "SPY_2025-01-01_2025-06-01_60m.csv",
@@ -895,7 +903,7 @@ class TestCandidateFullValidityScoring:
         except ImportError:
             pytest.skip("pyarrow not available")
 
-        old_end = _FIXED_NOW - timedelta(hours=3)
+        old_end = _FIXED_NOW - timedelta(hours=1, minutes=30)
         new_end = _FIXED_NOW - timedelta(hours=1)
         self._write_valid_parquet(
             tmp_path / "SPY_2025-01-01_2025-06-01_60m.parquet",
@@ -913,6 +921,674 @@ class TestCandidateFullValidityScoring:
         result = _parse_result(out)
         assert result["result"] == "PASS"
         assert result["order_plan"]["qty"] == 45
+
+
+class TestSessionAwareFreshness:
+    """validate_bar_freshness covers open / closed / weekend / holiday cases."""
+
+    def _clock(self, **overrides):
+        defaults = {
+            "timestamp": "t",
+            "is_open": True,
+            "next_open": None,
+            "next_close": None,
+        }
+        defaults.update(overrides)
+        return defaults
+
+    # ------- direct helper tests -------
+
+    def test_open_market_recent_bar_passes(self):
+        latest = _FIXED_NOW - timedelta(hours=1)
+        assert cli.validate_bar_freshness(
+            latest_ts=latest, now=_FIXED_NOW, clock=self._clock(is_open=True),
+        ) is None
+
+    def test_open_market_older_than_two_hours_blocks(self):
+        latest = _FIXED_NOW - timedelta(hours=3)
+        blocker = cli.validate_bar_freshness(
+            latest_ts=latest, now=_FIXED_NOW, clock=self._clock(is_open=True),
+        )
+        assert blocker is not None
+        assert "stale" in blocker
+        assert "3h 0m" in blocker
+        assert "2h 0m" in blocker
+
+    def test_immediately_after_close_final_session_bar_passes(self):
+        # _FIXED_NOW = 2026-06-23 14:30 UTC  ≈ Tue 10:30 ET
+        # Pretend it's now 21:30 UTC (17:30 ET, just after 16:00 close).
+        # Latest bar: 19:00 UTC (15:00 ET) — 2.5h old. Market closed.
+        now = datetime(2026, 6, 23, 21, 30, tzinfo=timezone.utc)
+        latest = datetime(2026, 6, 23, 19, 0, tzinfo=timezone.utc)
+        clock = self._clock(
+            is_open=False,
+            next_open="2026-06-24T13:30:00+00:00",   # next morning 9:30 ET
+            next_close="2026-06-24T20:00:00+00:00",
+        )
+        assert cli.validate_bar_freshness(
+            latest_ts=latest, now=now, clock=clock,
+        ) is None
+
+    def test_overnight_final_session_bar_passes(self):
+        # Wed 2026-06-24 04:00 UTC ≈ Wed 00:00 ET overnight.
+        # Latest bar: Tue 19:00 UTC (15:00 ET, last bar of Tue session) — 9h old.
+        now = datetime(2026, 6, 24, 4, 0, tzinfo=timezone.utc)
+        latest = datetime(2026, 6, 23, 19, 0, tzinfo=timezone.utc)
+        clock = self._clock(
+            is_open=False,
+            next_open="2026-06-24T13:30:00+00:00",
+        )
+        assert cli.validate_bar_freshness(
+            latest_ts=latest, now=now, clock=clock,
+        ) is None
+
+    def test_saturday_with_friday_final_bar_passes(self):
+        # Saturday 2026-06-27 14:00 UTC; market closed; next_open Mon 06-29 13:30 UTC.
+        # Latest bar: Fri 2026-06-26 19:00 UTC — about 43h old.
+        now = datetime(2026, 6, 27, 14, 0, tzinfo=timezone.utc)
+        latest = datetime(2026, 6, 26, 19, 0, tzinfo=timezone.utc)
+        clock = self._clock(
+            is_open=False,
+            next_open="2026-06-29T13:30:00+00:00",
+        )
+        assert cli.validate_bar_freshness(
+            latest_ts=latest, now=now, clock=clock,
+        ) is None
+
+    def test_monday_premarket_with_friday_final_bar_passes(self):
+        # Monday 2026-06-29 12:00 UTC (08:00 ET premarket); next_open at 13:30 UTC.
+        # Latest bar: Fri 2026-06-26 19:00 UTC ≈ 65h old. Should pass.
+        now = datetime(2026, 6, 29, 12, 0, tzinfo=timezone.utc)
+        latest = datetime(2026, 6, 26, 19, 0, tzinfo=timezone.utc)
+        clock = self._clock(
+            is_open=False,
+            next_open="2026-06-29T13:30:00+00:00",
+        )
+        assert cli.validate_bar_freshness(
+            latest_ts=latest, now=now, clock=clock,
+        ) is None
+
+    def test_holiday_previous_session_bar_passes(self):
+        # Long weekend: Friday holiday, market reopens Tuesday morning.
+        # Now: Mon 12:00 UTC; next_open Tue 13:30 UTC; latest bar Thu 19:00 UTC.
+        # Latest bar is ~89h before next_open — within 96h window.
+        now = datetime(2026, 7, 6, 12, 0, tzinfo=timezone.utc)
+        latest = datetime(2026, 7, 2, 19, 0, tzinfo=timezone.utc)
+        clock = self._clock(
+            is_open=False,
+            next_open="2026-07-07T13:30:00+00:00",
+        )
+        assert cli.validate_bar_freshness(
+            latest_ts=latest, now=now, clock=clock,
+        ) is None
+
+    def test_bar_older_than_most_recent_completed_session_blocks(self):
+        # Stale weekly+ gap: latest bar from 2 weeks ago.
+        # Monday premarket: most recent completed session is the previous Friday.
+        now = datetime(2026, 6, 29, 12, 0, tzinfo=timezone.utc)
+        latest = datetime(2026, 6, 15, 19, 0, tzinfo=timezone.utc)
+        clock = self._clock(is_open=False)
+        blocker = cli.validate_bar_freshness(
+            latest_ts=latest, now=now, clock=clock,
+        )
+        assert blocker is not None
+        assert "is not the final 60m bar" in blocker
+
+    def test_future_bar_blocks(self):
+        latest = _FIXED_NOW + timedelta(hours=1)
+        blocker = cli.validate_bar_freshness(
+            latest_ts=latest, now=_FIXED_NOW, clock=self._clock(is_open=True),
+        )
+        assert blocker is not None
+        assert "future" in blocker
+
+    @pytest.mark.parametrize("bad", ["true", 0, 1, None, object(), "false"])
+    def test_malformed_is_open_blocks(self, bad):
+        blocker = cli.validate_bar_freshness(
+            latest_ts=_FIXED_NOW - timedelta(hours=1),
+            now=_FIXED_NOW,
+            clock={"is_open": bad, "next_open": None, "next_close": None},
+        )
+        assert blocker is not None
+        assert "is_open" in blocker
+
+    def test_malformed_next_open_blocks(self):
+        blocker = cli.validate_bar_freshness(
+            latest_ts=_FIXED_NOW - timedelta(hours=10),
+            now=_FIXED_NOW,
+            clock={"is_open": False, "next_open": "not-a-date", "next_close": None},
+        )
+        assert blocker is not None
+        assert "next_open" in blocker
+
+    def test_malformed_next_close_blocks(self):
+        blocker = cli.validate_bar_freshness(
+            latest_ts=_FIXED_NOW - timedelta(hours=1),
+            now=_FIXED_NOW,
+            clock={
+                "is_open": True,
+                "next_open": "2026-06-29T13:30:00+00:00",
+                "next_close": "still-not-a-date",
+            },
+        )
+        assert blocker is not None
+        assert "next_close" in blocker
+
+    def test_naive_next_open_blocks(self):
+        # Timezone-naive next_open should also block.
+        blocker = cli.validate_bar_freshness(
+            latest_ts=_FIXED_NOW - timedelta(hours=10),
+            now=_FIXED_NOW,
+            clock={
+                "is_open": False,
+                "next_open": "2026-06-29T13:30:00",  # no offset
+                "next_close": None,
+            },
+        )
+        assert blocker is not None
+        assert "next_open" in blocker
+
+    def test_blocker_age_includes_hours_and_minutes(self):
+        latest = _FIXED_NOW - timedelta(hours=4, minutes=12)
+        blocker = cli.validate_bar_freshness(
+            latest_ts=latest, now=_FIXED_NOW, clock=self._clock(is_open=True),
+        )
+        assert blocker is not None
+        assert "4h 12m" in blocker
+
+    # ------- end-to-end CLI tests through main() -------
+
+    def test_cli_open_market_recent_bar_passes_buy_plan(self, tmp_path):
+        _write_bullish_cache(tmp_path)  # latest 1h before _FIXED_NOW
+        a = _mock_adapter()  # is_open=True
+        code, out = _run_cli([], adapter=a, cache_dir=tmp_path)
+        result = _parse_result(out)
+        assert result["result"] == "PASS"
+        assert result["action"] == "buy_planned"
+        assert a.submit_market_order.call_count == 0
+        assert code == 0
+
+    def test_cli_open_market_three_hour_old_bar_blocks(self, tmp_path):
+        # Bar 3 hours old, market open → stale (over 2h).
+        old_end = _FIXED_NOW - timedelta(hours=3)
+        _write_cache_csv(tmp_path, [float(c) for c in range(100, 120)], end=old_end)
+        a = _mock_adapter()  # is_open=True
+        code, out = _run_cli([], adapter=a, cache_dir=tmp_path)
+        result = _parse_result(out)
+        assert result["result"] == "BLOCKED"
+        assert "stale" in result["blocker"]
+        assert "while market is open" in result["blocker"]
+        assert "3h 0m" in result["blocker"]
+        assert a.submit_market_order.call_count == 0
+        assert code == 1
+
+    def test_cli_closed_market_weekend_bar_passes(self, tmp_path):
+        # Use a fixed "now" of Saturday with a Friday-final cache.
+        sat_now = datetime(2026, 6, 27, 14, 0, tzinfo=timezone.utc)
+        fri_end = datetime(2026, 6, 26, 19, 0, tzinfo=timezone.utc)
+        # 20 hourly bars ending Fri 19:00 UTC.
+        _write_cache_csv(tmp_path, [float(c) for c in range(100, 120)], end=fri_end)
+        a = _mock_adapter(clock_open=False)
+        # Override the mock clock to include next_open.
+        a.get_clock.return_value = {
+            "timestamp": "t", "is_open": False,
+            "next_open": "2026-06-29T13:30:00+00:00",
+            "next_close": "2026-06-29T20:00:00+00:00",
+        }
+        code, out = _run_cli([], adapter=a, cache_dir=tmp_path,
+                             now_utc_fn=lambda: sat_now)
+        result = _parse_result(out)
+        # Freshness passes; cycle then sees is_open=False → signal BLOCK
+        # with MARKET_NOT_OPEN. result=PASS, action=none, signal=BLOCK.
+        assert result["result"] == "PASS"
+        assert result["action"] == "none"
+        assert result["signal"] == "BLOCK"
+        assert "MARKET_NOT_OPEN" in result["reason_codes"]
+        assert a.submit_market_order.call_count == 0
+        assert code == 0
+
+    def test_cli_clock_exception_returns_error(self, tmp_path):
+        _write_bullish_cache(tmp_path)
+        a = _mock_adapter()
+        a.get_clock.side_effect = AlpacaPaperAdapterError("net down")
+        code, out = _run_cli([], adapter=a, cache_dir=tmp_path)
+        result = _parse_result(out)
+        assert result["result"] == "ERROR"
+        assert "clock read failed" in result["blocker"]
+        assert a.submit_market_order.call_count == 0
+        assert code == 2
+
+    def test_cli_dry_run_and_submit_use_same_freshness_check(self, tmp_path):
+        old_end = _FIXED_NOW - timedelta(hours=3)
+        _write_cache_csv(tmp_path, [float(c) for c in range(100, 120)], end=old_end)
+        a = _mock_adapter()  # is_open=True
+        # Dry-run blocks.
+        code_dry, out_dry = _run_cli([], adapter=a, cache_dir=tmp_path)
+        # Paper-submit blocks identically.
+        a2 = _mock_adapter()
+        code_sub, out_sub = _run_cli(["--submit-paper"], adapter=a2, cache_dir=tmp_path)
+        for code, out in [(code_dry, out_dry), (code_sub, out_sub)]:
+            result = _parse_result(out)
+            assert result["result"] == "BLOCKED"
+            assert "stale" in result["blocker"]
+            assert code == 1
+        assert a.submit_market_order.call_count == 0
+        assert a2.submit_market_order.call_count == 0
+
+    def test_cli_blocker_contains_hours_and_minutes(self, tmp_path):
+        old_end = _FIXED_NOW - timedelta(hours=4, minutes=12)
+        _write_cache_csv(tmp_path, [float(c) for c in range(100, 120)], end=old_end)
+        a = _mock_adapter()
+        _, out = _run_cli([], adapter=a, cache_dir=tmp_path)
+        result = _parse_result(out)
+        assert "4h 12m" in result["blocker"]
+
+    def test_cli_no_credentials_in_freshness_blocker(self, tmp_path):
+        old_end = _FIXED_NOW - timedelta(hours=8)
+        _write_cache_csv(tmp_path, [float(c) for c in range(100, 120)], end=old_end)
+        a = _mock_adapter()
+        with patch.dict(os.environ, {
+            "ALPACA_API_KEY": "no-leak-key",
+            "ALPACA_SECRET_KEY": "no-leak-secret",
+        }, clear=False):
+            _, out = _run_cli([], adapter=a, cache_dir=tmp_path)
+        assert "no-leak-key" not in out
+        assert "no-leak-secret" not in out
+
+
+class TestNYSECalendarFreshness:
+    """Exchange-calendar-aware closed-market freshness via NYSE."""
+
+    def _closed_clock(self):
+        return {
+            "timestamp": "t", "is_open": False,
+            "next_open": None, "next_close": None,
+        }
+
+    def test_wednesday_after_close_with_wednesday_final_bar_passes(self):
+        # 2026-06-24 is Wednesday. NYSE session: 13:30 → 20:00 UTC.
+        now = datetime(2026, 6, 24, 21, 0, tzinfo=timezone.utc)
+        latest = datetime(2026, 6, 24, 19, 30, tzinfo=timezone.utc)
+        assert cli.validate_bar_freshness(
+            latest_ts=latest, now=now, clock=self._closed_clock(),
+        ) is None
+
+    def test_wednesday_after_close_with_tuesday_final_bar_blocks(self):
+        now = datetime(2026, 6, 24, 21, 0, tzinfo=timezone.utc)
+        latest = datetime(2026, 6, 23, 19, 30, tzinfo=timezone.utc)
+        blocker = cli.validate_bar_freshness(
+            latest_ts=latest, now=now, clock=self._closed_clock(),
+        )
+        assert blocker is not None
+        assert "is not the final 60m bar" in blocker
+
+    def test_tuesday_premarket_with_monday_final_bar_passes(self):
+        # 2026-06-30 is Tuesday. Premarket 12:00 UTC = 08:00 ET.
+        now = datetime(2026, 6, 30, 12, 0, tzinfo=timezone.utc)
+        latest = datetime(2026, 6, 29, 19, 30, tzinfo=timezone.utc)
+        assert cli.validate_bar_freshness(
+            latest_ts=latest, now=now, clock=self._closed_clock(),
+        ) is None
+
+    def test_tuesday_premarket_with_previous_friday_bar_blocks(self):
+        # Monday 2026-06-29 was a regular session, so on Tuesday premarket
+        # the most recent completed session is Monday — not the prior Friday.
+        now = datetime(2026, 6, 30, 12, 0, tzinfo=timezone.utc)
+        latest = datetime(2026, 6, 26, 19, 30, tzinfo=timezone.utc)
+        blocker = cli.validate_bar_freshness(
+            latest_ts=latest, now=now, clock=self._closed_clock(),
+        )
+        assert blocker is not None
+        assert "is not the final 60m bar" in blocker
+
+    def test_saturday_with_friday_final_bar_passes_calendar(self):
+        # Saturday 2026-06-27; most recent session is Friday 2026-06-26.
+        now = datetime(2026, 6, 27, 14, 0, tzinfo=timezone.utc)
+        latest = datetime(2026, 6, 26, 19, 30, tzinfo=timezone.utc)
+        assert cli.validate_bar_freshness(
+            latest_ts=latest, now=now, clock=self._closed_clock(),
+        ) is None
+
+    def test_monday_premarket_with_friday_final_bar_passes_calendar(self):
+        # Monday 2026-06-29 premarket 12:00 UTC; most recent completed
+        # session = Friday 2026-06-26 (Monday hasn't completed yet).
+        now = datetime(2026, 6, 29, 12, 0, tzinfo=timezone.utc)
+        latest = datetime(2026, 6, 26, 19, 30, tzinfo=timezone.utc)
+        assert cli.validate_bar_freshness(
+            latest_ts=latest, now=now, clock=self._closed_clock(),
+        ) is None
+
+    def test_holiday_uses_actual_prior_nyse_session(self):
+        # 2026-07-03 (Friday) is the observed July 4 holiday — NOT a
+        # trading day. Now: Saturday morning. Most recent completed
+        # session = Thursday 2026-07-02 (not Friday). Thursday bar passes.
+        now = datetime(2026, 7, 4, 12, 0, tzinfo=timezone.utc)
+        latest = datetime(2026, 7, 2, 19, 30, tzinfo=timezone.utc)
+        assert cli.validate_bar_freshness(
+            latest_ts=latest, now=now, clock=self._closed_clock(),
+        ) is None
+
+    def test_holiday_friday_bar_blocks_because_friday_not_a_session(self):
+        # Even though Friday 2026-07-03 is calendar-Friday, NYSE was closed
+        # that day. A "Friday bar" is malformed/missing data → blocks.
+        now = datetime(2026, 7, 4, 12, 0, tzinfo=timezone.utc)
+        latest = datetime(2026, 7, 3, 19, 30, tzinfo=timezone.utc)
+        blocker = cli.validate_bar_freshness(
+            latest_ts=latest, now=now, clock=self._closed_clock(),
+        )
+        assert blocker is not None
+        assert "is not the final 60m bar" in blocker
+
+    def test_long_holiday_weekend_passes_only_immediately_previous_session(self):
+        # July 3 holiday + weekend → Monday morning's most recent
+        # completed session is Thursday 2026-07-02. Thursday bar passes.
+        now = datetime(2026, 7, 6, 12, 0, tzinfo=timezone.utc)
+        latest = datetime(2026, 7, 2, 19, 30, tzinfo=timezone.utc)
+        assert cli.validate_bar_freshness(
+            latest_ts=latest, now=now, clock=self._closed_clock(),
+        ) is None
+
+    def test_long_holiday_weekend_blocks_earlier_session_bar(self):
+        # The Wednesday before the long weekend is NOT the most recent
+        # completed session. Even though Wednesday's bar (2026-07-01) is
+        # well under 120 wall-clock hours before next_open (Mon 2026-07-06
+        # = ~118h), it belongs to a skipped session and must block.
+        now = datetime(2026, 7, 6, 12, 0, tzinfo=timezone.utc)
+        latest = datetime(2026, 7, 1, 19, 30, tzinfo=timezone.utc)
+        blocker = cli.validate_bar_freshness(
+            latest_ts=latest, now=now, clock=self._closed_clock(),
+        )
+        assert blocker is not None
+        assert "is not the final 60m bar" in blocker
+
+    def test_bar_within_120h_but_from_skipped_session_blocks(self):
+        # Tuesday after close. Friday 2026-06-19 bar is ~96h before Friday's
+        # close, well under 120h. But the most recent completed session is
+        # Monday 2026-06-22. Friday's bar is from an earlier session.
+        now = datetime(2026, 6, 23, 21, 0, tzinfo=timezone.utc)
+        latest = datetime(2026, 6, 19, 19, 30, tzinfo=timezone.utc)
+        blocker = cli.validate_bar_freshness(
+            latest_ts=latest, now=now, clock=self._closed_clock(),
+        )
+        assert blocker is not None
+        assert "is not the final 60m bar" in blocker
+
+    def test_calendar_unavailable_returns_blocked(self):
+        # Simulate a missing exchange-calendar dependency.
+        from unittest.mock import patch
+        now = datetime(2026, 6, 27, 14, 0, tzinfo=timezone.utc)
+        latest = datetime(2026, 6, 26, 19, 30, tzinfo=timezone.utc)
+        with patch.object(
+            cli, "_most_recent_completed_nyse_session", return_value=None,
+        ):
+            blocker = cli.validate_bar_freshness(
+                latest_ts=latest, now=now, clock=self._closed_clock(),
+            )
+        assert blocker is not None
+        assert "NYSE" in blocker
+
+
+class TestSingleClockSnapshotInCLI:
+    """The CLI must read the broker clock exactly once per cycle and share
+    the same snapshot with both the freshness check and the cycle."""
+
+    def test_cli_calls_get_clock_exactly_once(self, tmp_path):
+        _write_bullish_cache(tmp_path)
+        a = _mock_adapter()
+        _run_cli([], adapter=a, cache_dir=tmp_path)
+        assert a.get_clock.call_count == 1
+
+    def test_cli_calls_get_clock_once_in_paper_submit_mode(self, tmp_path):
+        _write_bullish_cache(tmp_path)
+        a = _mock_adapter()
+        _run_cli(["--submit-paper"], adapter=a, cache_dir=tmp_path)
+        assert a.get_clock.call_count == 1
+
+    def test_cli_calls_get_clock_once_on_hold_signal(self, tmp_path):
+        _write_flat_cache(tmp_path)
+        a = _mock_adapter()
+        _run_cli([], adapter=a, cache_dir=tmp_path)
+        assert a.get_clock.call_count == 1
+
+    def test_second_clock_value_never_consumed(self, tmp_path):
+        # If the cycle were to call get_clock a second time it would
+        # receive clock2 (with is_open=False) and produce a BLOCK signal
+        # from MARKET_NOT_OPEN. Because the CLI shares its single
+        # snapshot, the cycle must see the open-market clock1 and
+        # produce buy_planned.
+        _write_bullish_cache(tmp_path)
+        clock1 = {
+            "timestamp": "t1", "is_open": True,
+            "next_open": None, "next_close": None,
+        }
+        clock2 = {
+            "timestamp": "t2", "is_open": False,
+            "next_open": "2026-06-24T13:30:00+00:00",
+            "next_close": "2026-06-24T20:00:00+00:00",
+        }
+        a = _mock_adapter()
+        a.get_clock.side_effect = [clock1, clock2]
+        code, out = _run_cli([], adapter=a, cache_dir=tmp_path)
+        result = _parse_result(out)
+        assert a.get_clock.call_count == 1
+        assert result["result"] == "PASS"
+        assert result["action"] == "buy_planned"
+        assert result["signal"] == "BUY"
+
+    def test_no_submission_when_clock_validation_fails(self, tmp_path):
+        _write_bullish_cache(tmp_path)
+        a = _mock_adapter()
+        # Return a malformed clock (is_open not exactly bool).
+        a.get_clock.return_value = {
+            "timestamp": "t", "is_open": "true",
+            "next_open": None, "next_close": None,
+        }
+        code, out = _run_cli(["--submit-paper"], adapter=a, cache_dir=tmp_path)
+        result = _parse_result(out)
+        assert result["result"] == "BLOCKED"
+        assert a.submit_market_order.call_count == 0
+        assert code == 1
+
+
+class TestFinalBarFreshnessRequirement:
+    """Closed-market freshness must require the FINAL session 60m bar,
+    not any bar inside the session window."""
+
+    def _closed_clock(self):
+        return {
+            "timestamp": "t", "is_open": False,
+            "next_open": None, "next_close": None,
+        }
+
+    # ---- Wednesday after close (regular session 13:30–20:00 UTC) ----
+    # Expected final-bar label: 19:30 UTC (Yahoo start-of-bar).
+    # Accepted window: [19:00, 20:00] UTC.
+
+    def test_after_close_final_session_bar_passes(self):
+        # 2026-06-24 is a regular Wednesday session.
+        now = datetime(2026, 6, 24, 21, 0, tzinfo=timezone.utc)
+        latest = datetime(2026, 6, 24, 19, 30, tzinfo=timezone.utc)
+        assert cli.validate_bar_freshness(
+            latest_ts=latest, now=now, clock=self._closed_clock(),
+        ) is None
+
+    def test_after_close_morning_bar_same_session_blocks(self):
+        # Morning bar (label 13:30 UTC) is the session's FIRST bar,
+        # not the final bar. Must block even though it's in the right
+        # session.
+        now = datetime(2026, 6, 24, 21, 0, tzinfo=timezone.utc)
+        latest = datetime(2026, 6, 24, 13, 30, tzinfo=timezone.utc)
+        blocker = cli.validate_bar_freshness(
+            latest_ts=latest, now=now, clock=self._closed_clock(),
+        )
+        assert blocker is not None
+        assert "is not the final 60m bar" in blocker
+
+    def test_after_close_midday_bar_same_session_blocks(self):
+        # Midday bar (label 16:30 UTC = noon ET) — same session, but
+        # not the final bar.
+        now = datetime(2026, 6, 24, 21, 0, tzinfo=timezone.utc)
+        latest = datetime(2026, 6, 24, 16, 30, tzinfo=timezone.utc)
+        blocker = cli.validate_bar_freshness(
+            latest_ts=latest, now=now, clock=self._closed_clock(),
+        )
+        assert blocker is not None
+        assert "is not the final 60m bar" in blocker
+
+    def test_after_close_label_at_close_passes_via_tolerance(self):
+        # End-of-bar labeling: label = session_close = 20:00 UTC. Should
+        # be accepted by the ±30m tolerance around 19:30.
+        now = datetime(2026, 6, 24, 21, 0, tzinfo=timezone.utc)
+        latest = datetime(2026, 6, 24, 20, 0, tzinfo=timezone.utc)
+        assert cli.validate_bar_freshness(
+            latest_ts=latest, now=now, clock=self._closed_clock(),
+        ) is None
+
+    def test_after_close_label_top_of_hour_passes_via_tolerance(self):
+        # Top-of-hour labeling: label = 19:00 UTC. Accepted boundary.
+        now = datetime(2026, 6, 24, 21, 0, tzinfo=timezone.utc)
+        latest = datetime(2026, 6, 24, 19, 0, tzinfo=timezone.utc)
+        assert cli.validate_bar_freshness(
+            latest_ts=latest, now=now, clock=self._closed_clock(),
+        ) is None
+
+    # ---- Weekend ----
+
+    def test_weekend_friday_final_bar_passes(self):
+        now = datetime(2026, 6, 27, 14, 0, tzinfo=timezone.utc)  # Saturday
+        latest = datetime(2026, 6, 26, 19, 30, tzinfo=timezone.utc)
+        assert cli.validate_bar_freshness(
+            latest_ts=latest, now=now, clock=self._closed_clock(),
+        ) is None
+
+    def test_weekend_friday_morning_bar_blocks(self):
+        now = datetime(2026, 6, 27, 14, 0, tzinfo=timezone.utc)
+        latest = datetime(2026, 6, 26, 13, 30, tzinfo=timezone.utc)  # Fri 9:30 ET
+        blocker = cli.validate_bar_freshness(
+            latest_ts=latest, now=now, clock=self._closed_clock(),
+        )
+        assert blocker is not None
+        assert "is not the final 60m bar" in blocker
+
+    def test_weekend_friday_midday_bar_blocks(self):
+        now = datetime(2026, 6, 27, 14, 0, tzinfo=timezone.utc)
+        latest = datetime(2026, 6, 26, 16, 30, tzinfo=timezone.utc)  # Fri noon ET
+        blocker = cli.validate_bar_freshness(
+            latest_ts=latest, now=now, clock=self._closed_clock(),
+        )
+        assert blocker is not None
+        assert "is not the final 60m bar" in blocker
+
+    # ---- Early-close sessions ----
+    # 2026-11-27 (Black Friday) and 2026-12-24 (Christmas Eve) are
+    # NYSE early-close days: 14:30 → 18:00 UTC (4 hours after DST).
+    # Expected final 60m bar label: 17:30 UTC. Accepted window:
+    # [17:00, 18:00] UTC.
+
+    def test_early_close_session_final_bar_passes(self):
+        # 2026-11-27 Black Friday early-close session.
+        now = datetime(2026, 11, 27, 19, 0, tzinfo=timezone.utc)
+        latest = datetime(2026, 11, 27, 17, 30, tzinfo=timezone.utc)
+        assert cli.validate_bar_freshness(
+            latest_ts=latest, now=now, clock=self._closed_clock(),
+        ) is None
+
+    def test_early_close_session_earlier_bar_blocks(self):
+        # Same early-close session, but a midday bar (label 15:30 UTC ≈
+        # 10:30 ET) — well outside the final-bar window.
+        now = datetime(2026, 11, 27, 19, 0, tzinfo=timezone.utc)
+        latest = datetime(2026, 11, 27, 15, 30, tzinfo=timezone.utc)
+        blocker = cli.validate_bar_freshness(
+            latest_ts=latest, now=now, clock=self._closed_clock(),
+        )
+        assert blocker is not None
+        assert "is not the final 60m bar" in blocker
+
+    def test_early_close_session_regular_session_final_bar_blocks(self):
+        # The 19:30 UTC label that would pass for a regular session must
+        # NOT pass for an early-close session that ends at 18:00 UTC
+        # (19:30 is well after that session's close).
+        now = datetime(2026, 11, 27, 19, 0, tzinfo=timezone.utc)
+        latest = datetime(2026, 11, 27, 19, 30, tzinfo=timezone.utc)
+        # Note: 19:30 is also in the FUTURE relative to now=19:00, so it
+        # would block on the future-bar check too. Adjust now slightly.
+        now = datetime(2026, 11, 27, 20, 0, tzinfo=timezone.utc)
+        blocker = cli.validate_bar_freshness(
+            latest_ts=latest, now=now, clock=self._closed_clock(),
+        )
+        assert blocker is not None
+        assert "is not the final 60m bar" in blocker
+
+    # ---- Unsupported intervals ----
+
+    @pytest.mark.parametrize("bad_interval", ["1d", "30m", "15m", "5m", "1m", "", "60min", None])
+    def test_unsupported_interval_blocks(self, bad_interval):
+        now = datetime(2026, 6, 24, 21, 0, tzinfo=timezone.utc)
+        latest = datetime(2026, 6, 24, 19, 30, tzinfo=timezone.utc)
+        blocker = cli.validate_bar_freshness(
+            latest_ts=latest, now=now,
+            clock=self._closed_clock(),
+            interval=bad_interval,
+        )
+        assert blocker is not None
+        assert "does not support interval" in blocker
+
+    # ---- CLI still calls get_clock exactly once ----
+
+    def test_cli_get_clock_call_count_remains_one(self, tmp_path):
+        # Fresh open-market bullish cache → freshness passes via 2h
+        # open-market window; cycle proceeds with the same snapshot.
+        _write_bullish_cache(tmp_path)
+        a = _mock_adapter()
+        _run_cli([], adapter=a, cache_dir=tmp_path)
+        assert a.get_clock.call_count == 1
+
+    # ---- Zero submissions on every invalid freshness case ----
+
+    @pytest.mark.parametrize("scenario", [
+        "morning_bar_blocks",
+        "midday_bar_blocks",
+        "skipped_session_blocks",
+        "unsupported_interval_blocks",
+    ])
+    def test_no_submission_on_invalid_freshness(self, scenario, tmp_path):
+        # Saturday is a closed-market scenario in which a Friday final
+        # bar would pass. We deliberately set the cache to something
+        # invalid for each scenario and confirm zero submissions.
+        sat_now = datetime(2026, 6, 27, 14, 0, tzinfo=timezone.utc)
+        if scenario == "morning_bar_blocks":
+            end = datetime(2026, 6, 26, 13, 30, tzinfo=timezone.utc)
+        elif scenario == "midday_bar_blocks":
+            end = datetime(2026, 6, 26, 16, 30, tzinfo=timezone.utc)
+        elif scenario == "skipped_session_blocks":
+            # Thu final bar (skipped Friday — most recent is Friday).
+            end = datetime(2026, 6, 25, 19, 30, tzinfo=timezone.utc)
+        elif scenario == "unsupported_interval_blocks":
+            # The CLI restricts --interval to 60m via argparse choices,
+            # so directly invoke the helper instead with bad interval.
+            blocker = cli.validate_bar_freshness(
+                latest_ts=datetime(2026, 6, 26, 19, 30, tzinfo=timezone.utc),
+                now=sat_now,
+                clock=self._closed_clock(),
+                interval="1d",
+            )
+            assert blocker is not None
+            return
+        else:
+            pytest.fail(f"unknown scenario {scenario}")
+        _write_cache_csv(
+            tmp_path, [float(c) for c in range(100, 120)], end=end,
+        )
+        a = _mock_adapter(clock_open=False)
+        code, out = _run_cli(
+            ["--submit-paper"], adapter=a, cache_dir=tmp_path,
+            now_utc_fn=lambda: sat_now,
+        )
+        result = _parse_result(out)
+        assert result["result"] == "BLOCKED"
+        assert a.submit_market_order.call_count == 0
+        assert a.get_clock.call_count == 1
+        assert code == 1
 
 
 class TestArgParsing:
