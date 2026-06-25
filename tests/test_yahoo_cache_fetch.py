@@ -13,6 +13,7 @@ Rules:
 from __future__ import annotations
 
 import ast
+import datetime
 import json
 import pathlib
 from unittest.mock import MagicMock
@@ -135,7 +136,7 @@ class TestWithMockedProvider:
             _inter_fetch_delay=0.0,
             _retry_delays=(),
         )
-        ok_entries = [e for e in result["entries"] if e.get("status") == "OK"]
+        ok_entries = [e for e in result["entries"] if e.get("status") in ("FETCHED", "CACHE_HIT")]
         assert len(ok_entries) >= 1
         assert isinstance(ok_entries[0]["rows"], int)
         assert ok_entries[0]["rows"] == 7
@@ -152,7 +153,7 @@ class TestWithMockedProvider:
             _inter_fetch_delay=0.0,
             _retry_delays=(),
         )
-        ok_entries = [e for e in result["entries"] if e.get("status") == "OK"]
+        ok_entries = [e for e in result["entries"] if e.get("status") in ("FETCHED", "CACHE_HIT")]
         assert ok_entries[0]["inferred_start"] == "2024-01-02"
         assert "inferred_end" in ok_entries[0]
 
@@ -351,7 +352,7 @@ class TestPartialFailure:
             _inter_fetch_delay=0.0,
             _retry_delays=(),
         )
-        ok_entries = [e for e in result["entries"] if e.get("status") == "OK"]
+        ok_entries = [e for e in result["entries"] if e.get("status") in ("FETCHED", "CACHE_HIT")]
         symbols_ok = [e["symbol"] for e in ok_entries]
         assert "SPY" in symbols_ok
 
@@ -382,7 +383,7 @@ class TestPartialFailure:
             _inter_fetch_delay=0.0,
             _retry_delays=(),
         )
-        ok_count = sum(1 for e in result["entries"] if e.get("status") == "OK")
+        ok_count = sum(1 for e in result["entries"] if e.get("status") in ("FETCHED", "CACHE_HIT"))
         assert result["files_written"] == ok_count
 
 
@@ -492,7 +493,7 @@ class TestNoPricesEmitted:
             _inter_fetch_delay=0.0,
             _retry_delays=(),
         )
-        ok_entries = [e for e in result["entries"] if e.get("status") == "OK"]
+        ok_entries = [e for e in result["entries"] if e.get("status") in ("FETCHED", "CACHE_HIT")]
         for e in ok_entries:
             assert isinstance(e["rows"], int)
             assert not isinstance(e["rows"], float)
@@ -576,6 +577,202 @@ def _all_function_calls(tree: ast.Module) -> list[str]:
             elif isinstance(func, ast.Attribute):
                 results.append(func.attr)
     return results
+
+
+class TestForceRefreshAndCacheHitReporting:
+    """--force-refresh and CACHE_HIT vs FETCHED accounting."""
+
+    def _wrap_recording(self, tmp_path, df):
+        """Return (cached_provider, inner_mock) so tests can assert on
+        the number of underlying Yahoo calls."""
+        from src.data.base import BaseDataProvider
+        from src.data.cached_provider import CachedMarketDataProvider
+        inner = MagicMock(spec=BaseDataProvider)
+        inner.fetch_bars.return_value = df.copy()
+        cached = CachedMarketDataProvider(inner, cache_dir=tmp_path)
+        return cached, inner
+
+    def test_cache_hit_no_network_call(self, tmp_path: pathlib.Path) -> None:
+        df = _make_test_df(5)
+        cached, inner = self._wrap_recording(tmp_path, df)
+        # First run: fills the cache.
+        r1 = run_fetch(
+            tmp_path, symbols=["SPY"], intervals=["1d"],
+            allow_network=True, _provider=cached,
+            _inter_fetch_delay=0.0, _retry_delays=(),
+        )
+        assert r1["entries"][0]["status"] == "FETCHED"
+        assert r1["network_calls_made"] is True
+        assert inner.fetch_bars.call_count == 1
+
+        # Second run, same cache_dir: must be a cache hit.
+        cached2, inner2 = self._wrap_recording(tmp_path, df)
+        r2 = run_fetch(
+            tmp_path, symbols=["SPY"], intervals=["1d"],
+            allow_network=True, _provider=cached2,
+            _inter_fetch_delay=0.0, _retry_delays=(),
+        )
+        assert r2["entries"][0]["status"] == "CACHE_HIT"
+        assert r2["network_calls_made"] is False
+        assert r2["fetched_count"] == 0
+        assert r2["cache_hit_count"] == 1
+        # The underlying Yahoo provider was NEVER called.
+        assert inner2.fetch_bars.call_count == 0
+
+    def test_force_refresh_bypasses_cache_and_calls_yahoo(self, tmp_path: pathlib.Path) -> None:
+        df = _make_test_df(5)
+        cached, inner = self._wrap_recording(tmp_path, df)
+        # Pre-fill the cache.
+        run_fetch(
+            tmp_path, symbols=["SPY"], intervals=["1d"],
+            allow_network=True, _provider=cached,
+            _inter_fetch_delay=0.0, _retry_delays=(),
+        )
+
+        # Now force a refresh — must hit Yahoo even though the file exists.
+        cached2, inner2 = self._wrap_recording(tmp_path, df)
+        r = run_fetch(
+            tmp_path, symbols=["SPY"], intervals=["1d"],
+            allow_network=True, force_refresh=True, _provider=cached2,
+            _inter_fetch_delay=0.0, _retry_delays=(),
+        )
+        assert r["entries"][0]["status"] == "FETCHED"
+        assert r["network_calls_made"] is True
+        assert r["force_refresh"] is True
+        assert r["fetched_count"] == 1
+        assert r["cache_hit_count"] == 0
+        # The underlying provider WAS called this time.
+        assert inner2.fetch_bars.call_count == 1
+
+    def test_force_refresh_does_not_delete_unrelated_files(self, tmp_path: pathlib.Path) -> None:
+        df = _make_test_df(5)
+
+        # Pre-create unrelated cache files for a different symbol /
+        # interval / date range.
+        unrelated_files = [
+            tmp_path / "QQQ_2020-01-01_2025-01-01_1d.csv",
+            tmp_path / "SPY_2018-01-01_2019-01-01_1d.csv",
+            tmp_path / "SPY_2020-01-01_2025-01-01_60m.csv",
+            tmp_path / "unrelated_file.txt",
+        ]
+        for f in unrelated_files:
+            f.write_text("untouched")
+
+        cached, inner = self._wrap_recording(tmp_path, df)
+        # Pre-fill the targeted SPY/1d cache.
+        run_fetch(
+            tmp_path, symbols=["SPY"], intervals=["1d"],
+            allow_network=True, _provider=cached,
+            _inter_fetch_delay=0.0, _retry_delays=(),
+        )
+
+        cached2, _ = self._wrap_recording(tmp_path, df)
+        r = run_fetch(
+            tmp_path, symbols=["SPY"], intervals=["1d"],
+            allow_network=True, force_refresh=True, _provider=cached2,
+            _inter_fetch_delay=0.0, _retry_delays=(),
+        )
+        assert r["entries"][0]["status"] == "FETCHED"
+        for f in unrelated_files:
+            assert f.exists(), f"unrelated file {f.name} was deleted"
+            assert f.read_text() == "untouched"
+
+    def test_force_refresh_fetch_failure_preserves_previous_good_cache(
+        self, tmp_path: pathlib.Path,
+    ) -> None:
+        df = _make_test_df(5)
+
+        # Step 1: fill the cache with a known-good payload.
+        cached, inner = self._wrap_recording(tmp_path, df)
+        r1 = run_fetch(
+            tmp_path, symbols=["SPY"], intervals=["1d"],
+            allow_network=True, _provider=cached,
+            _inter_fetch_delay=0.0, _retry_delays=(),
+        )
+        assert r1["entries"][0]["status"] == "FETCHED"
+        # Capture the cached file path and original content.
+        cached_path = cached._cache_path("SPY", "2020-01-01",
+                                         datetime.date.today().isoformat(), "1d")
+        assert cached_path.exists()
+        original_content = cached_path.read_bytes()
+
+        # Step 2: force a refresh with a provider that raises.
+        from src.data.base import BaseDataProvider
+        from src.data.cached_provider import CachedMarketDataProvider
+        failing_inner = MagicMock(spec=BaseDataProvider)
+        failing_inner.fetch_bars.side_effect = RuntimeError("yahoo down")
+        failing_cached = CachedMarketDataProvider(failing_inner, cache_dir=tmp_path)
+
+        r2 = run_fetch(
+            tmp_path, symbols=["SPY"], intervals=["1d"],
+            allow_network=True, force_refresh=True, _provider=failing_cached,
+            _inter_fetch_delay=0.0, _retry_delays=(),
+        )
+        assert r2["entries"][0]["status"] == "BLOCKED"
+        # The previous good cache file must still exist with the same bytes.
+        assert cached_path.exists()
+        assert cached_path.read_bytes() == original_content
+        # No stray .bak file left behind.
+        bak = cached_path.with_suffix(cached_path.suffix + ".bak")
+        assert not bak.exists()
+
+    def test_mixed_pairs_report_per_pair_status_accurately(
+        self, tmp_path: pathlib.Path,
+    ) -> None:
+        df_spy = _make_test_df(5)
+        df_qqq = _make_test_df(3)
+
+        # Pre-fill SPY/1d only.
+        cached, inner = self._wrap_recording(tmp_path, df_spy)
+        run_fetch(
+            tmp_path, symbols=["SPY"], intervals=["1d"],
+            allow_network=True, _provider=cached,
+            _inter_fetch_delay=0.0, _retry_delays=(),
+        )
+        # Now run for BOTH SPY/1d (cache hit) and QQQ/1d (fresh fetch).
+        from src.data.base import BaseDataProvider
+        from src.data.cached_provider import CachedMarketDataProvider
+        inner2 = MagicMock(spec=BaseDataProvider)
+        def _side_effect(symbol, start, end, interval):
+            if symbol == "SPY":
+                return df_spy.copy()
+            return df_qqq.copy()
+        inner2.fetch_bars.side_effect = _side_effect
+        cached2 = CachedMarketDataProvider(inner2, cache_dir=tmp_path)
+
+        r = run_fetch(
+            tmp_path, symbols=["SPY", "QQQ"], intervals=["1d"],
+            allow_network=True, _provider=cached2,
+            _inter_fetch_delay=0.0, _retry_delays=(),
+        )
+        by_symbol = {e["symbol"]: e for e in r["entries"]}
+        assert by_symbol["SPY"]["status"] == "CACHE_HIT"
+        assert by_symbol["QQQ"]["status"] == "FETCHED"
+        assert r["cache_hit_count"] == 1
+        assert r["fetched_count"] == 1
+        assert r["network_calls_made"] is True
+        # The underlying provider was called only for QQQ.
+        assert inner2.fetch_bars.call_count == 1
+        called_symbols = {
+            call.args[0] if call.args else call.kwargs.get("symbol")
+            for call in inner2.fetch_bars.call_args_list
+        }
+        assert called_symbols == {"QQQ"}
+
+    def test_no_network_path_reports_force_refresh_value(self, tmp_path: pathlib.Path) -> None:
+        r = run_fetch(tmp_path, allow_network=False, force_refresh=True)
+        assert r["result"] == "BLOCKED"
+        assert r["force_refresh"] is True
+        assert r["network_calls_made"] is False
+        assert r["fetched_count"] == 0
+        assert r["cache_hit_count"] == 0
+
+    def test_cli_accepts_force_refresh_flag(self, tmp_path: pathlib.Path) -> None:
+        # Without --allow-network, the BLOCKED path runs but the flag
+        # must parse cleanly and propagate into the result dict.
+        code = main(["--cache-dir", str(tmp_path), "--force-refresh"])
+        # Exit 1 because BLOCKED.
+        assert code == 1
 
 
 class TestSourceScan:
