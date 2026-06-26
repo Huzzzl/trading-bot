@@ -117,19 +117,57 @@ _REDACT_SUBSTRINGS = (
 )
 _MAX_SAFE_EXC_MESSAGE_LEN = 200
 
+# Absolute Windows drive-root paths: ``C:\``, ``c:/``, ``D:\\`` (escaped),
+# any letter, single or repeated separator.
+_WIN_DRIVE_PATH_RE = re.compile(r"[A-Za-z]:[\\/]+")
+# Windows user-folder marker after any number of backslashes
+# (``\\users\\``, ``\users\``, ``\\\\users\\\\``, …) — case-insensitive.
+_WIN_USERS_RE = re.compile(r"[\\]+users[\\]+", re.IGNORECASE)
+# UNC paths: two or more leading backslashes followed by a server name
+# and another separator (``\\server\share`` or escaped ``\\\\server\\share``).
+_WIN_UNC_RE = re.compile(r"[\\]{2,}[A-Za-z0-9_\-\.]+[\\/]")
+
+
+def _contains_sensitive_path(text: str) -> bool:
+    """Return True if *text* contains a POSIX or Windows absolute path
+    that could leak operator-machine details."""
+    lower = text.lower()
+    # POSIX user-style paths.
+    if "/home/" in lower or "/root/" in lower or "/users/" in lower:
+        return True
+    # Windows drive-root absolute paths (``C:\``, ``D:/``, escaped forms).
+    if _WIN_DRIVE_PATH_RE.search(text):
+        return True
+    # Windows ``\users\`` segment under any drive or share.
+    if _WIN_USERS_RE.search(text):
+        return True
+    # UNC paths ``\\server\share``, escaped variants.
+    if _WIN_UNC_RE.search(text):
+        return True
+    return False
+
 
 def _sanitize_exc_message(exc: BaseException) -> str:
     """Return a short, credential-safe representation of an exception.
 
     Truncated to a fixed length; entirely redacted when any forbidden
-    substring is present.
+    substring or absolute filesystem path is present. Path detection
+    covers POSIX (``/home/``, ``/root/``, ``/users/``), Windows
+    drive-root paths (any letter, single or escaped backslash), the
+    Windows user-folder marker (``\\users\\``), and UNC paths
+    (``\\\\server\\share`` and escaped variants).
     """
     raw = str(exc)
     short = raw[:_MAX_SAFE_EXC_MESSAGE_LEN]
     lower = short.lower()
+    # Existing credential substring checks (api_key, secret, token, etc.).
+    # The path entries in _REDACT_SUBSTRINGS are still consulted but the
+    # richer _contains_sensitive_path covers them and more.
     for sub in _REDACT_SUBSTRINGS:
         if sub in lower:
             return "<redacted>"
+    if _contains_sensitive_path(short):
+        return "<redacted>"
     return short
 
 

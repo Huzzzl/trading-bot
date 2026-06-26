@@ -1825,6 +1825,135 @@ class TestCalendarFreshnessDiagnostics:
         assert code == 1
 
 
+class TestWindowsPathSanitization:
+    """_sanitize_exc_message must redact Windows absolute paths in
+    addition to POSIX ones, without affecting harmless text."""
+
+    def _exc(self, msg):
+        return RuntimeError(msg)
+
+    def test_windows_user_path_redacted(self):
+        msg = r"could not open C:\Users\Alice\repo\file.py"
+        assert cli._sanitize_exc_message(self._exc(msg)) == "<redacted>"
+
+    def test_windows_user_path_lowercase_redacted(self):
+        msg = r"could not open c:\users\alice\repo"
+        assert cli._sanitize_exc_message(self._exc(msg)) == "<redacted>"
+
+    def test_escaped_windows_user_path_redacted(self):
+        # Exception message contains literal double-backslashes (e.g.
+        # repr-style or serialized).
+        msg = "could not open C:\\\\Users\\\\Alice\\\\repo"
+        assert cli._sanitize_exc_message(self._exc(msg)) == "<redacted>"
+
+    def test_other_drive_letter_path_redacted(self):
+        msg = r"file not found at D:\private\file"
+        assert cli._sanitize_exc_message(self._exc(msg)) == "<redacted>"
+
+    def test_forward_slash_drive_path_redacted(self):
+        # Some libraries normalize to forward slashes on Windows.
+        msg = "file not found at C:/Users/bob/code"
+        assert cli._sanitize_exc_message(self._exc(msg)) == "<redacted>"
+
+    def test_unc_path_redacted(self):
+        msg = r"could not reach \\server\share\file"
+        assert cli._sanitize_exc_message(self._exc(msg)) == "<redacted>"
+
+    def test_escaped_unc_path_redacted(self):
+        msg = "could not reach \\\\\\\\server\\\\share\\\\file"
+        assert cli._sanitize_exc_message(self._exc(msg)) == "<redacted>"
+
+    def test_lowercase_drive_redacted(self):
+        msg = r"opening e:\some\file"
+        assert cli._sanitize_exc_message(self._exc(msg)) == "<redacted>"
+
+    def test_posix_paths_still_redacted(self):
+        for msg in (
+            "open /home/alice/repo/file",
+            "open /root/secret/key",
+            "open /Users/bob/code",
+        ):
+            assert cli._sanitize_exc_message(self._exc(msg)) == "<redacted>"
+
+    def test_ordinary_message_not_redacted(self):
+        assert cli._sanitize_exc_message(self._exc("calendar broken")) == "calendar broken"
+
+    def test_short_message_with_colon_not_redacted(self):
+        # "API: rate limited" — colon present but not as drive letter.
+        # The lone uppercase letter followed by colon-space should NOT
+        # match the drive-path regex (requires [\\/] after the colon).
+        msg = "API: rate limited"
+        # Don't redact: "I:" is not followed by a slash/backslash.
+        assert cli._sanitize_exc_message(self._exc(msg)) == msg
+
+    def test_drive_letter_without_separator_not_redacted(self):
+        # Lone "C:" without a following backslash/slash is not a path.
+        assert cli._sanitize_exc_message(self._exc("error C: unknown")) == "error C: unknown"
+
+    def test_credential_substring_still_redacted(self):
+        # Pre-existing credential-substring detection must still fire.
+        assert cli._sanitize_exc_message(
+            self._exc("api_key=leaked"),
+        ) == "<redacted>"
+
+    def test_message_truncated_before_path_check(self):
+        # A path beyond the 200-char limit is not visible at all because
+        # the message is truncated to 200 chars before scanning.
+        long_prefix = "x" * 300
+        msg = long_prefix + r" C:\Users\bob"
+        sanitized = cli._sanitize_exc_message(self._exc(msg))
+        # Either truncated and so the path was never present
+        # (sanitized starts with x's), OR detected and redacted.
+        assert sanitized == "<redacted>" or "C:\\Users\\bob" not in sanitized
+        assert len(sanitized) <= 200
+
+
+class TestWindowsPathFailsClosed:
+    """End-to-end: a Windows path leaking into the calendar exception
+    is fully redacted in the freshness blocker and still produces a
+    BLOCKED result with zero submissions."""
+
+    def _closed_clock(self):
+        return {
+            "timestamp": "t", "is_open": False,
+            "next_open": None, "next_close": None,
+        }
+
+    @pytest.mark.parametrize("leaky_msg", [
+        r"failed to read C:\Users\Alice\.alpaca\creds.json",
+        r"could not access D:\private\schedule.db",
+        r"unreachable \\server\share\nyse.csv",
+        "config at C:\\\\Users\\\\bob\\\\app.yaml is corrupt",
+    ])
+    def test_cli_zero_submissions_with_redacted_path(
+        self, tmp_path, leaky_msg,
+    ) -> None:
+        from unittest.mock import patch
+        import pandas_market_calendars as mcal
+        sat_now = datetime(2026, 6, 27, 14, 0, tzinfo=timezone.utc)
+        fri_end = datetime(2026, 6, 26, 19, 30, tzinfo=timezone.utc)
+        _write_cache_csv(tmp_path, [float(c) for c in range(100, 120)], end=fri_end)
+        a = _mock_adapter(clock_open=False)
+        with patch.object(
+            mcal, "get_calendar",
+            side_effect=RuntimeError(leaky_msg),
+        ):
+            code, out = _run_cli(
+                ["--submit-paper"], adapter=a, cache_dir=tmp_path,
+                now_utc_fn=lambda: sat_now,
+            )
+        result = _parse_result(out)
+        assert result["result"] == "BLOCKED"
+        # The raw leaky path must NOT appear anywhere in the output.
+        assert leaky_msg not in out
+        # Specific user/server name fragments must not appear either.
+        for fragment in ("Alice", "bob", "private", "server", "\\Users\\", "\\\\server"):
+            assert fragment not in result["blocker"]
+        assert "<redacted>" in result["blocker"]
+        assert a.submit_market_order.call_count == 0
+        assert code == 1
+
+
 class TestArgParsing:
     def test_interval_only_60m_supported(self, tmp_path, capsys):
         with pytest.raises(SystemExit):
