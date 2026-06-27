@@ -25,6 +25,7 @@ import argparse
 import datetime as _datetime
 import hashlib
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -48,7 +49,20 @@ _INTERVAL = "60m"
 _DEFAULT_CACHE_DIR = Path("data/cache")
 _DEFAULT_AUDIT_DIR = Path("logs/paper_cycles")
 _DEFAULT_MAX_POSITION_FRACTION = 0.01
-_IDEMPOTENCY_FILENAME = "_submitted_keys.txt"
+
+# Per-key idempotency state is stored under <audit_dir>/<_CLAIMS_SUBDIR>/.
+# Two file forms are used:
+#   <key>.claim     — process has reserved the key and is mid-submission
+#                     (or the previous run terminated with an ambiguous
+#                     broker response).
+#   <key>.submitted — broker accepted the order and the runner persisted
+#                     the final state.
+# Either file's presence blocks future automatic submissions for this
+# key. The legacy filename is retained for backward-compatible tests.
+_CLAIMS_SUBDIR = "_claims"
+_CLAIM_SUFFIX = ".claim"
+_SUBMITTED_SUFFIX = ".submitted"
+_IDEMPOTENCY_FILENAME = "_submitted_keys.txt"  # legacy: no longer written
 
 
 def _default_now_utc() -> datetime:
@@ -77,30 +91,150 @@ def _idempotency_key(
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
 
 
+class _IdempotencyError(Exception):
+    """Idempotency storage / state failure. Always fails closed."""
+
+
+def _claims_dir(audit_dir: Path) -> Path:
+    return audit_dir / _CLAIMS_SUBDIR
+
+
+def _claim_path(audit_dir: Path, key: str) -> Path:
+    return _claims_dir(audit_dir) / f"{key}{_CLAIM_SUFFIX}"
+
+
+def _submitted_path(audit_dir: Path, key: str) -> Path:
+    return _claims_dir(audit_dir) / f"{key}{_SUBMITTED_SUFFIX}"
+
+
+# Legacy alias retained so external tests can reference it without crashing.
 def _idempotency_path(audit_dir: Path) -> Path:
     return audit_dir / _IDEMPOTENCY_FILENAME
 
 
-def _load_submitted_keys(audit_dir: Path) -> set[str]:
-    path = _idempotency_path(audit_dir)
-    if not path.is_file():
-        return set()
-    keys: set[str] = set()
+def _read_idempotency_state(audit_dir: Path, key: str) -> str | None:
+    """Return ``"CLAIMED"``, ``"SUBMITTED"``, or ``None``.
+
+    Raises :class:`_IdempotencyError` on any OS-level read failure or
+    if a claim file is present but unreadable / decode-broken. The
+    runner converts the exception into a BLOCKED result so a corrupt
+    state never silently allows a duplicate submission.
+    """
+    cdir = _claims_dir(audit_dir)
+    if not cdir.exists():
+        return None
     try:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line:
-                keys.add(line)
+        if _submitted_path(audit_dir, key).exists():
+            return "SUBMITTED"
+        cpath = _claim_path(audit_dir, key)
+        if cpath.exists():
+            try:
+                _ = cpath.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as exc:
+                raise _IdempotencyError(
+                    f"claim file unreadable: {exc.__class__.__name__}"
+                ) from exc
+            return "CLAIMED"
+    except _IdempotencyError:
+        raise
+    except OSError as exc:
+        raise _IdempotencyError(
+            f"idempotency state read failed: {exc.__class__.__name__}"
+        ) from exc
+    return None
+
+
+def _try_claim(audit_dir: Path, key: str, now: datetime) -> None:
+    """Atomically reserve the key with ``O_CREAT | O_EXCL``.
+
+    Atomic across separate processes on both POSIX and Windows. Raises
+    :class:`_IdempotencyError` on FileExistsError (duplicate claim) or
+    any other storage failure.
+    """
+    cdir = _claims_dir(audit_dir)
+    try:
+        cdir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise _IdempotencyError(
+            f"could not create claims dir: {exc.__class__.__name__}"
+        ) from exc
+    cpath = _claim_path(audit_dir, key)
+    try:
+        fd = os.open(
+            str(cpath),
+            os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+            0o600,
+        )
+    except FileExistsError:
+        raise _IdempotencyError("claim already exists")
+    except OSError as exc:
+        raise _IdempotencyError(
+            f"claim creation failed: {exc.__class__.__name__}"
+        ) from exc
+    try:
+        os.write(
+            fd,
+            f"CLAIMED\n{now.astimezone(timezone.utc).isoformat()}\n".encode("utf-8"),
+        )
+    finally:
+        os.close(fd)
+
+
+def _release_claim(audit_dir: Path, key: str) -> None:
+    """Best-effort claim release for confirmed broker-not-accepted failures.
+
+    Leaves the file in place on OSError — keeping the file errs on the
+    side of blocking future automatic submissions.
+    """
+    try:
+        _claim_path(audit_dir, key).unlink(missing_ok=True)
     except OSError:
-        return set()
-    return keys
+        pass
 
 
-def _persist_submitted_key(audit_dir: Path, key: str) -> None:
-    audit_dir.mkdir(parents=True, exist_ok=True)
-    path = _idempotency_path(audit_dir)
-    with path.open("a", encoding="utf-8") as f:
-        f.write(key + "\n")
+def _finalize_submitted(audit_dir: Path, key: str, now: datetime) -> bool:
+    """Atomically transition ``<key>.claim`` -> ``<key>.submitted``.
+
+    Returns ``True`` on success, ``False`` on any storage failure. On
+    failure, the original claim file is left in place so future
+    automatic submissions stay blocked (manual reconciliation required).
+    """
+    cpath = _claim_path(audit_dir, key)
+    spath = _submitted_path(audit_dir, key)
+    tmp_path = cpath.with_suffix(_CLAIM_SUFFIX + ".tmp")
+    try:
+        tmp_path.write_text(
+            f"SUBMITTED\n{now.astimezone(timezone.utc).isoformat()}\n",
+            encoding="utf-8",
+        )
+        os.replace(str(tmp_path), str(spath))
+        try:
+            cpath.unlink()
+        except OSError:
+            pass
+        return True
+    except OSError:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return False
+
+
+def _classify_broker_failure(blocker: str | None) -> str:
+    """Return ``"AMBIGUOUS"`` or ``"CONFIRMED_NOT_SUBMITTED"``.
+
+    Heuristic: the adapter wraps real SDK-call exceptions with the
+    prefix ``"submit_market_order failed:"``. Pre-broker validation
+    errors (symbol/qty/side rejection, "sell rejected: no SPY position")
+    raise without that prefix. Anything carrying the prefix means the
+    broker SDK *was* invoked — outcome is therefore ambiguous.
+    """
+    if not isinstance(blocker, str):
+        return "AMBIGUOUS"
+    if "submit_market_order failed:" in blocker:
+        return "AMBIGUOUS"
+    return "CONFIRMED_NOT_SUBMITTED"
 
 
 # ---------------------------------------------------------------------------
@@ -322,6 +456,11 @@ def main(argv: list[str] | None = None, *, now_utc_fn=_default_now_utc) -> int:
 
     # -----------------------------------------------------------------
     # Step 5. PAPER_SUBMIT mode: idempotency + single submission.
+    #
+    # Cross-process atomic claim BEFORE the broker is called.
+    # Storage failures fail closed. Ambiguous broker outcomes retain
+    # the claim so future automatic submissions are blocked pending
+    # manual reconciliation.
     # -----------------------------------------------------------------
     side = "buy" if action == "buy_planned" else "sell"
     key = _idempotency_key(
@@ -331,12 +470,36 @@ def main(argv: list[str] | None = None, *, now_utc_fn=_default_now_utc) -> int:
     )
     record["idempotency_key"] = key
 
-    already = _load_submitted_keys(audit_dir)
-    if key in already:
-        record["duplicate_prevented"] = True
-        record["blocker"] = "duplicate idempotency key — already submitted"
+    # Pre-claim state read. Unreadable / corrupt state fails closed.
+    try:
+        existing_state = _read_idempotency_state(audit_dir, key)
+    except _IdempotencyError as exc:
+        record["blocker"] = f"idempotency state unreadable: {exc}"
         return _finalize_and_exit(audit_dir, record, now, "BLOCKED", 1)
 
+    if existing_state in ("CLAIMED", "SUBMITTED"):
+        record["duplicate_prevented"] = True
+        if existing_state == "SUBMITTED":
+            record["blocker"] = (
+                "duplicate idempotency key — already submitted"
+            )
+        else:
+            record["blocker"] = (
+                "claim already exists — concurrent run or pending "
+                "manual reconciliation"
+            )
+        return _finalize_and_exit(audit_dir, record, now, "BLOCKED", 1)
+
+    # Atomic claim. Failure (including a race against another runner
+    # that just created the file) blocks before broker submission.
+    try:
+        _try_claim(audit_dir, key, now)
+    except _IdempotencyError as exc:
+        record["duplicate_prevented"] = True
+        record["blocker"] = f"could not claim idempotency: {exc}"
+        return _finalize_and_exit(audit_dir, record, now, "BLOCKED", 1)
+
+    # Single broker submission attempt.
     submit = run_paper_trading_cycle(
         adapter=adapter,
         bars=bars,
@@ -358,10 +521,42 @@ def main(argv: list[str] | None = None, *, now_utc_fn=_default_now_utc) -> int:
     if submit.get("result") == "PASS" and submit.get("action") in (
         "buy_submitted", "sell_submitted",
     ):
-        _persist_submitted_key(audit_dir, key)
+        finalized = _finalize_submitted(audit_dir, key, now)
+        if not finalized:
+            # Broker accepted, but state finalization failed. The
+            # CLAIMED file is left intact so a future run blocks until
+            # the operator reconciles. Audit still records PASS — the
+            # order DID go through — but the blocker field documents
+            # the persistence failure.
+            record["blocker"] = (
+                "broker accepted but SUBMITTED finalization failed — "
+                "claim retained to block future automatic submissions"
+            )
         return _finalize_and_exit(audit_dir, record, now, "PASS", 0)
+
     if submit.get("result") == "ERROR":
+        # Broker submission failed. Classify to decide whether the claim
+        # should be released (broker never accepted) or retained
+        # (broker may have accepted; outcome unknown). NEVER retry
+        # automatically after an ambiguous response.
+        classification = _classify_broker_failure(submit.get("blocker"))
+        if classification == "CONFIRMED_NOT_SUBMITTED":
+            _release_claim(audit_dir, key)
+            record["blocker"] = (
+                (submit.get("blocker") or "broker rejected before acceptance")
+                + " (claim released)"
+            )
+        else:
+            record["blocker"] = (
+                (submit.get("blocker") or "broker submission outcome ambiguous")
+                + " (claim retained for manual reconciliation)"
+            )
         return _finalize_and_exit(audit_dir, record, now, "ERROR", 2)
+
+    # Defensive: BLOCKED after submit means the cycle's preconditions
+    # flipped between the dry-run and the submit run. The broker was
+    # not called; release the claim.
+    _release_claim(audit_dir, key)
     return _finalize_and_exit(audit_dir, record, now, "BLOCKED", 1)
 
 

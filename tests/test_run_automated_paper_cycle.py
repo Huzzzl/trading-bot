@@ -307,8 +307,10 @@ class TestDryRunBuyPlan:
         audit_dir = tmp_path / "audit"
         a = _mock_adapter(clock_is_open=True)
         _run_open(["--dry-run"], adapter=a, audit_dir=audit_dir, cache_dir=cache_dir)
-        # No idempotency file written.
-        assert not (audit_dir / runner._IDEMPOTENCY_FILENAME).exists()
+        # Dry-run never creates a claim or submitted file.
+        claims_dir = audit_dir / runner._CLAIMS_SUBDIR
+        if claims_dir.exists():
+            assert list(claims_dir.iterdir()) == []
 
     def test_default_is_dry_run(self, tmp_path):
         cache_dir = tmp_path / "cache"
@@ -342,10 +344,12 @@ class TestPaperSubmit:
         assert rec["action"] == "buy_submitted"
         assert rec["broker_order_id"] == "alpaca-ord-1"
         assert rec["idempotency_key"] is not None
-        # Idempotency key was persisted.
-        keys_path = audit_dir / runner._IDEMPOTENCY_FILENAME
-        assert keys_path.exists()
-        assert rec["idempotency_key"] in keys_path.read_text()
+        # Idempotency state transitioned to SUBMITTED.
+        spath = runner._submitted_path(audit_dir, rec["idempotency_key"])
+        assert spath.exists()
+        # Claim file removed on successful finalization.
+        cpath = runner._claim_path(audit_dir, rec["idempotency_key"])
+        assert not cpath.exists()
 
     def test_submit_paper_passes_idempotency_as_client_order_id(self, tmp_path):
         cache_dir = tmp_path / "cache"
@@ -406,10 +410,14 @@ class TestIdempotency:
         # Single submission attempt; no retry.
         assert a.submit_market_order.call_count == 1
         assert code == 2
-        # Idempotency key NOT persisted on failure.
-        keys_path = audit_dir / runner._IDEMPOTENCY_FILENAME
-        assert not keys_path.exists()
+        # SUBMITTED state never reached on broker failure.
         rec = _open_audit_lines(audit_dir)[0]
+        key = rec["idempotency_key"]
+        assert key is not None
+        assert not runner._submitted_path(audit_dir, key).exists()
+        # "broker rejected" (no "submit_market_order failed:" prefix)
+        # is classified as CONFIRMED_NOT_SUBMITTED → claim released.
+        assert not runner._claim_path(audit_dir, key).exists()
         assert rec["final_result"] == "ERROR"
 
 
@@ -630,6 +638,312 @@ class TestExitCodes:
             audit_dir=audit_dir, cache_dir=cache_dir,
         )
         assert code == 2
+
+
+class TestIdempotencyHardening:
+    """Per-key claim/state semantics and concurrent-safety."""
+
+    # ---- (1) two concurrent runners ----
+
+    def test_concurrent_runners_produce_exactly_one_broker_call(self, tmp_path):
+        import threading
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        _bullish_open_cache(cache_dir)
+        audit_dir = tmp_path / "audit"
+        # Both threads use independent adapters so we can sum the call
+        # counts and prove only one broker call happens overall.
+        a1 = _mock_adapter(clock_is_open=True)
+        a2 = _mock_adapter(clock_is_open=True)
+
+        # Gate both threads so they enter the claim race at the same time.
+        gate = threading.Barrier(2)
+
+        def make_factory(adapter):
+            def _factory():
+                gate.wait()
+                return adapter
+            return _factory
+
+        codes = {}
+
+        def run(idx, adapter):
+            try:
+                with patch.object(runner, "run_fetch", return_value=_good_fetch_result()), \
+                     patch.object(
+                         runner.AlpacaPaperAdapter,
+                         "from_environment",
+                         side_effect=make_factory(adapter),
+                     ), \
+                     patch.object(sys, "stdout", io.StringIO()):
+                    codes[idx] = runner.main(
+                        ["--submit-paper",
+                         "--audit-dir", str(audit_dir),
+                         "--cache-dir", str(cache_dir)],
+                        now_utc_fn=_open_now,
+                    )
+            except BaseException as exc:  # noqa: BLE001
+                codes[idx] = exc
+
+        t1 = threading.Thread(target=run, args=(1, a1))
+        t2 = threading.Thread(target=run, args=(2, a2))
+        t1.start(); t2.start()
+        t1.join(); t2.join()
+
+        # Exactly one broker call across both adapters.
+        total_calls = a1.submit_market_order.call_count + a2.submit_market_order.call_count
+        assert total_calls == 1
+        # One PASS and one BLOCKED exit code (or the BLOCKED side surfaces
+        # ERROR if the broker call raised in the winner — but the winner
+        # in this fixture succeeds).
+        result_codes = sorted([codes[1], codes[2]])
+        assert 0 in result_codes
+        assert 1 in result_codes
+        # Both invocations wrote audit records.
+        recs = _open_audit_lines(audit_dir)
+        assert len(recs) == 2
+
+    # ---- (2) unreadable idempotency state ----
+
+    def test_unreadable_state_blocks_with_zero_submissions(self, tmp_path):
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        _bullish_open_cache(cache_dir)
+        audit_dir = tmp_path / "audit"
+        a = _mock_adapter(clock_is_open=True)
+        with patch.object(
+            runner, "_read_idempotency_state",
+            side_effect=runner._IdempotencyError("OSError"),
+        ):
+            code, _, _ = _run_open(
+                ["--submit-paper"], adapter=a,
+                audit_dir=audit_dir, cache_dir=cache_dir,
+            )
+        assert code == 1
+        assert a.submit_market_order.call_count == 0
+        rec = _open_audit_lines(audit_dir)[0]
+        assert rec["final_result"] == "BLOCKED"
+        assert "idempotency state unreadable" in rec["blocker"]
+
+    # ---- (3) corrupt state ----
+
+    def test_corrupt_claim_file_blocks_with_zero_submissions(self, tmp_path):
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        _bullish_open_cache(cache_dir)
+        audit_dir = tmp_path / "audit"
+        # Pre-compute the key and pre-create a corrupt claim file.
+        latest_ts = _OPEN_LATEST_BAR
+        key = runner._idempotency_key(
+            symbol="SPY", interval="60m",
+            latest_ts=latest_ts, signal_side="buy",
+            session_date=runner._session_date(latest_ts),
+        )
+        cpath = runner._claim_path(audit_dir, key)
+        cpath.parent.mkdir(parents=True, exist_ok=True)
+        # Bytes that fail UTF-8 decode.
+        cpath.write_bytes(b"\xff\xfe\xfd corrupt")
+        a = _mock_adapter(clock_is_open=True)
+        code, _, _ = _run_open(
+            ["--submit-paper"], adapter=a,
+            audit_dir=audit_dir, cache_dir=cache_dir,
+        )
+        # Either treated as unreadable (corrupt) or as an existing claim;
+        # either way blocks with zero submissions.
+        assert code == 1
+        assert a.submit_market_order.call_count == 0
+        rec = _open_audit_lines(audit_dir)[0]
+        assert rec["final_result"] == "BLOCKED"
+
+    # ---- (4) claim creation failure ----
+
+    def test_claim_creation_failure_blocks(self, tmp_path):
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        _bullish_open_cache(cache_dir)
+        audit_dir = tmp_path / "audit"
+        a = _mock_adapter(clock_is_open=True)
+        with patch.object(
+            runner, "_try_claim",
+            side_effect=runner._IdempotencyError("disk full"),
+        ):
+            code, _, _ = _run_open(
+                ["--submit-paper"], adapter=a,
+                audit_dir=audit_dir, cache_dir=cache_dir,
+            )
+        assert code == 1
+        assert a.submit_market_order.call_count == 0
+        rec = _open_audit_lines(audit_dir)[0]
+        assert rec["final_result"] == "BLOCKED"
+        assert rec["duplicate_prevented"] is True
+        assert "could not claim idempotency" in rec["blocker"]
+
+    # ---- (5) confirmed broker failure releases claim ----
+
+    def test_confirmed_broker_failure_releases_claim(self, tmp_path):
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        _bullish_open_cache(cache_dir)
+        audit_dir = tmp_path / "audit"
+        a = _mock_adapter(clock_is_open=True)
+        # No "submit_market_order failed:" prefix → confirmed pre-broker.
+        a.submit_market_order.side_effect = AlpacaPaperAdapterError(
+            "qty must be a positive number",
+        )
+        code, _, _ = _run_open(
+            ["--submit-paper"], adapter=a,
+            audit_dir=audit_dir, cache_dir=cache_dir,
+        )
+        assert code == 2
+        assert a.submit_market_order.call_count == 1
+        rec = _open_audit_lines(audit_dir)[0]
+        key = rec["idempotency_key"]
+        assert not runner._claim_path(audit_dir, key).exists()
+        assert not runner._submitted_path(audit_dir, key).exists()
+        assert "claim released" in rec["blocker"]
+
+    # ---- (6) ambiguous broker failure retains claim ----
+
+    def test_ambiguous_broker_failure_retains_claim(self, tmp_path):
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        _bullish_open_cache(cache_dir)
+        audit_dir = tmp_path / "audit"
+        a = _mock_adapter(clock_is_open=True)
+        # "submit_market_order failed:" prefix → ambiguous.
+        a.submit_market_order.side_effect = AlpacaPaperAdapterError(
+            "submit_market_order failed: connection timeout",
+        )
+        code, _, _ = _run_open(
+            ["--submit-paper"], adapter=a,
+            audit_dir=audit_dir, cache_dir=cache_dir,
+        )
+        assert code == 2
+        assert a.submit_market_order.call_count == 1
+        rec = _open_audit_lines(audit_dir)[0]
+        key = rec["idempotency_key"]
+        # Claim retained for manual reconciliation; never marked SUBMITTED.
+        assert runner._claim_path(audit_dir, key).exists()
+        assert not runner._submitted_path(audit_dir, key).exists()
+        assert "manual reconciliation" in rec["blocker"]
+
+        # Second run with the same inputs must block without calling the broker.
+        a2 = _mock_adapter(clock_is_open=True)
+        code2, _, _ = _run_open(
+            ["--submit-paper"], adapter=a2,
+            audit_dir=audit_dir, cache_dir=cache_dir,
+        )
+        assert code2 == 1
+        assert a2.submit_market_order.call_count == 0
+        rec2 = _open_audit_lines(audit_dir)[1]
+        assert rec2["duplicate_prevented"] is True
+        assert "claim already exists" in rec2["blocker"]
+
+    # ---- (7) successful submission CLAIMED -> SUBMITTED ----
+
+    def test_successful_submission_transitions_claimed_to_submitted(self, tmp_path):
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        _bullish_open_cache(cache_dir)
+        audit_dir = tmp_path / "audit"
+        a = _mock_adapter(clock_is_open=True)
+        code, _, _ = _run_open(
+            ["--submit-paper"], adapter=a,
+            audit_dir=audit_dir, cache_dir=cache_dir,
+        )
+        assert code == 0
+        assert a.submit_market_order.call_count == 1
+        rec = _open_audit_lines(audit_dir)[0]
+        key = rec["idempotency_key"]
+        assert runner._submitted_path(audit_dir, key).exists()
+        assert not runner._claim_path(audit_dir, key).exists()
+        # File contents include the SUBMITTED marker.
+        body = runner._submitted_path(audit_dir, key).read_text(encoding="utf-8")
+        assert body.startswith("SUBMITTED\n")
+
+    # ---- (8) failure to finalize SUBMITTED does not allow a second submission ----
+
+    def test_finalize_failure_blocks_second_submission(self, tmp_path):
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        _bullish_open_cache(cache_dir)
+        audit_dir = tmp_path / "audit"
+        a = _mock_adapter(clock_is_open=True)
+        with patch.object(runner, "_finalize_submitted", return_value=False):
+            code, _, _ = _run_open(
+                ["--submit-paper"], adapter=a,
+                audit_dir=audit_dir, cache_dir=cache_dir,
+            )
+        assert code == 0  # broker accepted; final result is still PASS
+        assert a.submit_market_order.call_count == 1
+        rec = _open_audit_lines(audit_dir)[0]
+        assert "finalization failed" in rec["blocker"]
+        # Claim still exists (was not transitioned). Next run must block.
+        key = rec["idempotency_key"]
+        assert runner._claim_path(audit_dir, key).exists()
+
+        # Second run with identical inputs blocks before submission.
+        a2 = _mock_adapter(clock_is_open=True)
+        code2, _, _ = _run_open(
+            ["--submit-paper"], adapter=a2,
+            audit_dir=audit_dir, cache_dir=cache_dir,
+        )
+        assert code2 == 1
+        assert a2.submit_market_order.call_count == 0
+        rec2 = _open_audit_lines(audit_dir)[1]
+        assert rec2["duplicate_prevented"] is True
+
+    # ---- (9) dry-run creates no claim ----
+
+    def test_dry_run_creates_no_claim_file(self, tmp_path):
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        _bullish_open_cache(cache_dir)
+        audit_dir = tmp_path / "audit"
+        a = _mock_adapter(clock_is_open=True)
+        _run_open(["--dry-run"], adapter=a,
+                  audit_dir=audit_dir, cache_dir=cache_dir)
+        claims_dir = audit_dir / runner._CLAIMS_SUBDIR
+        if claims_dir.exists():
+            assert list(claims_dir.iterdir()) == []
+
+    # ---- (10) audit indicates duplicate/claim/persistence status safely ----
+
+    def test_audit_indicates_persistence_failure(self, tmp_path):
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        _bullish_open_cache(cache_dir)
+        audit_dir = tmp_path / "audit"
+        a = _mock_adapter(clock_is_open=True)
+        with patch.object(runner, "_finalize_submitted", return_value=False):
+            _run_open(["--submit-paper"], adapter=a,
+                      audit_dir=audit_dir, cache_dir=cache_dir)
+        rec = _open_audit_lines(audit_dir)[0]
+        # Persistence failure surfaced in the audit blocker text without
+        # leaking implementation paths.
+        assert "finalization failed" in rec["blocker"]
+        assert "claim retained" in rec["blocker"]
+        # Sensitive markers absent.
+        for forbidden in ("api_key", "secret", "/home/", "C:\\Users\\"):
+            assert forbidden not in rec["blocker"]
+
+    def test_audit_indicates_duplicate_block(self, tmp_path):
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        _bullish_open_cache(cache_dir)
+        audit_dir = tmp_path / "audit"
+        # First run succeeds.
+        a1 = _mock_adapter(clock_is_open=True)
+        _run_open(["--submit-paper"], adapter=a1,
+                  audit_dir=audit_dir, cache_dir=cache_dir)
+        # Second run blocks as duplicate.
+        a2 = _mock_adapter(clock_is_open=True)
+        _run_open(["--submit-paper"], adapter=a2,
+                  audit_dir=audit_dir, cache_dir=cache_dir)
+        rec2 = _open_audit_lines(audit_dir)[1]
+        assert rec2["duplicate_prevented"] is True
+        assert "already submitted" in rec2["blocker"]
+        assert a2.submit_market_order.call_count == 0
 
 
 class TestNoLiveTrading:
