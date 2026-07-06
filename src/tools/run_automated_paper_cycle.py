@@ -266,11 +266,63 @@ def _new_audit_record(*, mode: str, symbol: str, interval: str, now: datetime) -
         "broker_order_id": None,
         "broker_order_status": None,
         "idempotency_key": None,
+        "client_order_id": None,
+        "broker_position_qty": None,
+        "broker_open_buy_order_count": None,
+        "order_status": None,
+        "submitted_qty": None,
+        "filled_qty": None,
+        "filled_avg_price": None,
+        "reconciliation_attempted": False,
+        "reconciliation_result": None,
         "duplicate_prevented": False,
         "blocker": None,
         "final_result": None,
         "exit_code": None,
     }
+
+
+# ---------------------------------------------------------------------------
+# Broker-state safety helpers
+# ---------------------------------------------------------------------------
+
+
+_STATUS_REASON_MAP = {
+    "new": "ORDER_SUBMITTED",
+    "accepted": "ORDER_SUBMITTED",
+    "accepted_for_bidding": "ORDER_SUBMITTED",
+    "pending_new": "ORDER_SUBMITTED",
+    "partially_filled": "ORDER_PARTIALLY_FILLED",
+    "filled": "ORDER_FILLED",
+    "rejected": "ORDER_REJECTED",
+    "canceled": "ORDER_CANCELED",
+    "cancelled": "ORDER_CANCELED",
+    "expired": "ORDER_CANCELED",
+}
+
+
+def _status_to_reason_code(status: Any) -> str:
+    """Map an Alpaca order status string to a runner reason code."""
+    if not isinstance(status, str) or not status.strip():
+        return "ORDER_STATUS_UNKNOWN"
+    return _STATUS_REASON_MAP.get(status.strip().lower(), "ORDER_STATUS_UNKNOWN")
+
+
+def _copy_status_fields(record: dict[str, Any], order: dict[str, Any]) -> None:
+    """Copy status/quantity/price fields from an order dict onto ``record``.
+
+    Kept in one place so the post-submit and reconciliation paths stay
+    schema-consistent.
+    """
+    record["order_status"] = order.get("status")
+    if record.get("broker_order_id") is None:
+        record["broker_order_id"] = order.get("id")
+    if record.get("broker_order_status") is None:
+        record["broker_order_status"] = order.get("status")
+    if record.get("submitted_qty") is None:
+        record["submitted_qty"] = order.get("qty")
+    record["filled_qty"] = order.get("filled_qty")
+    record["filled_avg_price"] = order.get("filled_avg_price")
 
 
 def _write_audit_record(audit_dir: Path, record: dict[str, Any], now: datetime) -> None:
@@ -455,12 +507,51 @@ def main(argv: list[str] | None = None, *, now_utc_fn=_default_now_utc) -> int:
         return _finalize_and_exit(audit_dir, record, now, "PASS", 0)
 
     # -----------------------------------------------------------------
-    # Step 5. PAPER_SUBMIT mode: idempotency + single submission.
+    # Step 5. Pre-submit broker-state safety checks (BUY only).
     #
-    # Cross-process atomic claim BEFORE the broker is called.
-    # Storage failures fail closed. Ambiguous broker outcomes retain
-    # the claim so future automatic submissions are blocked pending
-    # manual reconciliation.
+    # Broker state is the source of truth. A race between dry-run and
+    # this second read would produce a duplicate order; catching it
+    # here means neither a claim is created nor a broker order sent.
+    # -----------------------------------------------------------------
+    if action == "buy_planned":
+        try:
+            broker_position = adapter.get_position(_SYMBOL)
+        except AlpacaPaperAdapterError as exc:
+            record["blocker"] = f"pre-submit position check failed: {exc}"
+            return _finalize_and_exit(audit_dir, record, now, "ERROR", 2)
+
+        if broker_position is not None:
+            record["broker_position_qty"] = broker_position.get("qty")
+            record["reason_codes"].append("POSITION_ALREADY_EXISTS")
+            record["action"] = "none"
+            record["blocker"] = (
+                "broker reports an existing SPY position — no additional BUY"
+            )
+            return _finalize_and_exit(audit_dir, record, now, "PASS", 0)
+        record["broker_position_qty"] = 0.0
+
+        try:
+            broker_open_orders = adapter.list_open_orders(symbol=_SYMBOL)
+        except AlpacaPaperAdapterError as exc:
+            record["blocker"] = f"pre-submit open-orders check failed: {exc}"
+            return _finalize_and_exit(audit_dir, record, now, "ERROR", 2)
+
+        open_buy_orders = [
+            o for o in broker_open_orders
+            if isinstance(o, dict) and (o.get("side") or "").lower() == "buy"
+        ]
+        record["broker_open_buy_order_count"] = len(open_buy_orders)
+        if open_buy_orders:
+            record["reason_codes"].append("OPEN_BUY_ORDER_ALREADY_EXISTS")
+            record["action"] = "none"
+            record["blocker"] = (
+                "broker reports an existing open SPY BUY order — "
+                "no additional BUY"
+            )
+            return _finalize_and_exit(audit_dir, record, now, "PASS", 0)
+
+    # -----------------------------------------------------------------
+    # Step 6. PAPER_SUBMIT: idempotency + single submission.
     # -----------------------------------------------------------------
     side = "buy" if action == "buy_planned" else "sell"
     key = _idempotency_key(
@@ -469,8 +560,8 @@ def main(argv: list[str] | None = None, *, now_utc_fn=_default_now_utc) -> int:
         session_date=_session_date(latest_ts),
     )
     record["idempotency_key"] = key
+    record["client_order_id"] = key
 
-    # Pre-claim state read. Unreadable / corrupt state fails closed.
     try:
         existing_state = _read_idempotency_state(audit_dir, key)
     except _IdempotencyError as exc:
@@ -490,8 +581,6 @@ def main(argv: list[str] | None = None, *, now_utc_fn=_default_now_utc) -> int:
             )
         return _finalize_and_exit(audit_dir, record, now, "BLOCKED", 1)
 
-    # Atomic claim. Failure (including a race against another runner
-    # that just created the file) blocks before broker submission.
     try:
         _try_claim(audit_dir, key, now)
     except _IdempotencyError as exc:
@@ -499,7 +588,6 @@ def main(argv: list[str] | None = None, *, now_utc_fn=_default_now_utc) -> int:
         record["blocker"] = f"could not claim idempotency: {exc}"
         return _finalize_and_exit(audit_dir, record, now, "BLOCKED", 1)
 
-    # Single broker submission attempt.
     submit = run_paper_trading_cycle(
         adapter=adapter,
         bars=bars,
@@ -517,17 +605,34 @@ def main(argv: list[str] | None = None, *, now_utc_fn=_default_now_utc) -> int:
     if isinstance(order, dict):
         record["broker_order_id"] = order.get("id")
         record["broker_order_status"] = order.get("status")
+        record["submitted_qty"] = order.get("qty")
 
     if submit.get("result") == "PASS" and submit.get("action") in (
         "buy_submitted", "sell_submitted",
     ):
+        # Post-submit status audit. If the follow-up lookup fails, keep
+        # the claim as CLAIMED and record ORDER_STATUS_UNKNOWN — the
+        # order WAS submitted but its status is not confirmed.
+        broker_order_id = (order or {}).get("id") if isinstance(order, dict) else None
+        if broker_order_id:
+            try:
+                latest = adapter.get_order(broker_order_id)
+            except AlpacaPaperAdapterError as exc:
+                record["reason_codes"].append("ORDER_STATUS_UNKNOWN")
+                record["blocker"] = (
+                    f"order submitted but status lookup failed: {exc} "
+                    "(claim retained for manual reconciliation)"
+                )
+                return _finalize_and_exit(audit_dir, record, now, "ERROR", 2)
+            _copy_status_fields(record, latest)
+            record["reason_codes"].append(
+                _status_to_reason_code(latest.get("status"))
+            )
+        else:
+            record["reason_codes"].append("ORDER_STATUS_UNKNOWN")
+
         finalized = _finalize_submitted(audit_dir, key, now)
         if not finalized:
-            # Broker accepted, but state finalization failed. The
-            # CLAIMED file is left intact so a future run blocks until
-            # the operator reconciles. Audit still records PASS — the
-            # order DID go through — but the blocker field documents
-            # the persistence failure.
             record["blocker"] = (
                 "broker accepted but SUBMITTED finalization failed — "
                 "claim retained to block future automatic submissions"
@@ -535,10 +640,6 @@ def main(argv: list[str] | None = None, *, now_utc_fn=_default_now_utc) -> int:
         return _finalize_and_exit(audit_dir, record, now, "PASS", 0)
 
     if submit.get("result") == "ERROR":
-        # Broker submission failed. Classify to decide whether the claim
-        # should be released (broker never accepted) or retained
-        # (broker may have accepted; outcome unknown). NEVER retry
-        # automatically after an ambiguous response.
         classification = _classify_broker_failure(submit.get("blocker"))
         if classification == "CONFIRMED_NOT_SUBMITTED":
             _release_claim(audit_dir, key)
@@ -546,16 +647,39 @@ def main(argv: list[str] | None = None, *, now_utc_fn=_default_now_utc) -> int:
                 (submit.get("blocker") or "broker rejected before acceptance")
                 + " (claim released)"
             )
-        else:
-            record["blocker"] = (
-                (submit.get("blocker") or "broker submission outcome ambiguous")
-                + " (claim retained for manual reconciliation)"
+            return _finalize_and_exit(audit_dir, record, now, "ERROR", 2)
+
+        # Ambiguous — attempt reconciliation by client_order_id and keep
+        # the claim regardless of the outcome so future runs block until
+        # an operator reviews.
+        record["reconciliation_attempted"] = True
+        recon: dict[str, Any] | None
+        try:
+            recon = adapter.get_order_by_client_order_id(key)
+        except AlpacaPaperAdapterError as exc:
+            recon = None
+            record["reconciliation_result"] = (
+                f"lookup_failed:{exc.__class__.__name__}"
             )
+        else:
+            if recon is None:
+                record["reconciliation_result"] = "not_found"
+            else:
+                record["reconciliation_result"] = "found"
+                _copy_status_fields(record, recon)
+                record["reason_codes"].append(
+                    _status_to_reason_code(recon.get("status"))
+                )
+
+        if recon is None:
+            record["reason_codes"].append("ORDER_STATUS_UNKNOWN")
+
+        record["blocker"] = (
+            (submit.get("blocker") or "broker submission outcome ambiguous")
+            + " (claim retained for manual reconciliation)"
+        )
         return _finalize_and_exit(audit_dir, record, now, "ERROR", 2)
 
-    # Defensive: BLOCKED after submit means the cycle's preconditions
-    # flipped between the dry-run and the submit run. The broker was
-    # not called; release the claim.
     _release_claim(audit_dir, key)
     return _finalize_and_exit(audit_dir, record, now, "BLOCKED", 1)
 

@@ -638,6 +638,131 @@ class TestEnumNormalization:
         assert _to_str("ACCOUNT_ACTIVE_PENDING") == "ACCOUNT_ACTIVE_PENDING"
 
 
+class TestGetPosition:
+    def test_returns_normalized_dict(self):
+        client = MagicMock()
+        client.get_open_position.return_value = _position(qty="5")
+        a = _adapter(client)
+        res = a.get_position("SPY")
+        assert res is not None
+        assert res["symbol"] == "SPY"
+        assert res["qty"] == 5.0
+
+    def test_returns_none_when_broker_says_not_found(self):
+        client = MagicMock()
+        client.get_open_position.side_effect = RuntimeError("position not found")
+        a = _adapter(client)
+        assert a.get_position("SPY") is None
+
+    def test_returns_none_on_404_status(self):
+        client = MagicMock()
+        exc = RuntimeError("boom")
+        exc.status_code = 404  # type: ignore[attr-defined]
+        client.get_open_position.side_effect = exc
+        a = _adapter(client)
+        assert a.get_position("SPY") is None
+
+    def test_wraps_other_errors(self):
+        client = MagicMock()
+        client.get_open_position.side_effect = RuntimeError("500 server error")
+        a = _adapter(client)
+        with pytest.raises(AlpacaPaperAdapterError):
+            a.get_position("SPY")
+
+    @pytest.mark.parametrize("bad_symbol", ["AAPL", "spy", ""])
+    def test_non_spy_symbol_rejected(self, bad_symbol):
+        a = _adapter()
+        with pytest.raises(AlpacaPaperAdapterError):
+            a.get_position(bad_symbol)
+
+
+class TestListOpenOrders:
+    def test_unfiltered_returns_all(self):
+        client = MagicMock()
+        client.get_orders.return_value = [
+            _order(symbol="SPY"), _order(symbol="QQQ", id="ord-2"),
+        ]
+        a = _adapter(client)
+        res = a.list_open_orders()
+        assert len(res) == 2
+
+    def test_symbol_filter_applied(self):
+        client = MagicMock()
+        client.get_orders.return_value = [
+            _order(symbol="SPY"), _order(symbol="QQQ", id="ord-2"),
+        ]
+        a = _adapter(client)
+        res = a.list_open_orders(symbol="SPY")
+        assert len(res) == 1
+        assert res[0]["symbol"] == "SPY"
+
+    def test_empty(self):
+        client = MagicMock()
+        client.get_orders.return_value = []
+        a = _adapter(client)
+        assert a.list_open_orders(symbol="SPY") == []
+
+
+class TestGetOrder:
+    def test_returns_normalized_order(self):
+        client = MagicMock()
+        client.get_order_by_id.return_value = _order(id="ord-42", status="filled")
+        a = _adapter(client)
+        res = a.get_order("ord-42")
+        assert res["id"] == "ord-42"
+        assert res["status"] == "filled"
+
+    def test_broker_exception_wraps(self):
+        client = MagicMock()
+        client.get_order_by_id.side_effect = RuntimeError("network down")
+        a = _adapter(client)
+        with pytest.raises(AlpacaPaperAdapterError):
+            a.get_order("ord-1")
+
+    @pytest.mark.parametrize("bad", [None, "", "   ", 42])
+    def test_invalid_id_rejected(self, bad):
+        a = _adapter()
+        with pytest.raises(AlpacaPaperAdapterError):
+            a.get_order(bad)
+
+
+class TestGetOrderByClientOrderId:
+    def test_returns_normalized_order(self):
+        client = MagicMock()
+        client.get_order_by_client_order_id.return_value = _order(
+            id="ord-x", client_order_id="cid-abc", status="filled",
+        )
+        a = _adapter(client)
+        res = a.get_order_by_client_order_id("cid-abc")
+        assert res is not None
+        assert res["client_order_id"] == "cid-abc"
+
+    def test_returns_none_when_not_found(self):
+        client = MagicMock()
+        client.get_order_by_client_order_id.side_effect = RuntimeError(
+            "order not found",
+        )
+        a = _adapter(client)
+        assert a.get_order_by_client_order_id("missing") is None
+
+    def test_returns_none_on_404(self):
+        client = MagicMock()
+        exc = RuntimeError("boom")
+        exc.status_code = 404  # type: ignore[attr-defined]
+        client.get_order_by_client_order_id.side_effect = exc
+        a = _adapter(client)
+        assert a.get_order_by_client_order_id("missing") is None
+
+    def test_wraps_other_errors(self):
+        client = MagicMock()
+        client.get_order_by_client_order_id.side_effect = RuntimeError(
+            "500 something else",
+        )
+        a = _adapter(client)
+        with pytest.raises(AlpacaPaperAdapterError):
+            a.get_order_by_client_order_id("cid-abc")
+
+
 class TestNoLiveTradingSupport:
     def test_module_has_no_live_methods(self):
         import src.broker.alpaca_paper_adapter as mod
