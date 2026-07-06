@@ -57,6 +57,27 @@ def _to_str(val: Any) -> str | None:
     return s
 
 
+_NOT_FOUND_MARKERS = (
+    "not found", "no position", "does not exist",
+    "404", "no order", "resource not found",
+)
+
+
+def _looks_like_not_found(exc: BaseException) -> bool:
+    """Return True if *exc* is a broker-not-found response for a
+    lookup call. Position and order lookups on Alpaca raise on absence
+    rather than returning ``None``; this helper lets adapter methods
+    normalize that surface into a proper ``None`` return.
+    """
+    if isinstance(exc, AlpacaPaperAdapterError):
+        return False
+    msg = str(exc).lower()
+    status = getattr(exc, "status_code", None)
+    if status == 404:
+        return True
+    return any(marker in msg for marker in _NOT_FOUND_MARKERS)
+
+
 def _reject_live_base_url(base_url: str | None) -> None:
     if base_url is None or not base_url:
         return
@@ -171,6 +192,100 @@ class AlpacaPaperAdapter:
                 f"get_open_orders failed: {exc}"
             ) from exc
         return [self._normalize_order(o) for o in (raw or [])]
+
+    def get_position(self, symbol: str) -> dict[str, Any] | None:
+        """Return the normalized position for ``symbol``, or ``None`` if none.
+
+        The Alpaca SDK raises when the account has no position for the
+        requested symbol; we normalize that into a ``None`` return so
+        callers don't need to guess the exception shape.
+        """
+        if not isinstance(symbol, str) or symbol not in _ALLOWED_SYMBOLS:
+            raise AlpacaPaperAdapterError(
+                f"symbol must be one of {sorted(_ALLOWED_SYMBOLS)}"
+            )
+        try:
+            raw = self._client.get_open_position(symbol)
+        except AttributeError:
+            try:
+                raw = self._client.get_position(symbol)
+            except Exception as exc:
+                if _looks_like_not_found(exc):
+                    return None
+                raise AlpacaPaperAdapterError(
+                    f"get_position failed: {exc}"
+                ) from exc
+        except Exception as exc:
+            if _looks_like_not_found(exc):
+                return None
+            raise AlpacaPaperAdapterError(
+                f"get_position failed: {exc}"
+            ) from exc
+        return self._normalize_position(raw)
+
+    def list_open_orders(
+        self, *, symbol: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return the currently-open orders, optionally filtered to ``symbol``.
+
+        Thin wrapper around ``get_open_orders`` that adds server-side
+        request filtering when available and client-side filtering
+        otherwise.
+        """
+        orders = self.get_open_orders()
+        if symbol is None:
+            return orders
+        return [o for o in orders if o.get("symbol") == symbol]
+
+    def get_order(self, order_id: str) -> dict[str, Any]:
+        """Fetch a single order by its broker order id."""
+        if not isinstance(order_id, str) or not order_id.strip():
+            raise AlpacaPaperAdapterError("order_id must be a non-empty string")
+        try:
+            raw = self._client.get_order_by_id(order_id)
+        except AttributeError:
+            try:
+                raw = self._client.get_order(order_id)
+            except Exception as exc:
+                raise AlpacaPaperAdapterError(
+                    f"get_order failed: {exc}"
+                ) from exc
+        except Exception as exc:
+            raise AlpacaPaperAdapterError(
+                f"get_order failed: {exc}"
+            ) from exc
+        return self._normalize_order(raw)
+
+    def get_order_by_client_order_id(
+        self, client_order_id: str,
+    ) -> dict[str, Any] | None:
+        """Reconcile a possibly-submitted order by its ``client_order_id``.
+
+        Returns ``None`` when the broker reports no matching order.
+        Raises :class:`AlpacaPaperAdapterError` on any other failure.
+        """
+        if not isinstance(client_order_id, str) or not client_order_id.strip():
+            raise AlpacaPaperAdapterError(
+                "client_order_id must be a non-empty string"
+            )
+        try:
+            raw = self._client.get_order_by_client_order_id(client_order_id)
+        except AttributeError:
+            try:
+                raw = self._client.get_order_by_client_id(client_order_id)
+            except Exception as exc:
+                if _looks_like_not_found(exc):
+                    return None
+                raise AlpacaPaperAdapterError(
+                    f"get_order_by_client_order_id failed: {exc}"
+                ) from exc
+        except Exception as exc:
+            if _looks_like_not_found(exc):
+                return None
+            raise AlpacaPaperAdapterError(
+                f"get_order_by_client_order_id failed: {exc}"
+            ) from exc
+        return self._normalize_order(raw)
 
     def get_clock(self) -> dict[str, Any]:
         try:

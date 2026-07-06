@@ -111,6 +111,11 @@ def _mock_adapter(
     }
     a.get_positions.return_value = positions or []
     a.get_open_orders.return_value = open_orders or []
+    # S54 broker-state safety additions.
+    a.get_position.return_value = None
+    a.list_open_orders.return_value = [
+        o for o in (open_orders or []) if isinstance(o, dict) and o.get("symbol") == "SPY"
+    ]
     a.submit_market_order.return_value = {
         "id": "alpaca-ord-1",
         "client_order_id": "cid-x",
@@ -118,7 +123,23 @@ def _mock_adapter(
         "side": "buy",
         "status": "new",
         "qty": 1.0,
+        "filled_qty": 0.0,
+        "filled_avg_price": None,
     }
+    # Immediate post-submit status lookup: mirror the submit response
+    # so tests that don't override the status see a coherent "new"
+    # order carried through to the audit log.
+    a.get_order.return_value = {
+        "id": "alpaca-ord-1",
+        "client_order_id": "cid-x",
+        "symbol": "SPY",
+        "side": "buy",
+        "status": "new",
+        "qty": 1.0,
+        "filled_qty": 0.0,
+        "filled_avg_price": None,
+    }
+    a.get_order_by_client_order_id.return_value = None
     return a
 
 
@@ -944,6 +965,360 @@ class TestIdempotencyHardening:
         assert rec2["duplicate_prevented"] is True
         assert "already submitted" in rec2["blocker"]
         assert a2.submit_market_order.call_count == 0
+
+
+class TestPreSubmitBrokerStateChecks:
+    """S54: broker state is source of truth before BUY submission."""
+
+    def _position(self, qty=5.0, side="long"):
+        return {
+            "symbol": "SPY", "qty": qty, "side": side,
+            "avg_entry_price": 100.0, "market_value": qty * 100.0,
+            "unrealized_pl": 0.0, "current_price": 100.0,
+        }
+
+    def _open_buy_order(self, order_id="pending-1"):
+        return {
+            "id": order_id, "client_order_id": "prev-cid",
+            "symbol": "SPY", "side": "buy",
+            "type": "market", "time_in_force": "day",
+            "qty": 1.0, "filled_qty": 0.0, "filled_avg_price": None,
+            "status": "new", "submitted_at": None, "filled_at": None,
+        }
+
+    def test_existing_position_blocks_buy(self, tmp_path):
+        cache_dir = tmp_path / "cache"; cache_dir.mkdir()
+        _bullish_open_cache(cache_dir)
+        audit_dir = tmp_path / "audit"
+        a = _mock_adapter(clock_is_open=True)
+        # Broker state: SPY position exists at 5 shares.
+        a.get_position.return_value = self._position(qty=5.0)
+        code, _, _ = _run_open(
+            ["--submit-paper"], adapter=a,
+            audit_dir=audit_dir, cache_dir=cache_dir,
+        )
+        assert code == 0  # safely no-action
+        assert a.submit_market_order.call_count == 0
+        # Claim was never created.
+        claims_dir = audit_dir / runner._CLAIMS_SUBDIR
+        if claims_dir.exists():
+            assert list(claims_dir.iterdir()) == []
+        rec = _open_audit_lines(audit_dir)[0]
+        assert rec["action"] == "none"
+        assert rec["broker_position_qty"] == 5.0
+        assert "POSITION_ALREADY_EXISTS" in rec["reason_codes"]
+
+    def test_existing_open_buy_order_blocks_buy(self, tmp_path):
+        cache_dir = tmp_path / "cache"; cache_dir.mkdir()
+        _bullish_open_cache(cache_dir)
+        audit_dir = tmp_path / "audit"
+        a = _mock_adapter(clock_is_open=True)
+        # No position, but an open BUY order already exists.
+        a.list_open_orders.return_value = [self._open_buy_order()]
+        code, _, _ = _run_open(
+            ["--submit-paper"], adapter=a,
+            audit_dir=audit_dir, cache_dir=cache_dir,
+        )
+        assert code == 0
+        assert a.submit_market_order.call_count == 0
+        rec = _open_audit_lines(audit_dir)[0]
+        assert rec["action"] == "none"
+        assert rec["broker_open_buy_order_count"] == 1
+        assert "OPEN_BUY_ORDER_ALREADY_EXISTS" in rec["reason_codes"]
+
+    def test_no_position_and_no_open_order_allows_submit(self, tmp_path):
+        cache_dir = tmp_path / "cache"; cache_dir.mkdir()
+        _bullish_open_cache(cache_dir)
+        audit_dir = tmp_path / "audit"
+        a = _mock_adapter(clock_is_open=True)
+        code, _, _ = _run_open(
+            ["--submit-paper"], adapter=a,
+            audit_dir=audit_dir, cache_dir=cache_dir,
+        )
+        assert code == 0
+        assert a.submit_market_order.call_count == 1
+        rec = _open_audit_lines(audit_dir)[0]
+        assert rec["action"] == "buy_submitted"
+        assert rec["broker_position_qty"] == 0.0
+        assert rec["broker_open_buy_order_count"] == 0
+
+    def test_position_check_error_returns_error(self, tmp_path):
+        cache_dir = tmp_path / "cache"; cache_dir.mkdir()
+        _bullish_open_cache(cache_dir)
+        audit_dir = tmp_path / "audit"
+        a = _mock_adapter(clock_is_open=True)
+        a.get_position.side_effect = AlpacaPaperAdapterError("net down")
+        code, _, _ = _run_open(
+            ["--submit-paper"], adapter=a,
+            audit_dir=audit_dir, cache_dir=cache_dir,
+        )
+        assert code == 2
+        assert a.submit_market_order.call_count == 0
+        rec = _open_audit_lines(audit_dir)[0]
+        assert "pre-submit position check failed" in rec["blocker"]
+
+    def test_non_buy_open_orders_do_not_block(self, tmp_path):
+        cache_dir = tmp_path / "cache"; cache_dir.mkdir()
+        _bullish_open_cache(cache_dir)
+        audit_dir = tmp_path / "audit"
+        a = _mock_adapter(clock_is_open=True)
+        # An OPEN sell (or unrelated) order must NOT count as a duplicate BUY.
+        sell_order = dict(self._open_buy_order(), side="sell")
+        a.list_open_orders.return_value = [sell_order]
+        code, _, _ = _run_open(
+            ["--submit-paper"], adapter=a,
+            audit_dir=audit_dir, cache_dir=cache_dir,
+        )
+        assert code == 0
+        assert a.submit_market_order.call_count == 1
+        rec = _open_audit_lines(audit_dir)[0]
+        assert rec["broker_open_buy_order_count"] == 0
+        assert rec["action"] == "buy_submitted"
+
+
+class TestPostSubmitStatusAudit:
+    """S54: post-submit status lookup + reason-code mapping."""
+
+    def _order_response(self, **overrides):
+        base = {
+            "id": "alpaca-ord-1",
+            "client_order_id": "cid-x",
+            "symbol": "SPY", "side": "buy",
+            "type": "market", "time_in_force": "day",
+            "qty": 1.0, "filled_qty": 0.0, "filled_avg_price": None,
+            "status": "new", "submitted_at": None, "filled_at": None,
+        }
+        base.update(overrides)
+        return base
+
+    def test_filled_status_audited(self, tmp_path):
+        cache_dir = tmp_path / "cache"; cache_dir.mkdir()
+        _bullish_open_cache(cache_dir)
+        audit_dir = tmp_path / "audit"
+        a = _mock_adapter(clock_is_open=True)
+        a.get_order.return_value = self._order_response(
+            status="filled", filled_qty=1.0, filled_avg_price=110.5,
+        )
+        code, _, _ = _run_open(
+            ["--submit-paper"], adapter=a,
+            audit_dir=audit_dir, cache_dir=cache_dir,
+        )
+        assert code == 0
+        rec = _open_audit_lines(audit_dir)[0]
+        assert rec["order_status"] == "filled"
+        assert rec["filled_qty"] == 1.0
+        assert rec["filled_avg_price"] == 110.5
+        assert rec["submitted_qty"] == 1.0
+        assert "ORDER_FILLED" in rec["reason_codes"]
+
+    def test_partially_filled_status_audited(self, tmp_path):
+        cache_dir = tmp_path / "cache"; cache_dir.mkdir()
+        _bullish_open_cache(cache_dir)
+        audit_dir = tmp_path / "audit"
+        a = _mock_adapter(clock_is_open=True)
+        a.get_order.return_value = self._order_response(
+            status="partially_filled", filled_qty=0.5, filled_avg_price=110.0,
+        )
+        _run_open(
+            ["--submit-paper"], adapter=a,
+            audit_dir=audit_dir, cache_dir=cache_dir,
+        )
+        rec = _open_audit_lines(audit_dir)[0]
+        assert rec["order_status"] == "partially_filled"
+        assert rec["filled_qty"] == 0.5
+        assert "ORDER_PARTIALLY_FILLED" in rec["reason_codes"]
+
+    def test_rejected_status_audited(self, tmp_path):
+        cache_dir = tmp_path / "cache"; cache_dir.mkdir()
+        _bullish_open_cache(cache_dir)
+        audit_dir = tmp_path / "audit"
+        a = _mock_adapter(clock_is_open=True)
+        a.get_order.return_value = self._order_response(status="rejected")
+        _run_open(
+            ["--submit-paper"], adapter=a,
+            audit_dir=audit_dir, cache_dir=cache_dir,
+        )
+        rec = _open_audit_lines(audit_dir)[0]
+        assert rec["order_status"] == "rejected"
+        assert "ORDER_REJECTED" in rec["reason_codes"]
+
+    def test_new_status_maps_to_order_submitted(self, tmp_path):
+        cache_dir = tmp_path / "cache"; cache_dir.mkdir()
+        _bullish_open_cache(cache_dir)
+        audit_dir = tmp_path / "audit"
+        a = _mock_adapter(clock_is_open=True)
+        # Default mock returns status="new".
+        _run_open(
+            ["--submit-paper"], adapter=a,
+            audit_dir=audit_dir, cache_dir=cache_dir,
+        )
+        rec = _open_audit_lines(audit_dir)[0]
+        assert rec["order_status"] == "new"
+        assert "ORDER_SUBMITTED" in rec["reason_codes"]
+
+    def test_status_lookup_failure_preserves_claim(self, tmp_path):
+        cache_dir = tmp_path / "cache"; cache_dir.mkdir()
+        _bullish_open_cache(cache_dir)
+        audit_dir = tmp_path / "audit"
+        a = _mock_adapter(clock_is_open=True)
+        a.get_order.side_effect = AlpacaPaperAdapterError("timeout")
+        code, _, _ = _run_open(
+            ["--submit-paper"], adapter=a,
+            audit_dir=audit_dir, cache_dir=cache_dir,
+        )
+        # Submitted but status unknown → ERROR exit 2, claim retained.
+        assert code == 2
+        assert a.submit_market_order.call_count == 1
+        rec = _open_audit_lines(audit_dir)[0]
+        key = rec["idempotency_key"]
+        assert runner._claim_path(audit_dir, key).exists()
+        assert not runner._submitted_path(audit_dir, key).exists()
+        assert "ORDER_STATUS_UNKNOWN" in rec["reason_codes"]
+        assert "status lookup failed" in rec["blocker"]
+
+    def test_client_order_id_recorded_in_audit(self, tmp_path):
+        cache_dir = tmp_path / "cache"; cache_dir.mkdir()
+        _bullish_open_cache(cache_dir)
+        audit_dir = tmp_path / "audit"
+        a = _mock_adapter(clock_is_open=True)
+        _run_open(
+            ["--submit-paper"], adapter=a,
+            audit_dir=audit_dir, cache_dir=cache_dir,
+        )
+        rec = _open_audit_lines(audit_dir)[0]
+        assert rec["client_order_id"] is not None
+        assert rec["client_order_id"] == rec["idempotency_key"]
+
+
+class TestSubmitTimeoutReconciliation:
+    """S54: ambiguous submit failures attempt reconciliation."""
+
+    def _order_response(self, **overrides):
+        base = {
+            "id": "alpaca-ord-9",
+            "client_order_id": None,
+            "symbol": "SPY", "side": "buy",
+            "type": "market", "time_in_force": "day",
+            "qty": 1.0, "filled_qty": 0.0, "filled_avg_price": None,
+            "status": "new", "submitted_at": None, "filled_at": None,
+        }
+        base.update(overrides)
+        return base
+
+    def test_timeout_reconciles_successfully_via_client_order_id(self, tmp_path):
+        cache_dir = tmp_path / "cache"; cache_dir.mkdir()
+        _bullish_open_cache(cache_dir)
+        audit_dir = tmp_path / "audit"
+        a = _mock_adapter(clock_is_open=True)
+        a.submit_market_order.side_effect = AlpacaPaperAdapterError(
+            "submit_market_order failed: connection timeout",
+        )
+        # Reconciliation lookup returns a matching order.
+        a.get_order_by_client_order_id.return_value = self._order_response(
+            id="reconciled-1", status="accepted",
+        )
+        code, _, _ = _run_open(
+            ["--submit-paper"], adapter=a,
+            audit_dir=audit_dir, cache_dir=cache_dir,
+        )
+        # Ambiguous — claim retained, ERROR exit 2, reconciliation
+        # recorded the recovered order details.
+        assert code == 2
+        rec = _open_audit_lines(audit_dir)[0]
+        key = rec["idempotency_key"]
+        assert runner._claim_path(audit_dir, key).exists()
+        assert not runner._submitted_path(audit_dir, key).exists()
+        assert rec["reconciliation_attempted"] is True
+        assert rec["reconciliation_result"] == "found"
+        assert rec["broker_order_id"] == "reconciled-1"
+        assert rec["order_status"] == "accepted"
+        assert "ORDER_SUBMITTED" in rec["reason_codes"]
+        # Reconciliation was called exactly once with the idempotency key.
+        assert a.get_order_by_client_order_id.call_count == 1
+        args, _ = a.get_order_by_client_order_id.call_args
+        assert args[0] == key
+
+    def test_timeout_reconcile_not_found_keeps_claim(self, tmp_path):
+        cache_dir = tmp_path / "cache"; cache_dir.mkdir()
+        _bullish_open_cache(cache_dir)
+        audit_dir = tmp_path / "audit"
+        a = _mock_adapter(clock_is_open=True)
+        a.submit_market_order.side_effect = AlpacaPaperAdapterError(
+            "submit_market_order failed: connection timeout",
+        )
+        a.get_order_by_client_order_id.return_value = None
+        code, _, _ = _run_open(
+            ["--submit-paper"], adapter=a,
+            audit_dir=audit_dir, cache_dir=cache_dir,
+        )
+        assert code == 2
+        rec = _open_audit_lines(audit_dir)[0]
+        key = rec["idempotency_key"]
+        assert runner._claim_path(audit_dir, key).exists()
+        assert rec["reconciliation_attempted"] is True
+        assert rec["reconciliation_result"] == "not_found"
+        assert "ORDER_STATUS_UNKNOWN" in rec["reason_codes"]
+
+    def test_timeout_reconcile_lookup_failure_keeps_claim(self, tmp_path):
+        cache_dir = tmp_path / "cache"; cache_dir.mkdir()
+        _bullish_open_cache(cache_dir)
+        audit_dir = tmp_path / "audit"
+        a = _mock_adapter(clock_is_open=True)
+        a.submit_market_order.side_effect = AlpacaPaperAdapterError(
+            "submit_market_order failed: connection timeout",
+        )
+        a.get_order_by_client_order_id.side_effect = AlpacaPaperAdapterError(
+            "reconcile network error",
+        )
+        code, _, _ = _run_open(
+            ["--submit-paper"], adapter=a,
+            audit_dir=audit_dir, cache_dir=cache_dir,
+        )
+        assert code == 2
+        rec = _open_audit_lines(audit_dir)[0]
+        key = rec["idempotency_key"]
+        # Claim retained; state never marked SUBMITTED.
+        assert runner._claim_path(audit_dir, key).exists()
+        assert not runner._submitted_path(audit_dir, key).exists()
+        assert rec["reconciliation_attempted"] is True
+        assert rec["reconciliation_result"] is not None
+        assert rec["reconciliation_result"].startswith("lookup_failed:")
+        assert "ORDER_STATUS_UNKNOWN" in rec["reason_codes"]
+
+    def test_confirmed_failure_no_reconciliation(self, tmp_path):
+        cache_dir = tmp_path / "cache"; cache_dir.mkdir()
+        _bullish_open_cache(cache_dir)
+        audit_dir = tmp_path / "audit"
+        a = _mock_adapter(clock_is_open=True)
+        # No "submit_market_order failed:" marker → CONFIRMED_NOT_SUBMITTED
+        # → claim released, no reconciliation attempted.
+        a.submit_market_order.side_effect = AlpacaPaperAdapterError(
+            "qty must be a positive number",
+        )
+        _run_open(
+            ["--submit-paper"], adapter=a,
+            audit_dir=audit_dir, cache_dir=cache_dir,
+        )
+        rec = _open_audit_lines(audit_dir)[0]
+        assert rec["reconciliation_attempted"] is False
+        assert a.get_order_by_client_order_id.call_count == 0
+
+
+class TestDryRunNoSubmitOnlyBrokerQueries:
+    """Dry-run does not need the pre-submit position or open-orders
+    queries required only for submission."""
+
+    def test_dry_run_does_not_call_get_position(self, tmp_path):
+        cache_dir = tmp_path / "cache"; cache_dir.mkdir()
+        _bullish_open_cache(cache_dir)
+        audit_dir = tmp_path / "audit"
+        a = _mock_adapter(clock_is_open=True)
+        _run_open(["--dry-run"], adapter=a,
+                  audit_dir=audit_dir, cache_dir=cache_dir)
+        # get_position is a S54 submit-only precheck.
+        assert a.get_position.call_count == 0
+        assert a.list_open_orders.call_count == 0
+        assert a.submit_market_order.call_count == 0
 
 
 class TestNoLiveTrading:
