@@ -322,12 +322,12 @@ class TestOutcomeRequirements:
 
     def test_main_invalid_outcome_result_is_blocked(self, tmp_path):
         _, out, _ = _run_main(tmp_path, outcome="cancelled", broker_order_id="")
-        data = json.loads(out.read_text())
+        data = json.loads(out.read_text(encoding="utf-8"))
         assert data["result"] == "BLOCKED"
 
     def test_main_invalid_outcome_violations_mention_outcome(self, tmp_path):
         _, out, _ = _run_main(tmp_path, outcome="cancelled", broker_order_id="")
-        data = json.loads(out.read_text())
+        data = json.loads(out.read_text(encoding="utf-8"))
         assert any("outcome" in v for v in data["violations"])
 
 
@@ -348,7 +348,7 @@ class TestLedgerFailures:
         code, out, _ = _run_main(tmp_path, setup_ledger=False)
         assert code == 1
         assert out.exists()
-        data = json.loads(out.read_text())
+        data = json.loads(out.read_text(encoding="utf-8"))
         assert data["result"] == "BLOCKED"
 
     def test_schema_mismatch_blocks(self, tmp_path):
@@ -466,7 +466,7 @@ class TestOutputStructure:
 
     def test_written_json_has_all_fields(self, tmp_path):
         _, out, _ = _run_main(tmp_path, outcome="submitted", broker_order_id=_BROKER_ID)
-        data = json.loads(out.read_text())
+        data = json.loads(out.read_text(encoding="utf-8"))
         for field in _REQUIRED_OUTPUT_FIELDS:
             assert field in data, f"Missing field in JSON: {field}"
 

@@ -515,20 +515,20 @@ class TestOutputJson:
     def test_json_content_has_result_key(self, tmp_path: pathlib.Path) -> None:
         output_path = tmp_path / "report.json"
         main(["--cache-dir", str(tmp_path), "--output", str(output_path)])
-        data = json.loads(output_path.read_text())
+        data = json.loads(output_path.read_text(encoding="utf-8"))
         assert "result" in data
 
     def test_json_blocked_without_flag(self, tmp_path: pathlib.Path) -> None:
         output_path = tmp_path / "report.json"
         main(["--cache-dir", str(tmp_path), "--output", str(output_path)])
-        data = json.loads(output_path.read_text())
+        data = json.loads(output_path.read_text(encoding="utf-8"))
         assert data["result"] == "BLOCKED"
 
     def test_json_result_matches_run_fetch(self, tmp_path: pathlib.Path) -> None:
         output_path = tmp_path / "report.json"
         run_result = run_fetch(tmp_path, allow_network=False)
         main(["--cache-dir", str(tmp_path), "--output", str(output_path)])
-        json_result = json.loads(output_path.read_text())
+        json_result = json.loads(output_path.read_text(encoding="utf-8"))
         assert json_result["result"] == run_result["result"]
         assert json_result["network_calls_made"] == run_result["network_calls_made"]
 
@@ -675,7 +675,7 @@ class TestForceRefreshAndCacheHitReporting:
         assert r["entries"][0]["status"] == "FETCHED"
         for f in unrelated_files:
             assert f.exists(), f"unrelated file {f.name} was deleted"
-            assert f.read_text() == "untouched"
+            assert f.read_text(encoding="utf-8") == "untouched"
 
     def test_force_refresh_fetch_failure_preserves_previous_good_cache(
         self, tmp_path: pathlib.Path,

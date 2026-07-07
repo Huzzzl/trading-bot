@@ -416,7 +416,7 @@ class TestSuccessfulPersistence:
         result = _persist(pr, tmp_path, include_markdown=True)
         assert result.markdown_summary_path is not None
         assert pathlib.Path(result.markdown_summary_path).exists()
-        content = pathlib.Path(result.markdown_summary_path).read_text()
+        content = pathlib.Path(result.markdown_summary_path).read_text(encoding="utf-8")
         assert "PASS" in content
         assert _FIXED_RUN_ID in content
 
@@ -439,7 +439,7 @@ class TestSuccessfulPersistence:
     def test_manifest_files_list_matches_actual_reports(self, tmp_path: pathlib.Path):
         pr = _make_pipeline_result()
         result = _persist(pr, tmp_path)
-        manifest = json.loads(pathlib.Path(result.manifest_path).read_text())
+        manifest = json.loads(pathlib.Path(result.manifest_path).read_text(encoding="utf-8"))
         run_dir = pathlib.Path(result.manifest_path).parent
         for fname in manifest["files"]["reports"]:
             assert (run_dir / "reports" / fname).exists()
@@ -447,52 +447,52 @@ class TestSuccessfulPersistence:
     def test_manifest_schema_version(self, tmp_path: pathlib.Path):
         pr = _make_pipeline_result()
         result = _persist(pr, tmp_path)
-        manifest = json.loads(pathlib.Path(result.manifest_path).read_text())
+        manifest = json.loads(pathlib.Path(result.manifest_path).read_text(encoding="utf-8"))
         assert manifest["schema_version"] == "S9/1.0"
 
     def test_best_candidate_in_manifest(self, tmp_path: pathlib.Path):
         pr = _make_pipeline_result()
         result = _persist(pr, tmp_path)
-        manifest = json.loads(pathlib.Path(result.manifest_path).read_text())
+        manifest = json.loads(pathlib.Path(result.manifest_path).read_text(encoding="utf-8"))
         assert manifest["best_candidate_id"] == "A_SPY_60m_trend_breakout_1to2d"
         assert manifest["best_average_monthly_return"] == pytest.approx(0.05)
 
     def test_worst_drawdown_in_manifest(self, tmp_path: pathlib.Path):
         pr = _make_pipeline_result()
         result = _persist(pr, tmp_path)
-        manifest = json.loads(pathlib.Path(result.manifest_path).read_text())
+        manifest = json.loads(pathlib.Path(result.manifest_path).read_text(encoding="utf-8"))
         assert manifest["worst_max_drawdown"] == pytest.approx(-0.10)
 
     def test_total_trades_in_manifest(self, tmp_path: pathlib.Path):
         pr = _make_pipeline_result()
         result = _persist(pr, tmp_path)
-        manifest = json.loads(pathlib.Path(result.manifest_path).read_text())
+        manifest = json.loads(pathlib.Path(result.manifest_path).read_text(encoding="utf-8"))
         assert manifest["total_trades_sum"] == 10
 
     def test_candidate_filter_serialized_in_pipeline_summary(self, tmp_path: pathlib.Path):
         f = CandidateFilter(groups=("A",), symbols=("SPY",))
         pr = _make_pipeline_result(candidate_filter=f)
         result = _persist(pr, tmp_path)
-        ps = json.loads(pathlib.Path(result.pipeline_summary_path).read_text())
+        ps = json.loads(pathlib.Path(result.pipeline_summary_path).read_text(encoding="utf-8"))
         assert ps["candidate_filter"]["groups"] == ["A"]
         assert ps["candidate_filter"]["symbols"] == ["SPY"]
 
     def test_git_commit_sha_in_manifest(self, tmp_path: pathlib.Path):
         pr = _make_pipeline_result()
         result = _persist(pr, tmp_path, git_commit_sha=_FIXED_SHA)
-        manifest = json.loads(pathlib.Path(result.manifest_path).read_text())
+        manifest = json.loads(pathlib.Path(result.manifest_path).read_text(encoding="utf-8"))
         assert manifest["git_commit_sha"] == _FIXED_SHA
 
     def test_git_commit_sha_none_when_not_supplied(self, tmp_path: pathlib.Path):
         pr = _make_pipeline_result()
         result = _persist(pr, tmp_path)
-        manifest = json.loads(pathlib.Path(result.manifest_path).read_text())
+        manifest = json.loads(pathlib.Path(result.manifest_path).read_text(encoding="utf-8"))
         assert manifest["git_commit_sha"] is None
 
     def test_report_json_is_valid_research_report(self, tmp_path: pathlib.Path):
         pr = _make_pipeline_result()
         result = _persist(pr, tmp_path)
-        report_data = json.loads(pathlib.Path(result.report_paths[0]).read_text())
+        report_data = json.loads(pathlib.Path(result.report_paths[0]).read_text(encoding="utf-8"))
         assert report_data["schema_version"] == "S6/1.0"
         assert "candidate" in report_data
         assert "summary" in report_data
@@ -504,8 +504,8 @@ class TestSuccessfulPersistence:
         r2 = _persist(pr, tmp_path, allow_overwrite=True)
         assert r2.result == "PASS"
         assert r1.run_id == r2.run_id
-        m1 = pathlib.Path(r1.manifest_path).read_text()
-        m2 = pathlib.Path(r2.manifest_path).read_text()
+        m1 = pathlib.Path(r1.manifest_path).read_text(encoding="utf-8")
+        m2 = pathlib.Path(r2.manifest_path).read_text(encoding="utf-8")
         assert m1 == m2
 
     def test_multiple_reports_all_written(self, tmp_path: pathlib.Path):

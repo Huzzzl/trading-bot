@@ -212,7 +212,7 @@ class TestHappyPath:
     def test_main_writes_output_json(self, tmp_path):
         _, out, _ = _run_main(tmp_path)
         assert out.exists()
-        data = json.loads(out.read_text())
+        data = json.loads(out.read_text(encoding="utf-8"))
         assert data["result"] == "LEDGER_DRY_RUN_WRITTEN"
 
 
@@ -271,7 +271,7 @@ class TestGateFailures:
         code, out, _ = _run_main(tmp_path, gate_path=missing)
         assert code == 1
         assert out.exists()
-        data = json.loads(out.read_text())
+        data = json.loads(out.read_text(encoding="utf-8"))
         assert data["result"] == "BLOCKED"
 
     def test_malformed_gate_file_blocks(self, tmp_path):
@@ -457,7 +457,7 @@ class TestLedgerSchemaValidation:
         code, out, _ = _run_main(tmp_path, ledger_path=ledger)
         assert code == 1
         assert out.exists()
-        data = json.loads(out.read_text())
+        data = json.loads(out.read_text(encoding="utf-8"))
         assert data["result"] == "BLOCKED"
 
     def test_valid_schema_allows_append_with_different_id(self, tmp_path):
@@ -513,7 +513,7 @@ class TestOutputStructure:
 
     def test_written_output_json_has_all_fields(self, tmp_path):
         _, out, _ = _run_main(tmp_path)
-        data = json.loads(out.read_text())
+        data = json.loads(out.read_text(encoding="utf-8"))
         for field in _REQUIRED_OUTPUT_FIELDS:
             assert field in data, f"Missing field in written JSON: {field}"
 

@@ -338,7 +338,7 @@ class TestWritePlan:
         from src.tools.live_submit import write_plan
         plan = {"submit_order_called": False, "submit_allowed": False}
         path = write_plan(tmp_path, plan)
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         assert data["submit_order_called"] is False
 
     def test_creates_parent_dirs(self, tmp_path):

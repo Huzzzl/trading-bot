@@ -213,7 +213,7 @@ class TestBundleFailures:
         code, out = _run_main(tmp_path, bundle_path=missing)
         assert code == 1
         assert out.exists()
-        data = json.loads(out.read_text())
+        data = json.loads(out.read_text(encoding="utf-8"))
         assert data["decision"] == "NO_GO"
 
     def test_malformed_bundle_produces_no_go(self, tmp_path):
@@ -413,7 +413,7 @@ class TestOutputStructure:
 
     def test_written_json_has_all_fields(self, tmp_path):
         _, out = _run_main(tmp_path)
-        data = json.loads(out.read_text())
+        data = json.loads(out.read_text(encoding="utf-8"))
         for field in _REQUIRED_OUTPUT_FIELDS:
             assert field in data, f"Missing field in written JSON: {field}"
 

@@ -462,11 +462,11 @@ class TestSafetySourceScan:
 
     @pytest.fixture(scope="class")
     def trade_source(self) -> str:
-        return _TRADE_SRC.read_text()
+        return _TRADE_SRC.read_text(encoding="utf-8")
 
     @pytest.fixture(scope="class")
     def runner_source(self) -> str:
-        return _RUNNER_SRC.read_text()
+        return _RUNNER_SRC.read_text(encoding="utf-8")
 
     def test_trade_no_alpaca_import(self, trade_source: str) -> None:
         assert "import alpaca" not in trade_source.lower()

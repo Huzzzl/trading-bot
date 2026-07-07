@@ -713,19 +713,19 @@ class TestWriteReport:
 
     def test_json_contains_final_status(self, tmp_path):
         _run_main_full(tmp_path=tmp_path, extra_argv=["--write-report"])
-        data = json.loads((tmp_path / "live_shadow_preflight_report.json").read_text())
+        data = json.loads((tmp_path / "live_shadow_preflight_report.json").read_text(encoding="utf-8"))
         assert "final_status" in data
         assert data["final_status"] in ("PASS", "WARN", "FAIL")
 
     def test_json_contains_checks_list(self, tmp_path):
         _run_main_full(tmp_path=tmp_path, extra_argv=["--write-report"])
-        data = json.loads((tmp_path / "live_shadow_preflight_report.json").read_text())
+        data = json.loads((tmp_path / "live_shadow_preflight_report.json").read_text(encoding="utf-8"))
         assert isinstance(data["checks"], list)
         assert len(data["checks"]) > 0
 
     def test_json_fields_present(self, tmp_path):
         _run_main_full(tmp_path=tmp_path, extra_argv=["--write-report"])
-        data = json.loads((tmp_path / "live_shadow_preflight_report.json").read_text())
+        data = json.loads((tmp_path / "live_shadow_preflight_report.json").read_text(encoding="utf-8"))
         for field in (
             "checked_at_utc", "selected_symbol", "final_status", "config_path",
             "account_status", "trading_blocked", "account_blocked",
@@ -737,7 +737,7 @@ class TestWriteReport:
 
     def test_json_sizing_summary_present(self, tmp_path):
         _run_main_full(tmp_path=tmp_path, extra_argv=["--write-report"])
-        data = json.loads((tmp_path / "live_shadow_preflight_report.json").read_text())
+        data = json.loads((tmp_path / "live_shadow_preflight_report.json").read_text(encoding="utf-8"))
         assert data["sizing_summary"] is not None
         assert "status" in data["sizing_summary"]
 
@@ -748,13 +748,13 @@ class TestWriteReport:
             _mock_intent(entry_price=460.0),
         ]
         _run_main_full(tmp_path=tmp_path, intents=intents, extra_argv=["--write-report"])
-        with (tmp_path / "live_shadow_candidates.csv").open() as f:
+        with (tmp_path / "live_shadow_candidates.csv").open(encoding="utf-8") as f:
             rows = list(csv.DictReader(f))
         assert len(rows) == 3
 
     def test_csv_columns_present(self, tmp_path):
         _run_main_full(tmp_path=tmp_path, extra_argv=["--write-report"])
-        with (tmp_path / "live_shadow_candidates.csv").open() as f:
+        with (tmp_path / "live_shadow_candidates.csv").open(encoding="utf-8") as f:
             reader = csv.DictReader(f)
             columns = reader.fieldnames or []
         for col in (
@@ -775,7 +775,7 @@ class TestWriteReport:
             live_quantity_override=1.0,
             extra_argv=["--write-report"],
         )
-        with (tmp_path / "live_shadow_candidates.csv").open() as f:
+        with (tmp_path / "live_shadow_candidates.csv").open(encoding="utf-8") as f:
             rows = list(csv.DictReader(f))
         assert rows[0]["sizing_status"] == "FAIL"
 
@@ -788,7 +788,7 @@ class TestWriteReport:
             live_quantity_override=1.0,
             extra_argv=["--write-report"],
         )
-        with (tmp_path / "live_shadow_candidates.csv").open() as f:
+        with (tmp_path / "live_shadow_candidates.csv").open(encoding="utf-8") as f:
             rows = list(csv.DictReader(f))
         assert rows[0]["sizing_status"] == "PASS"
 
