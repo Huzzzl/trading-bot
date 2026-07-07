@@ -97,3 +97,98 @@ def _auto_patch_paper_kill_switch(request):
 
     with patch("src.execution.paper_kill_switch.assert_kill_switch_disabled"):
         yield
+
+
+# ---------------------------------------------------------------------------
+# Alpaca credential isolation
+# ---------------------------------------------------------------------------
+#
+# Developer machines that run real Alpaca paper trading store credentials in
+# environment variables. Broker unit tests must NOT inherit those — otherwise
+# tests that assert "no credentials" behaviour silently start a real SDK client
+# and touch the paper API (submitting/reading real orders). The autouse
+# fixture below clears every known Alpaca env var for every test in
+# `_BROKER_UNIT_TEST_FILES`. Real values remain in the developer's shell for
+# manual use, but the pytest process never sees them for these files.
+#
+# The paired fixture patches the Alpaca SDK client constructors so any
+# accidental path that still tries to create a real client during unit tests
+# fails loudly instead of hitting the network.
+
+# Every Alpaca-related env var name the repository (or the SDK) may consult.
+_ALPACA_ENV_VARS = (
+    "ALPACA_API_KEY",
+    "ALPACA_SECRET_KEY",
+    "ALPACA_PAPER_API_KEY",
+    "ALPACA_PAPER_SECRET_KEY",
+    "APCA_API_KEY_ID",
+    "APCA_API_SECRET_KEY",
+    "APCA_API_BASE_URL",
+    "APCA_API_DATA_URL",
+    "ALPACA_PAPER_BASE_URL",
+    "ALPACA_BASE_URL",
+    "ALPACA_DATA_URL",
+)
+
+# All broker/adapter/runner test files must run without inherited Alpaca
+# credentials so nothing here can ever hit the paper API.
+_BROKER_UNIT_TEST_FILES = {
+    "test_alpaca_broker_skeleton.py",
+    "test_alpaca_paper_adapter.py",
+    "test_run_paper_cycle.py",
+    "test_run_automated_paper_cycle.py",
+    "test_live_broker_preflight_readonly.py",
+    "test_live_account_check.py",
+    "test_live_submit.py",
+    "test_live_ledger.py",
+    "test_live_ledger_verify.py",
+    "test_live_shadow_preflight.py",
+    "test_live_shadow_screen_symbols.py",
+    "test_paper_status.py",
+}
+
+
+@pytest.fixture(autouse=True)
+def _clear_alpaca_credentials(request, monkeypatch):
+    """Strip every Alpaca env var for broker unit tests.
+
+    This never touches the developer's shell — pytest's monkeypatch only
+    mutates the current process env and restores it on teardown. Tests that
+    still want to inject explicit env values do so via their own
+    ``mock.patch.dict``/``monkeypatch.setenv`` calls, which continue to
+    take precedence.
+    """
+    if request.fspath.basename not in _BROKER_UNIT_TEST_FILES:
+        yield
+        return
+
+    for name in _ALPACA_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _block_real_alpaca_sdk_construction(request):
+    """Patch the Alpaca SDK client so tests can't accidentally build one.
+
+    Applies only to files listed in `_BROKER_UNIT_TEST_FILES`. Each test that
+    wants to observe a *successful* SDK construction (e.g.
+    ``TestFromEnvironment.test_factory_constructs_with_real_sdk_mocked``)
+    installs its own ``patch()`` inside the test body, and the inner patch
+    wins.
+    """
+    if request.fspath.basename not in _BROKER_UNIT_TEST_FILES:
+        yield
+        return
+
+    def _fail(*_args, **_kwargs):
+        raise AssertionError(
+            "Alpaca TradingClient constructor was invoked from a unit test — "
+            "tests must inject a mock client. If this test intentionally "
+            "exercises the factory, patch the constructor inside the test."
+        )
+
+    with (
+        patch("alpaca.trading.client.TradingClient", side_effect=_fail, create=True),
+    ):
+        yield

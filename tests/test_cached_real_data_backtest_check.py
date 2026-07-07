@@ -444,7 +444,7 @@ class TestOutputJson:
             "--cache-dir", str(tmp_path),
             "--output", str(output_path),
         ])
-        data = json.loads(output_path.read_text())
+        data = json.loads(output_path.read_text(encoding="utf-8"))
         for key in ("result", "scenarios_run", "scenarios", "broker_calls_made",
                     "credentials_read", "network_calls_made", "order_action_requested"):
             assert key in data, f"Missing key in JSON output: {key}"
@@ -457,7 +457,7 @@ class TestOutputJson:
             "--output", str(output_path),
         ])
         assert rc == 1
-        data = json.loads(output_path.read_text())
+        data = json.loads(output_path.read_text(encoding="utf-8"))
         assert data["result"] == "BLOCKED"
 
     def test_json_result_matches_run_check(self, tmp_path: pathlib.Path) -> None:
@@ -467,7 +467,7 @@ class TestOutputJson:
             "--cache-dir", str(tmp_path),
             "--output", str(output_path),
         ])
-        data = json.loads(output_path.read_text())
+        data = json.loads(output_path.read_text(encoding="utf-8"))
         direct = run_check(cache_dir=tmp_path)
         assert data["result"] == direct["result"]
         assert data["scenarios_run"] == direct["scenarios_run"]

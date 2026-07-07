@@ -702,15 +702,15 @@ class TestSourceScan:
 
     @pytest.fixture(scope="class")
     def engine_source(self) -> str:
-        return _ENGINE_SRC.read_text()
+        return _ENGINE_SRC.read_text(encoding="utf-8")
 
     @pytest.fixture(scope="class")
     def risk_source(self) -> str:
-        return _RISK_SRC.read_text()
+        return _RISK_SRC.read_text(encoding="utf-8")
 
     @pytest.fixture(scope="class")
     def runner_source(self) -> str:
-        return _RUNNER_SRC.read_text()
+        return _RUNNER_SRC.read_text(encoding="utf-8")
 
     def test_engine_no_alpaca_import(self, engine_source: str) -> None:
         assert "import alpaca" not in engine_source.lower()

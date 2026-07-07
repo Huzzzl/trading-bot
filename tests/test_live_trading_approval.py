@@ -162,7 +162,7 @@ class TestMain:
     def test_artifact_content_correct(self, tmp_path):
         out = tmp_path / "approval.json"
         _run_main(_base_args(out))
-        artifact = json.loads(out.read_text())
+        artifact = json.loads(out.read_text(encoding="utf-8"))
         assert artifact["live_trading_approved"] is True
         assert artifact["live_order_submission_approved"] is False
         assert artifact["approval_scope"] == "AUTHORIZE_SINGLE_LIVE_ORDER_ATTEMPT_ONLY"
@@ -173,7 +173,7 @@ class TestMain:
     def test_symbol_normalized_uppercase_in_artifact(self, tmp_path):
         out = tmp_path / "approval.json"
         _run_main(_base_args(out, symbol="spy"))
-        artifact = json.loads(out.read_text())
+        artifact = json.loads(out.read_text(encoding="utf-8"))
         assert artifact["approved_symbol"] == "SPY"
 
     def test_empty_operator_name_exits_1(self, tmp_path):
@@ -220,7 +220,7 @@ class TestMain:
     def test_live_order_submission_approved_always_false(self, tmp_path):
         out = tmp_path / "approval.json"
         _run_main(_base_args(out))
-        artifact = json.loads(out.read_text())
+        artifact = json.loads(out.read_text(encoding="utf-8"))
         assert artifact["live_order_submission_approved"] is False
 
     def test_no_credentials_needed(self, tmp_path):

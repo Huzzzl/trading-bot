@@ -602,7 +602,7 @@ class TestSafetySourceScan:
 
     @pytest.fixture(scope="class")
     def source(self) -> str:
-        return _DIAG_SRC.read_text()
+        return _DIAG_SRC.read_text(encoding="utf-8")
 
     def test_no_alpaca_import(self, source: str) -> None:
         assert "import alpaca" not in source.lower()

@@ -562,7 +562,7 @@ class TestMain:
         _run_main(tmp_path, symbols="SPY",
                   intents_by_symbol={"SPY": [_mock_intent("SPY", entry_price=400.0)]},
                   extra_argv=["--write-report"])
-        data = json.loads((tmp_path / "live_shadow_symbol_screen_report.json").read_text())
+        data = json.loads((tmp_path / "live_shadow_symbol_screen_report.json").read_text(encoding="utf-8"))
         assert "overall_result" in data
         assert "symbol_results" in data
 
@@ -573,7 +573,7 @@ class TestMain:
                       "QQQ": [_mock_intent("QQQ", entry_price=150.0)],
                   },
                   extra_argv=["--write-report"])
-        with (tmp_path / "live_shadow_symbol_screen.csv").open() as f:
+        with (tmp_path / "live_shadow_symbol_screen.csv").open(encoding="utf-8") as f:
             rows = list(csv.DictReader(f))
         assert len(rows) == 2
         assert {r["symbol"] for r in rows} == {"SPY", "QQQ"}
@@ -687,7 +687,7 @@ class TestSymbolUniverse:
             },
             extra_argv=["--write-report"],
         )
-        with (tmp_path / "live_shadow_symbol_screen.csv").open() as f:
+        with (tmp_path / "live_shadow_symbol_screen.csv").open(encoding="utf-8") as f:
             rows = list(csv.DictReader(f))
         symbols_in_csv = [r["symbol"] for r in rows]
         assert symbols_in_csv.count("SPY") == 1

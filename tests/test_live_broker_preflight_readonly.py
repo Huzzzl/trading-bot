@@ -441,7 +441,7 @@ class TestCLIMode:
                 "--output", str(out),
             ])
         assert out.exists()
-        data = json.loads(out.read_text())
+        data = json.loads(out.read_text(encoding="utf-8"))
         assert data["result"] == "BLOCKED"
 
     def test_main_blocked_with_missing_artifact(self, tmp_path: Path) -> None:
@@ -800,7 +800,7 @@ class TestSecretNotExposed:
                 "--notional-cap", "100.0",
                 "--output", str(out),
             ])
-        assert self._SECRET not in out.read_text()
+        assert self._SECRET not in out.read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -927,7 +927,7 @@ class TestCLIWithoutAllowFlag:
                 "--notional-cap", "100.0",
                 "--output", str(out),
             ])
-        data = json.loads(out.read_text())
+        data = json.loads(out.read_text(encoding="utf-8"))
         assert data["result"] == "BLOCKED"
         assert data["broker_calls_made"] is False
 
@@ -946,7 +946,7 @@ class TestCLIWithoutAllowFlag:
                 "--notional-cap", "100.0",
                 "--output", str(out),
             ])
-        data = json.loads(out.read_text())
+        data = json.loads(out.read_text(encoding="utf-8"))
         assert any(
             "allow-live-broker-api-readonly" in v
             for v in data["violations"]
@@ -1187,7 +1187,7 @@ class TestCLIWithFlagMissingEnvVars:
                 "--allow-live-broker-api-readonly",
             ])
         assert exc_info.value.code == 1
-        data = json.loads(out.read_text())
+        data = json.loads(out.read_text(encoding="utf-8"))
         assert data["result"] == "BLOCKED"
         assert data["broker_calls_made"] is False
 
@@ -1208,7 +1208,7 @@ class TestCLIWithFlagMissingEnvVars:
                 "--allow-live-broker-api-readonly",
             ])
         assert exc_info.value.code == 1
-        data = json.loads(out.read_text())
+        data = json.loads(out.read_text(encoding="utf-8"))
         assert data["result"] == "BLOCKED"
 
     def test_secret_value_not_in_output_json(
@@ -1244,7 +1244,7 @@ class TestCLIWithFlagMissingEnvVars:
                 "--output", str(out),
                 "--allow-live-broker-api-readonly",
             ])
-        output_text = out.read_text()
+        output_text = out.read_text(encoding="utf-8")
         assert self._SECRET not in output_text
 
     def test_secret_not_in_stdout(

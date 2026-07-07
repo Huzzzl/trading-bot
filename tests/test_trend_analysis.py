@@ -713,7 +713,7 @@ _ANALYSIS_INIT = Path("src/analysis/__init__.py")
 
 class TestSourceScans:
     def _read(self, path: Path) -> str:
-        return path.read_text()
+        return path.read_text(encoding="utf-8")
 
     def test_no_alpaca_import_in_trend(self):
         src = self._read(_ANALYSIS_SOURCE)

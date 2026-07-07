@@ -330,7 +330,7 @@ class TestInvalidKeyNames:
         with pytest.raises(SystemExit) as exc_info:
             main(["--required-env", "sk-live-bad", "--output", str(out)])
         assert exc_info.value.code == 1
-        data = json.loads(out.read_text())
+        data = json.loads(out.read_text(encoding="utf-8"))
         assert data["result"] == "BLOCKED"
         assert "sk-live-bad" not in json.dumps(data)
 
@@ -475,7 +475,7 @@ class TestSecretNotExposed:
             ])
         except SystemExit:
             pass
-        content = out.read_text()
+        content = out.read_text(encoding="utf-8")
         assert self._SECRET not in content
 
     def test_redacted_preview_is_fixed_literal_not_derived(
@@ -522,7 +522,7 @@ class TestExitCodes:
         out = _output_path(tmp_path)
         main(["--required-env", _KEY_A, "--output", str(out)])
         assert out.exists()
-        data = json.loads(out.read_text())
+        data = json.loads(out.read_text(encoding="utf-8"))
         assert data["result"] == "PASS"
 
     def test_always_writes_output_on_blocked(
@@ -533,7 +533,7 @@ class TestExitCodes:
         with pytest.raises(SystemExit):
             main(["--required-env", _KEY_A, "--output", str(out)])
         assert out.exists()
-        data = json.loads(out.read_text())
+        data = json.loads(out.read_text(encoding="utf-8"))
         assert data["result"] == "BLOCKED"
 
     def test_output_dir_created(
@@ -550,7 +550,7 @@ class TestExitCodes:
         monkeypatch.setenv(_KEY_A, "val")
         out = _output_path(tmp_path)
         main(["--required-env", _KEY_A, "--output", str(out)])
-        data = json.loads(out.read_text())
+        data = json.loads(out.read_text(encoding="utf-8"))
         for field in (
             "checked_at_utc", "result", "credentials_present",
             "credentials_read", "credential_values_exposed",
@@ -571,7 +571,7 @@ class TestExitCodes:
             "--required-env", _KEY_B,
             "--output", str(out),
         ])
-        data = json.loads(out.read_text())
+        data = json.loads(out.read_text(encoding="utf-8"))
         assert data["result"] == "PASS"
         assert len(data["checks"]) == 2
 

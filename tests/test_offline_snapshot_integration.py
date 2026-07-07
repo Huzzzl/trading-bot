@@ -234,7 +234,7 @@ class TestEndToEndPass:
     def test_manifest_file_inventory_matches_actual_files(self, tmp_path: pathlib.Path):
         result = _run(tmp_path)
         manifest_path = pathlib.Path(result.persistence.manifest_path)
-        manifest = json.loads(manifest_path.read_text())
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         run_dir = manifest_path.parent
         # pipeline_summary must exist.
         assert (run_dir / manifest["files"]["pipeline_summary"]).exists()
@@ -330,7 +330,7 @@ class TestCandidateFilterPropagation:
         )
         assert result.result == "PASS"
         ps_path = pathlib.Path(result.persistence.pipeline_summary_path)
-        ps = json.loads(ps_path.read_text())
+        ps = json.loads(ps_path.read_text(encoding="utf-8"))
         assert ps["candidate_filter"]["groups"] == ["A"]
         assert ps["candidate_filter"]["symbols"] == ["SPY"]
 
@@ -378,23 +378,23 @@ class TestReportJsonOutput:
 
     def test_pass_run_report_json_schema_version(self, tmp_path: pathlib.Path):
         result = _run(tmp_path)
-        data = json.loads(pathlib.Path(result.persistence.report_paths[0]).read_text())
+        data = json.loads(pathlib.Path(result.persistence.report_paths[0]).read_text(encoding="utf-8"))
         assert data["schema_version"] == "S6/1.0"
 
     def test_pass_run_report_json_candidate_id(self, tmp_path: pathlib.Path):
         result = _run(tmp_path)
-        data = json.loads(pathlib.Path(result.persistence.report_paths[0]).read_text())
+        data = json.loads(pathlib.Path(result.persistence.report_paths[0]).read_text(encoding="utf-8"))
         assert data["candidate"]["candidate_id"] == _FAKE_CANDIDATE_ID
 
     def test_manifest_reports_list_contains_report_filename(self, tmp_path: pathlib.Path):
         result = _run(tmp_path)
-        manifest = json.loads(pathlib.Path(result.persistence.manifest_path).read_text())
+        manifest = json.loads(pathlib.Path(result.persistence.manifest_path).read_text(encoding="utf-8"))
         assert f"{_FAKE_CANDIDATE_ID}.json" in manifest["files"]["reports"]
 
     def test_manifest_reports_file_exists_on_disk(self, tmp_path: pathlib.Path):
         result = _run(tmp_path)
         manifest_path = pathlib.Path(result.persistence.manifest_path)
-        manifest = json.loads(manifest_path.read_text())
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         run_dir = manifest_path.parent
         for fname in manifest["files"]["reports"]:
             assert (run_dir / "reports" / fname).exists()

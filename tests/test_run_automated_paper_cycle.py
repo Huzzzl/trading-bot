@@ -214,7 +214,7 @@ def _audit_lines(audit_dir: Path, now: datetime = _FIXED_NOW) -> list[dict]:
     path = audit_dir / f"{date_iso}.jsonl"
     if not path.is_file():
         return []
-    return [json.loads(ln) for ln in path.read_text().splitlines() if ln.strip()]
+    return [json.loads(ln) for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
 
 
 class TestFetchFailurePreventsCycle:
@@ -521,7 +521,7 @@ class TestAuditNoSecrets:
             _run_open(["--submit-paper"], adapter=a,
                  audit_dir=audit_dir, cache_dir=cache_dir)
         date_iso = _OPEN_NOW.date().isoformat()
-        raw = (audit_dir / f"{date_iso}.jsonl").read_text()
+        raw = (audit_dir / f"{date_iso}.jsonl").read_text(encoding="utf-8")
         assert "super-secret-key-do-not-leak" not in raw
         assert "super-secret-do-not-leak" not in raw
 

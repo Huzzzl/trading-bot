@@ -169,7 +169,7 @@ class TestLedgerRead:
         code, out = _run_main(tmp_path, ledger_path=tmp_path / "nofile.csv")
         assert code == 1
         assert out.exists()
-        assert json.loads(out.read_text())["result"] == "FAIL"
+        assert json.loads(out.read_text(encoding="utf-8"))["result"] == "FAIL"
 
     def test_schema_mismatch_fails(self, tmp_path):
         bad_cols = [c for c in _LEDGER_COLUMNS if c != "broker_order_id"]
@@ -439,7 +439,7 @@ class TestOutputStructure:
     def test_written_json_has_all_fields(self, tmp_path):
         _ledger(tmp_path, _base_row())
         _, out = _run_main(tmp_path)
-        data = json.loads(out.read_text())
+        data = json.loads(out.read_text(encoding="utf-8"))
         for field in _REQUIRED_OUTPUT_FIELDS:
             assert field in data, f"Missing field in JSON: {field}"
 
