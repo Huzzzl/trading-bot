@@ -145,6 +145,7 @@ _BROKER_UNIT_TEST_FILES = {
     "test_live_shadow_preflight.py",
     "test_live_shadow_screen_symbols.py",
     "test_paper_status.py",
+    "test_paper_status_summary.py",
 }
 
 
