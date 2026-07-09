@@ -135,20 +135,34 @@ def reconcile_orders(
     adapter: Any,
     audit_orders: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Fetch final status per audit order from the broker."""
+    """Fetch final status per audit order from the broker.
+
+    Uses ``broker_order_id`` when available; on failure or empty result
+    falls back to ``client_order_id`` before declaring the order missing.
+    An order is only considered missing when both lookups (where
+    applicable) have been tried and neither returned a matching order.
+    """
     reconciled: list[dict[str, Any]] = []
     for entry in audit_orders:
         broker_id = entry.get("broker_order_id")
         client_id = entry.get("client_order_id")
         fetched: dict[str, Any] | None = None
         fetch_error: str | None = None
-        try:
-            if broker_id:
+        if broker_id:
+            try:
                 fetched = adapter.get_order(broker_id)
-            elif client_id:
-                fetched = adapter.get_order_by_client_order_id(client_id)
-        except AlpacaPaperAdapterError as exc:
-            fetch_error = str(exc)
+            except AlpacaPaperAdapterError as exc:
+                fetch_error = str(exc)
+        if fetched is None and client_id:
+            try:
+                fallback = adapter.get_order_by_client_order_id(client_id)
+            except AlpacaPaperAdapterError as exc:
+                if fetch_error is None:
+                    fetch_error = str(exc)
+            else:
+                if fallback is not None:
+                    fetched = fallback
+                    fetch_error = None
         current_status = fetched.get("status") if isinstance(fetched, dict) else None
         reconciled.append({
             "broker_order_id": broker_id,
@@ -197,11 +211,35 @@ def scan_orphan_claims(audit_dir: Path) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
+def position_predates_audit(
+    position: dict[str, Any] | None,
+    reconciled: list[dict[str, Any]],
+) -> bool:
+    """Return ``True`` when a broker position exists but the selected audit
+    date shows no filled BUY that would explain it.
+
+    Strategy allows overnight positions, so this is purely informational
+    — it means the position was likely opened on a prior trading day and
+    is expected. Callers surface this as a summary field, not a warning.
+    """
+    if position is None:
+        return False
+    qty = position.get("qty")
+    if qty in (None, 0, 0.0):
+        return False
+    for r in reconciled:
+        if r.get("classification") != "filled":
+            continue
+        side = r.get("side")
+        if isinstance(side, str) and side.lower() == "buy":
+            return False
+    return True
+
+
 def detect_warnings(
     *,
     reconciled: list[dict[str, Any]],
     open_orders: list[dict[str, Any]],
-    position: dict[str, Any] | None,
     audit_records: list[dict[str, Any]],
     orphan_claims: list[str],
 ) -> list[str]:
@@ -229,20 +267,6 @@ def detect_warnings(
             f"OPEN_ORDER_NOT_IN_AUDIT: Alpaca has open SPY order id={oid} "
             f"client_order_id={cid} that is not present in audit"
         )
-
-    if position is not None and position.get("qty") not in (None, 0, 0.0):
-        has_filled_buy = any(
-            r.get("classification") == "filled"
-            and isinstance(r.get("side"), str)
-            and r["side"].lower() == "buy"
-            for r in reconciled
-        )
-        if not has_filled_buy:
-            warnings.append(
-                "POSITION_EXISTS_BUT_NO_FILLED_BUY_IN_AUDIT: Alpaca reports a "
-                f"SPY position (qty={position.get('qty')}) but today's audit "
-                "has no filled BUY order"
-            )
 
     for rec in audit_records:
         codes = rec.get("reason_codes") or []
@@ -317,7 +341,6 @@ def build_summary(
     warnings = detect_warnings(
         reconciled=reconciled,
         open_orders=open_orders,
-        position=position,
         audit_records=records,
         orphan_claims=orphan_claims,
     )
@@ -339,6 +362,7 @@ def build_summary(
         "spy_avg_entry_price": position.get("avg_entry_price") if position else None,
         "spy_market_value": position.get("market_value") if position else None,
         "spy_unrealized_pl": position.get("unrealized_pl") if position else None,
+        "position_may_predate_audit_date": position_predates_audit(position, reconciled),
         "open_orders": open_orders,
         "open_order_count": len(open_orders),
         "reconciled_orders": reconciled,
