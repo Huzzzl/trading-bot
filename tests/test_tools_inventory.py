@@ -89,6 +89,8 @@ ACTIVE_RUNTIME_CANDIDATE_TOOLS: tuple[str, ...] = (
     "run_paper_cycle",            # runnable Alpaca paper cycle CLI
     # --- Added in PR S53 ---
     "run_automated_paper_cycle",  # one-shot automated paper trading runner
+    # --- Added in PR S55 ---
+    "paper_status_summary",       # read-only end-of-day paper trading summary
 )
 
 # May be needed by automated runtime; keep in place.
@@ -296,13 +298,13 @@ class TestToolsInventory:
         assert len(ACTIVE_RESEARCH_TOOLS) == 3
 
     def test_active_runtime_candidate_tools_count(self) -> None:
-        assert len(ACTIVE_RUNTIME_CANDIDATE_TOOLS) == 18
+        assert len(ACTIVE_RUNTIME_CANDIDATE_TOOLS) == 19
 
     def test_preserve_runtime_support_tools_count(self) -> None:
         assert len(PRESERVE_RUNTIME_SUPPORT_TOOLS) == 1
 
     def test_active_tools_count(self) -> None:
-        assert len(ACTIVE_TOOLS) == 22
+        assert len(ACTIVE_TOOLS) == 23
 
     def test_archived_tools_count(self) -> None:
         assert len(ARCHIVED_TOOLS) == 20
