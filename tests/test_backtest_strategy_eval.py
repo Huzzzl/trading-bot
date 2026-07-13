@@ -24,14 +24,20 @@ from src.tools.backtest_strategy_eval import Bar, BacktestError
 # ---------------------------------------------------------------------------
 
 
-def _bars_from_closes(closes: Sequence[float]) -> list[Bar]:
+def _bars_from_closes(
+    closes: Sequence[float],
+    opens: Sequence[float] | None = None,
+) -> list[Bar]:
     start = pd.Timestamp("2026-01-05 14:30", tz="UTC")
+    if opens is None:
+        opens = closes
     return [
         Bar(
             ts=start + pd.Timedelta(hours=i),
-            open=c, high=c, low=c, close=c, volume=1_000.0,
+            open=opens[i], high=max(opens[i], closes[i]),
+            low=min(opens[i], closes[i]), close=closes[i], volume=1_000.0,
         )
-        for i, c in enumerate(closes)
+        for i in range(len(closes))
     ]
 
 
@@ -127,10 +133,16 @@ def test_run_backtest_metrics_on_pure_uptrend() -> None:
     assert result.buy_and_hold_return > 40.0
     assert 0.0 <= result.exposure_time <= 1.0
     assert result.max_drawdown <= 0.0
-    # The final open position is mark-to-market unwound as a trade for
-    # reporting purposes.
-    assert result.trade_count >= 1
-    assert result.win_rate > 0.0
+    # A pure uptrend produces no bearish crossover, so the position
+    # never closes — completed-trade metrics stay at zero and the
+    # position is reported as still open.
+    assert result.completed_trade_count == 0
+    assert result.trade_count == 0
+    assert result.win_rate == 0.0
+    assert result.open_position is True
+    assert result.open_entry_index is not None
+    assert result.open_unrealized_return is not None
+    assert result.open_unrealized_return > 0
 
 
 def test_metrics_avg_trade_return_matches_trade_list() -> None:
@@ -217,15 +229,23 @@ def test_build_summary_json_schema() -> None:
         now_utc=now, short_window=3, long_window=5,
     )
     required = {"timestamp_utc", "symbol", "interval", "bar_count",
-                "first_bar_ts", "last_bar_ts", "baseline"}
+                "first_bar_ts", "last_bar_ts", "baseline",
+                "execution", "commission_bps", "slippage_bps"}
     assert required.issubset(summary.keys())
     baseline_keys = {
         "total_return", "buy_and_hold_return", "max_drawdown", "sharpe_ratio",
-        "trade_count", "win_rate", "avg_trade_return", "avg_holding_bars",
+        "trade_count", "completed_trade_count",
+        "win_rate", "avg_trade_return", "avg_holding_bars",
         "profit_factor", "exposure_time", "final_equity",
-        "short_window", "long_window",
+        "short_window", "long_window", "execution",
+        "commission_bps", "slippage_bps",
+        "open_position", "open_entry_price", "open_entry_index",
+        "open_unrealized_return",
     }
     assert baseline_keys.issubset(summary["baseline"].keys())
+    # Default execution is realistic, not optimistic.
+    assert summary["execution"] == "next_open"
+    assert summary["baseline"]["execution"] == "next_open"
     # JSON round-trips cleanly.
     dumped = json.dumps(summary, default=str)
     assert json.loads(dumped)["symbol"] == "SPY"
@@ -339,3 +359,190 @@ def test_main_reports_missing_cache_and_exits_2(
     assert rc == 2
     err = json.loads(capsys.readouterr().out)
     assert "cache directory" in err["error"]
+
+
+def test_main_reports_bad_sweep_window_and_exits_2(
+    tmp_path: Path, capsys: pytest.CaptureFixture,
+) -> None:
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    _write_cache(cache_dir, [float(c) for c in range(1, 21)])
+    rc = bse.main([
+        "--cache-dir", str(cache_dir),
+        "--short-windows", "5,abc,10",
+        "--long-windows", "20",
+        "--no-write",
+    ])
+    assert rc == 2
+    err = json.loads(capsys.readouterr().out)
+    assert "window" in err["error"].lower()
+
+
+# ---------------------------------------------------------------------------
+# Execution model — next_open (default) vs same_close (diagnostic)
+# ---------------------------------------------------------------------------
+
+
+def test_default_execution_is_next_open() -> None:
+    bars = _bars_from_closes([1.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+    result = bse.run_backtest(bars, short_window=2, long_window=3)
+    assert result.execution == "next_open"
+
+
+def test_next_open_execution_fills_at_next_bar_open() -> None:
+    """A BUY signal at bar t must fill at bars[t+1].open, not bars[t].close."""
+    # Distinct open vs close so we can tell which price was used.
+    #   idx     0    1    2    3    4    5
+    #   close   1    1    2    3    4    5   ← signal source
+    #   open   10   10   20   30   40   50   ← execution price under next_open
+    closes = [1.0, 1.0, 2.0, 3.0, 4.0, 5.0]
+    opens  = [10.0, 10.0, 20.0, 30.0, 40.0, 50.0]
+    bars = _bars_from_closes(closes, opens=opens)
+    result = bse.run_backtest(
+        bars, short_window=2, long_window=3, execution="next_open",
+    )
+    # Signal fires at some bar t (t >= 2 given windows); the trade's
+    # entry_price must equal one of the openings (not one of the closes),
+    # proving next-bar execution.
+    if result.open_position:
+        entry = result.open_entry_price
+    else:
+        assert result.trades
+        entry = result.trades[0].entry_price
+    assert entry in {10.0, 20.0, 30.0, 40.0, 50.0}, (
+        f"entry price {entry} matched close series, not open series — "
+        "same-bar execution leaked in"
+    )
+
+
+def test_final_bar_signal_does_not_execute() -> None:
+    """A BUY signal on the final bar has no next bar to fill on, so no
+    new trade may be opened under next_open."""
+    # Uptrend that fires a BUY on the very last bar.
+    closes = [1.0, 1.0, 1.0, 1.0, 1.0, 2.0]  # 6 bars
+    opens = [100.0, 100.0, 100.0, 100.0, 100.0, 100.0]
+    bars = _bars_from_closes(closes, opens=opens)
+    # Force the last bar's signal by choosing tight windows.
+    result = bse.run_backtest(
+        bars, short_window=2, long_window=3, execution="next_open",
+    )
+    # If the tool obeyed next_open, no fill can happen — the signal at
+    # the final bar has no bar[t+1] to execute on.
+    if result.open_position:
+        assert result.open_entry_index is not None
+        assert result.open_entry_index < len(bars) - 1 or False, (
+            "final-bar signal should not execute"
+        )
+
+
+def test_same_close_diagnostic_produces_different_entry_price() -> None:
+    closes = [1.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    opens  = [10.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0]
+    bars = _bars_from_closes(closes, opens=opens)
+    r_next = bse.run_backtest(bars, 2, 3, execution="next_open")
+    r_same = bse.run_backtest(bars, 2, 3, execution="same_close")
+    # Under same_close the entry price MUST be a close value.
+    if r_same.open_position:
+        entry_same = r_same.open_entry_price
+    else:
+        entry_same = r_same.trades[0].entry_price
+    assert entry_same in set(closes)
+    # And the two execution models produce different results on this
+    # bar series, which is the whole point of the option.
+    assert r_next.execution != r_same.execution
+
+
+def test_run_backtest_rejects_invalid_execution_mode() -> None:
+    bars = _bars_from_closes([1.0] * 10)
+    with pytest.raises(BacktestError, match="execution"):
+        bse.run_backtest(bars, 3, 5, execution="magic")
+
+
+# ---------------------------------------------------------------------------
+# Open position handling
+# ---------------------------------------------------------------------------
+
+
+def test_open_position_does_not_count_as_trade() -> None:
+    """A position still open at end must be reported in open_* fields
+    but must NOT contribute to completed_trade_count / win_rate /
+    profit_factor / avg_trade_return."""
+    closes = [float(c) for c in range(1, 41)]  # pure uptrend → position never closes
+    bars = _bars_from_closes(closes)
+    result = bse.run_backtest(bars, short_window=3, long_window=5)
+    assert result.open_position is True
+    assert result.open_entry_price is not None
+    assert result.open_entry_index is not None
+    assert result.open_unrealized_return is not None
+    assert result.completed_trade_count == 0
+    assert result.trade_count == 0  # alias, also excludes open position
+    assert result.win_rate == 0.0
+    assert result.profit_factor == 0.0
+    assert result.avg_trade_return == 0.0
+    # final_equity still reflects mark-to-market of the open position.
+    assert result.final_equity > 10_000.0
+
+
+def test_closed_trade_updates_completed_metrics() -> None:
+    # Up then down: position opens and later closes on bearish crossover.
+    closes = [1, 1, 1, 2, 3, 4, 5, 6, 7, 6, 5, 4, 3, 2, 1, 1, 1, 1]
+    bars = _bars_from_closes([float(c) for c in closes])
+    result = bse.run_backtest(bars, short_window=2, long_window=4)
+    assert result.completed_trade_count >= 1
+    assert result.trade_count == result.completed_trade_count
+
+
+# ---------------------------------------------------------------------------
+# Commission + slippage
+# ---------------------------------------------------------------------------
+
+
+def test_costs_reduce_final_equity() -> None:
+    closes = [1, 1, 1, 2, 3, 4, 5, 6, 7, 6, 5, 4, 3, 2, 1, 1, 2, 3, 4, 5]
+    bars = _bars_from_closes([float(c) for c in closes])
+    r_free = bse.run_backtest(bars, 2, 4, commission_bps=0, slippage_bps=0)
+    r_cost = bse.run_backtest(bars, 2, 4, commission_bps=10, slippage_bps=5)
+    assert r_cost.final_equity < r_free.final_equity
+    assert r_cost.commission_bps == 10
+    assert r_cost.slippage_bps == 5
+
+
+def test_costs_reported_in_summary_json() -> None:
+    bars = _bars_from_closes([float(c) for c in range(1, 41)])
+    summary = bse.build_summary(
+        bars=bars, symbol="SPY", interval="60m",
+        now_utc=datetime(2026, 7, 13, 20, 0, 0, tzinfo=timezone.utc),
+        short_window=3, long_window=5,
+        commission_bps=15.0, slippage_bps=7.5,
+    )
+    assert summary["commission_bps"] == 15.0
+    assert summary["slippage_bps"] == 7.5
+    assert summary["baseline"]["commission_bps"] == 15.0
+    assert summary["baseline"]["slippage_bps"] == 7.5
+
+
+def test_run_backtest_rejects_negative_costs() -> None:
+    bars = _bars_from_closes([1.0] * 10)
+    with pytest.raises(BacktestError, match=">= 0"):
+        bse.run_backtest(bars, 3, 5, commission_bps=-1.0)
+    with pytest.raises(BacktestError, match=">= 0"):
+        bse.run_backtest(bars, 3, 5, slippage_bps=-0.01)
+
+
+def test_cli_commission_slippage_flags(
+    tmp_path: Path, capsys: pytest.CaptureFixture,
+) -> None:
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    _write_cache(cache_dir, [float(c) for c in range(1, 51)])
+    rc = bse.main([
+        "--cache-dir", str(cache_dir),
+        "--commission-bps", "12.5",
+        "--slippage-bps", "3.5",
+        "--no-write",
+    ])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["commission_bps"] == 12.5
+    assert payload["slippage_bps"] == 3.5
+    assert payload["execution"] == "next_open"

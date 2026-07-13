@@ -169,11 +169,15 @@ class Trade:
 class BacktestResult:
     short_window: int
     long_window: int
+    execution: str
+    commission_bps: float
+    slippage_bps: float
     total_return: float
     buy_and_hold_return: float
     max_drawdown: float
     sharpe_ratio: float
     trade_count: int
+    completed_trade_count: int
     win_rate: float
     avg_trade_return: float
     avg_holding_bars: float
@@ -181,24 +185,36 @@ class BacktestResult:
     exposure_time: float
     final_equity: float
     bar_count: int
+    open_position: bool
+    open_entry_price: float | None
+    open_entry_index: int | None
+    open_unrealized_return: float | None
     trades: list[Trade] = field(default_factory=list)
 
     def to_dict(self, include_trades: bool = False) -> dict[str, Any]:
         out: dict[str, Any] = {
             "short_window": self.short_window,
             "long_window": self.long_window,
+            "execution": self.execution,
+            "commission_bps": self.commission_bps,
+            "slippage_bps": self.slippage_bps,
             "bar_count": self.bar_count,
             "total_return": self.total_return,
             "buy_and_hold_return": self.buy_and_hold_return,
             "max_drawdown": self.max_drawdown,
             "sharpe_ratio": self.sharpe_ratio,
             "trade_count": self.trade_count,
+            "completed_trade_count": self.completed_trade_count,
             "win_rate": self.win_rate,
             "avg_trade_return": self.avg_trade_return,
             "avg_holding_bars": self.avg_holding_bars,
             "profit_factor": self.profit_factor,
             "exposure_time": self.exposure_time,
             "final_equity": self.final_equity,
+            "open_position": self.open_position,
+            "open_entry_price": self.open_entry_price,
+            "open_entry_index": self.open_entry_index,
+            "open_unrealized_return": self.open_unrealized_return,
         }
         if include_trades:
             out["trades"] = [
@@ -251,6 +267,9 @@ def sma_crossover_signal(
     return "HOLD"
 
 
+_EXECUTION_MODES = ("next_open", "same_close")
+
+
 def run_backtest(
     bars: Sequence[Bar],
     short_window: int,
@@ -258,67 +277,124 @@ def run_backtest(
     *,
     initial_equity: float = 10_000.0,
     bars_per_year: float = _BARS_PER_YEAR[_DEFAULT_INTERVAL],
+    execution: str = "next_open",
+    commission_bps: float = 0.0,
+    slippage_bps: float = 0.0,
 ) -> BacktestResult:
     """Replay the SMA crossover rule bar by bar.
 
-    Same-bar execution: a BUY signal at bar ``t`` fills at ``close[t]``
-    and a SELL signal at ``t`` closes at ``close[t]``. The signal at
-    ``t`` is a pure function of ``closes[0..t]``, so no lookahead
-    exists regardless of execution convention.
+    Execution model
+    ---------------
+    ``next_open`` (default and realistic): the signal at bar ``t`` uses
+    ``closes[0..t]`` — it can only be acted on after the bar closes, so
+    the fill happens at ``bars[t+1].open``. Signals on the final bar
+    cannot execute (there is no next bar).
+
+    ``same_close`` (diagnostic only): the signal at bar ``t`` fills at
+    ``bars[t].close``. This is optimistic and should be used only for
+    comparison; the default is ``next_open``.
+
+    Costs
+    -----
+    ``commission_bps`` and ``slippage_bps`` are applied on both entry
+    and exit: buy price is scaled by ``(1 + cost/10_000)``, sell price
+    by ``(1 - cost/10_000)``. Total round-trip cost is
+    ``2 * (commission_bps + slippage_bps)`` basis points.
+
+    Open positions
+    --------------
+    A position still open at the end of the run is NOT counted as a
+    completed trade — completed-trade metrics (win_rate, profit_factor,
+    avg_trade_return, avg_holding_bars) exclude it. The open position
+    is mark-to-market against the final close so ``final_equity``
+    reflects total portfolio value; open-position details are surfaced
+    via ``open_position`` / ``open_entry_price`` / ``open_entry_index``
+    / ``open_unrealized_return``.
     """
+    if execution not in _EXECUTION_MODES:
+        raise BacktestError(
+            f"execution must be one of {_EXECUTION_MODES}, got {execution!r}"
+        )
     if short_window <= 0 or long_window <= 0:
         raise BacktestError("windows must be positive")
     if short_window >= long_window:
         raise BacktestError(
             f"short_window ({short_window}) must be < long_window ({long_window})"
         )
+    if commission_bps < 0 or slippage_bps < 0:
+        raise BacktestError("commission_bps and slippage_bps must be >= 0")
+
     closes = [b.close for b in bars]
     n = len(bars)
+    cost_factor = (commission_bps + slippage_bps) / 10_000.0
 
     equity_curve: list[float] = []
     trades: list[Trade] = []
     position_qty: float = 0.0
-    entry_price: float | None = None
+    entry_price: float | None = None   # cost-adjusted
     entry_index: int | None = None
     cash = initial_equity
     exposed_bars = 0
 
+    def _buy_fill_price(bar: Bar) -> float:
+        return bar.close if execution == "same_close" else bar.open
+
+    def _sell_fill_price(bar: Bar) -> float:
+        return bar.close if execution == "same_close" else bar.open
+
     for i, bar in enumerate(bars):
         has_position = position_qty > 0
-        signal = sma_crossover_signal(
-            closes, i, short_window, long_window, has_position
-        )
+
+        # Signal on THIS bar acts here in same_close mode; in next_open
+        # mode it was generated at bar i-1 and fills at bar i's open.
+        if execution == "same_close":
+            signal = sma_crossover_signal(
+                closes, i, short_window, long_window, has_position,
+            )
+        else:
+            if i == 0:
+                signal = "HOLD"
+            else:
+                signal = sma_crossover_signal(
+                    closes, i - 1, short_window, long_window, has_position,
+                )
+
         if signal == "BUY" and not has_position:
-            position_qty = cash / bar.close if bar.close > 0 else 0.0
-            cash = 0.0
-            entry_price = bar.close
-            entry_index = i
+            raw = _buy_fill_price(bar)
+            effective = raw * (1 + cost_factor)
+            if effective > 0:
+                position_qty = cash / effective
+                cash = 0.0
+                entry_price = effective
+                entry_index = i
         elif signal == "SELL" and has_position:
-            cash = position_qty * bar.close
+            raw = _sell_fill_price(bar)
+            effective = raw * (1 - cost_factor)
+            cash = position_qty * effective
             trades.append(Trade(
                 entry_index=entry_index if entry_index is not None else i,
                 exit_index=i,
-                entry_price=entry_price if entry_price is not None else bar.close,
-                exit_price=bar.close,
+                entry_price=entry_price if entry_price is not None else raw,
+                exit_price=effective,
             ))
             position_qty = 0.0
             entry_price = None
             entry_index = None
+
         if position_qty > 0:
             equity_curve.append(position_qty * bar.close)
             exposed_bars += 1
         else:
             equity_curve.append(cash)
 
-    if position_qty > 0 and entry_price is not None and entry_index is not None:
-        # Mark-to-market unwind at final close for reporting only.
-        final_price = bars[-1].close
-        trades.append(Trade(
-            entry_index=entry_index,
-            exit_index=n - 1,
-            entry_price=entry_price,
-            exit_price=final_price,
-        ))
+    # Open position at the end: mark to market for equity, but do NOT
+    # record as a completed trade.
+    open_position = position_qty > 0
+    open_entry_price = entry_price if open_position else None
+    open_entry_index = entry_index if open_position else None
+    open_unrealized_return: float | None = None
+    if open_position and entry_price and entry_price > 0:
+        open_unrealized_return = (bars[-1].close - entry_price) / entry_price
 
     final_equity = equity_curve[-1] if equity_curve else initial_equity
     total_return = (final_equity - initial_equity) / initial_equity
@@ -346,15 +422,18 @@ def run_backtest(
             returns.append((equity_curve[i] - prev) / prev)
     sharpe = _sharpe_ratio(returns, bars_per_year)
 
+    # Completed-trade metrics exclude any still-open position.
+    completed_trade_count = len(trades)
     wins = [t.return_pct for t in trades if t.return_pct > 0]
     losses = [t.return_pct for t in trades if t.return_pct <= 0]
-    trade_count = len(trades)
-    win_rate = (len(wins) / trade_count) if trade_count else 0.0
+    win_rate = (len(wins) / completed_trade_count) if completed_trade_count else 0.0
     avg_trade_return = (
-        sum(t.return_pct for t in trades) / trade_count if trade_count else 0.0
+        sum(t.return_pct for t in trades) / completed_trade_count
+        if completed_trade_count else 0.0
     )
     avg_holding_bars = (
-        sum(t.bars_held for t in trades) / trade_count if trade_count else 0.0
+        sum(t.bars_held for t in trades) / completed_trade_count
+        if completed_trade_count else 0.0
     )
     gross_wins = sum(wins)
     gross_losses = abs(sum(losses))
@@ -369,11 +448,15 @@ def run_backtest(
     return BacktestResult(
         short_window=short_window,
         long_window=long_window,
+        execution=execution,
+        commission_bps=commission_bps,
+        slippage_bps=slippage_bps,
         total_return=total_return,
         buy_and_hold_return=bh_return,
         max_drawdown=max_dd,
         sharpe_ratio=sharpe,
-        trade_count=trade_count,
+        trade_count=completed_trade_count,
+        completed_trade_count=completed_trade_count,
         win_rate=win_rate,
         avg_trade_return=avg_trade_return,
         avg_holding_bars=avg_holding_bars,
@@ -381,6 +464,10 @@ def run_backtest(
         exposure_time=exposure_time,
         final_equity=final_equity,
         bar_count=n,
+        open_position=open_position,
+        open_entry_price=open_entry_price,
+        open_entry_index=open_entry_index,
+        open_unrealized_return=open_unrealized_return,
         trades=trades,
     )
 
@@ -420,6 +507,9 @@ def run_sweep(
     long_windows: Sequence[int],
     *,
     bars_per_year: float = _BARS_PER_YEAR[_DEFAULT_INTERVAL],
+    execution: str = "next_open",
+    commission_bps: float = 0.0,
+    slippage_bps: float = 0.0,
 ) -> dict[str, Any]:
     """Run a backtest for every valid (short, long) pair.
 
@@ -436,7 +526,13 @@ def run_sweep(
                     "reason": "short_window >= long_window",
                 })
                 continue
-            r = run_backtest(bars, s, l, bars_per_year=bars_per_year)
+            r = run_backtest(
+                bars, s, l,
+                bars_per_year=bars_per_year,
+                execution=execution,
+                commission_bps=commission_bps,
+                slippage_bps=slippage_bps,
+            )
             results.append(r.to_dict())
     return {
         "sweep": results,
@@ -461,9 +557,18 @@ def build_summary(
     short_windows: Sequence[int] | None = None,
     long_windows: Sequence[int] | None = None,
     include_trades: bool = False,
+    execution: str = "next_open",
+    commission_bps: float = 0.0,
+    slippage_bps: float = 0.0,
 ) -> dict[str, Any]:
     bpy = _BARS_PER_YEAR.get(interval, _BARS_PER_YEAR[_DEFAULT_INTERVAL])
-    baseline = run_backtest(bars, short_window, long_window, bars_per_year=bpy)
+    baseline = run_backtest(
+        bars, short_window, long_window,
+        bars_per_year=bpy,
+        execution=execution,
+        commission_bps=commission_bps,
+        slippage_bps=slippage_bps,
+    )
     summary: dict[str, Any] = {
         "timestamp_utc": now_utc.astimezone(timezone.utc).isoformat(),
         "symbol": symbol,
@@ -471,11 +576,18 @@ def build_summary(
         "bar_count": len(bars),
         "first_bar_ts": str(bars[0].ts) if bars else None,
         "last_bar_ts": str(bars[-1].ts) if bars else None,
+        "execution": execution,
+        "commission_bps": commission_bps,
+        "slippage_bps": slippage_bps,
         "baseline": baseline.to_dict(include_trades=include_trades),
     }
     if short_windows and long_windows:
         summary["sweep"] = run_sweep(
-            bars, short_windows, long_windows, bars_per_year=bpy,
+            bars, short_windows, long_windows,
+            bars_per_year=bpy,
+            execution=execution,
+            commission_bps=commission_bps,
+            slippage_bps=slippage_bps,
         )
     return summary
 
@@ -513,6 +625,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "--long-windows", default=None,
         help="Comma-separated long windows for a parameter sweep, e.g. 20,50,100",
     )
+    p.add_argument("--execution", default="next_open",
+                   choices=list(_EXECUTION_MODES),
+                   help="Fill convention. next_open (default) is realistic; "
+                        "same_close is diagnostic only.")
+    p.add_argument("--commission-bps", type=float, default=0.0,
+                   help="Per-side commission in basis points (default 0).")
+    p.add_argument("--slippage-bps", type=float, default=0.0,
+                   help="Per-side slippage in basis points (default 0).")
     p.add_argument("--include-trades", action="store_true",
                    help="Include per-trade details in the JSON output.")
     p.add_argument("--output-dir", default=str(_DEFAULT_OUTPUT_DIR))
@@ -530,8 +650,12 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"error": str(exc)}, indent=2))
         return 2
 
-    short_ws = _parse_window_list(args.short_windows) if args.short_windows else None
-    long_ws = _parse_window_list(args.long_windows) if args.long_windows else None
+    try:
+        short_ws = _parse_window_list(args.short_windows) if args.short_windows else None
+        long_ws = _parse_window_list(args.long_windows) if args.long_windows else None
+    except BacktestError as exc:
+        print(json.dumps({"error": str(exc)}, indent=2))
+        return 2
 
     now_utc = datetime.now(timezone.utc)
     try:
@@ -545,6 +669,9 @@ def main(argv: list[str] | None = None) -> int:
             short_windows=short_ws,
             long_windows=long_ws,
             include_trades=args.include_trades,
+            execution=args.execution,
+            commission_bps=args.commission_bps,
+            slippage_bps=args.slippage_bps,
         )
     except BacktestError as exc:
         print(json.dumps({"error": str(exc)}, indent=2))
