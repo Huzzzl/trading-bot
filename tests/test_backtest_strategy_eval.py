@@ -773,3 +773,264 @@ def test_build_summary_sweep_includes_rankings() -> None:
         "top_10_by_total_return", "top_10_by_sharpe_ratio",
     ):
         assert key in rk
+
+
+# ---------------------------------------------------------------------------
+# S58 — chronological train/test split + generalization report
+# ---------------------------------------------------------------------------
+
+
+def _build_default_summary(bars, *, split_ratio=None, **kw):
+    """Convenience wrapper — build a full summary with default windows."""
+    return bse.build_summary(
+        bars=bars, symbol="SPY", interval="60m",
+        now_utc=datetime(2026, 7, 13, 20, 0, 0, tzinfo=timezone.utc),
+        short_window=3, long_window=5,
+        split_ratio=split_ratio,
+        **kw,
+    )
+
+
+def test_split_bars_produces_expected_partition_sizes() -> None:
+    bars = _bars_from_closes([float(c) for c in range(1, 101)])  # 100 bars
+    train, test = bse.split_bars_chronological(bars, 0.7)
+    assert len(train) == 70
+    assert len(test) == 30
+
+
+def test_split_preserves_chronological_order() -> None:
+    """Train's last timestamp must precede test's first — no shuffling."""
+    bars = _bars_from_closes([float(c) for c in range(1, 51)])
+    train, test = bse.split_bars_chronological(bars, 0.6)
+    assert all(train[i].ts <= train[i + 1].ts for i in range(len(train) - 1))
+    assert all(test[i].ts <= test[i + 1].ts for i in range(len(test) - 1))
+    assert train[-1].ts < test[0].ts
+    # Concatenation is the original bar list, in order.
+    assert [b.ts for b in train + test] == [b.ts for b in bars]
+
+
+def test_split_rejects_invalid_ratio() -> None:
+    bars = _bars_from_closes([float(c) for c in range(1, 21)])
+    for bad in (0.0, 1.0, -0.1, 1.5):
+        with pytest.raises(BacktestError, match="split-ratio"):
+            bse.split_bars_chronological(bars, bad)
+
+
+def test_split_rejects_insufficient_partition() -> None:
+    bars = _bars_from_closes([float(c) for c in range(1, 21)])  # 20 bars
+    # ratio=0.5 → 10/10 → OK for min=2; make it fail by demanding min=15.
+    with pytest.raises(BacktestError, match="partition too small"):
+        bse.split_bars_chronological(bars, 0.5, min_partition_bars=15)
+
+
+def test_build_summary_no_split_preserves_schema() -> None:
+    """Without --split-ratio the summary must not gain split keys."""
+    bars = _bars_from_closes([float(c) for c in range(1, 41)])
+    summary = _build_default_summary(bars)
+    for key in ("split", "train_summary", "test_summary",
+                "generalization_report"):
+        assert key not in summary
+
+
+def test_build_summary_with_split_populates_partitions() -> None:
+    bars = _bars_from_closes([float(c) for c in range(1, 101)])
+    summary = _build_default_summary(bars, split_ratio=0.6)
+    assert "split" in summary
+    split = summary["split"]
+    assert split["mode"] == "chronological"
+    assert split["ratio"] == 0.6
+    assert split["total_bar_count"] == 100
+    assert split["train_bar_count"] == 60
+    assert split["test_bar_count"] == 40
+    assert split["train_start"] is not None
+    assert split["train_end"] is not None
+    assert split["test_start"] is not None
+    assert split["test_end"] is not None
+    # train_end < test_start (chronological)
+    assert split["train_end"] < split["test_start"]
+
+    # Each partition summary uses its own bar subset, not the full series.
+    assert summary["train_summary"]["bar_count"] == 60
+    assert summary["test_summary"]["bar_count"] == 40
+    # Partition summaries carry their own baseline + baseline_comparison.
+    assert "baseline" in summary["train_summary"]
+    assert "baseline_comparison" in summary["test_summary"]
+
+
+def test_build_summary_with_split_and_sweep_matches_windows() -> None:
+    """The train winner's (short, long) must appear identically in test."""
+    bars = _bars_from_closes([float(c) for c in range(1, 121)])
+    summary = _build_default_summary(
+        bars, split_ratio=0.6,
+        short_windows=[3, 5], long_windows=[10, 20],
+    )
+    report = summary["generalization_report"]
+    best_train = report["best_train_by_total_return"]
+    best_test = report["corresponding_test_result"]
+    assert best_train is not None
+    assert best_test is not None
+    assert best_train["short_window"] == best_test["short_window"]
+    assert best_train["long_window"] == best_test["long_window"]
+
+
+def test_build_summary_rejects_invalid_split_ratio() -> None:
+    bars = _bars_from_closes([float(c) for c in range(1, 41)])
+    with pytest.raises(BacktestError, match="split-ratio"):
+        _build_default_summary(bars, split_ratio=1.5)
+
+
+def test_build_summary_rejects_insufficient_data_for_split() -> None:
+    bars = _bars_from_closes([float(c) for c in range(1, 11)])  # 10 bars
+    # long_window=5 → each partition needs 6+ bars → 0.5 gives 5/5 → too small.
+    with pytest.raises(BacktestError, match="partition too small"):
+        _build_default_summary(bars, split_ratio=0.5)
+
+
+def test_build_summary_rejects_invalid_split_mode() -> None:
+    bars = _bars_from_closes([float(c) for c in range(1, 41)])
+    with pytest.raises(BacktestError, match="split-mode"):
+        _build_default_summary(bars, split_ratio=0.5, split_mode="random")
+
+
+# --- generalization_report unit tests ---
+
+
+def _mk_partition(baseline: dict, sweep_results: list[dict] | None = None) -> dict:
+    """Build a synthetic partition summary suitable for
+    build_generalization_report."""
+    part: dict = {"baseline": baseline, "baseline_comparison": {}}
+    if sweep_results is not None:
+        part["sweep"] = {
+            "sweep": sweep_results,
+            "skipped_combinations": [],
+            "combination_count": len(sweep_results),
+            "rankings": bse.rank_sweep_results(sweep_results),
+        }
+    return part
+
+
+def _bt(short, long, *, total_return=0.0, sharpe=0.0, drawdown=0.0,
+        trades=5, buy_and_hold_return=0.0):
+    return {
+        "short_window": short,
+        "long_window": long,
+        "total_return": total_return,
+        "sharpe_ratio": sharpe,
+        "max_drawdown": drawdown,
+        "profit_factor": 1.0,
+        "completed_trade_count": trades,
+        "buy_and_hold_return": buy_and_hold_return,
+    }
+
+
+def test_generalization_report_positive_train_negative_test_warns() -> None:
+    train_sweep = [_bt(3, 10, total_return=0.20, sharpe=1.0, trades=8)]
+    test_sweep  = [_bt(3, 10, total_return=-0.05, sharpe=-0.4, trades=8)]
+    train = _mk_partition(train_sweep[0], train_sweep)
+    test  = _mk_partition(test_sweep[0], test_sweep)
+    r = bse.build_generalization_report(train, test)
+    assert r["overfit_warning"] is True
+    assert "TRAIN_POSITIVE_TEST_NON_POSITIVE_RETURN" in r["overfit_reasons"]
+    assert "TRAIN_POSITIVE_TEST_NON_POSITIVE_SHARPE" in r["overfit_reasons"]
+
+
+def test_generalization_report_large_return_gap_warns() -> None:
+    train = _mk_partition(_bt(3, 10, total_return=0.30, sharpe=0.8, trades=8),
+                          [_bt(3, 10, total_return=0.30, sharpe=0.8, trades=8)])
+    test  = _mk_partition(_bt(3, 10, total_return=0.05, sharpe=0.4, trades=8),
+                          [_bt(3, 10, total_return=0.05, sharpe=0.4, trades=8)])
+    r = bse.build_generalization_report(train, test)
+    assert r["overfit_warning"] is True
+    assert "LARGE_TRAIN_TEST_RETURN_GAP" in r["overfit_reasons"]
+    assert math.isclose(r["train_test_return_gap"], 0.25, abs_tol=1e-9)
+
+
+def test_generalization_report_insufficient_trades_warns() -> None:
+    train = _mk_partition(_bt(3, 10, total_return=0.05, sharpe=0.4, trades=2),
+                          [_bt(3, 10, total_return=0.05, sharpe=0.4, trades=2)])
+    test  = _mk_partition(_bt(3, 10, total_return=0.04, sharpe=0.3, trades=5),
+                          [_bt(3, 10, total_return=0.04, sharpe=0.3, trades=5)])
+    r = bse.build_generalization_report(train, test)
+    assert r["overfit_warning"] is True
+    assert "INSUFFICIENT_TRADE_COUNT" in r["overfit_reasons"]
+
+
+def test_generalization_report_stable_performance_no_warning() -> None:
+    train_sweep = [_bt(3, 10, total_return=0.08, sharpe=0.6, drawdown=-0.05,
+                       trades=8, buy_and_hold_return=0.05)]
+    test_sweep  = [_bt(3, 10, total_return=0.07, sharpe=0.5, drawdown=-0.06,
+                       trades=8, buy_and_hold_return=0.05)]
+    train = _mk_partition(train_sweep[0], train_sweep)
+    test  = _mk_partition(test_sweep[0], test_sweep)
+    r = bse.build_generalization_report(train, test)
+    assert r["overfit_warning"] is False
+    assert r["overfit_reasons"] == []
+    assert r["test_outperformed_buy_and_hold"] is True
+    assert math.isclose(r["train_test_return_gap"], 0.01, abs_tol=1e-9)
+
+
+def test_generalization_report_uses_baseline_when_no_sweep() -> None:
+    """Without a sweep, the baseline stands in as the only 'config'."""
+    train = _mk_partition(_bt(3, 5, total_return=0.10, sharpe=0.5, trades=6))
+    test  = _mk_partition(_bt(3, 5, total_return=0.08, sharpe=0.4, trades=6))
+    r = bse.build_generalization_report(train, test)
+    assert r["best_train_by_total_return"]["short_window"] == 3
+    assert r["corresponding_test_result"]["short_window"] == 3
+
+
+def test_generalization_report_missing_test_config_warns() -> None:
+    train_sweep = [_bt(3, 10, total_return=0.15, sharpe=0.7, trades=6)]
+    # Test partition has a totally different set of windows — no match.
+    test_sweep  = [_bt(4, 20, total_return=0.05, sharpe=0.2, trades=6)]
+    train = _mk_partition(train_sweep[0], train_sweep)
+    test  = _mk_partition(test_sweep[0], test_sweep)
+    r = bse.build_generalization_report(train, test)
+    assert r["corresponding_test_result"] is None
+    assert r["overfit_warning"] is True
+    assert "NO_MATCHING_TEST_CONFIG" in r["overfit_reasons"]
+
+
+def test_no_alpaca_or_network_imports_in_backtest_tool() -> None:
+    """Enforce that the tool source imports no broker/network modules."""
+    source = Path("src/tools/backtest_strategy_eval.py").read_text(encoding="utf-8")
+    banned = ["alpaca", "requests", "httpx", "urllib.request", "socket"]
+    for tok in banned:
+        assert tok not in source, (
+            f"backtest_strategy_eval must not depend on {tok!r}"
+        )
+
+
+def test_cli_split_ratio_flag(
+    tmp_path: Path, capsys: pytest.CaptureFixture,
+) -> None:
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    _write_cache(cache_dir, [float(c) for c in range(1, 121)])
+    rc = bse.main([
+        "--cache-dir", str(cache_dir),
+        "--split-ratio", "0.7",
+        "--short-windows", "3,5",
+        "--long-windows", "10,20",
+        "--no-write",
+    ])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["split"]["mode"] == "chronological"
+    assert payload["split"]["ratio"] == 0.7
+    assert "generalization_report" in payload
+
+
+def test_cli_bad_split_ratio_exits_2(
+    tmp_path: Path, capsys: pytest.CaptureFixture,
+) -> None:
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    _write_cache(cache_dir, [float(c) for c in range(1, 41)])
+    rc = bse.main([
+        "--cache-dir", str(cache_dir),
+        "--split-ratio", "1.5",
+        "--no-write",
+    ])
+    assert rc == 2
+    err = json.loads(capsys.readouterr().out)
+    assert "split-ratio" in err["error"]

@@ -682,6 +682,8 @@ def build_summary(
     execution: str = "next_open",
     commission_bps: float = 0.0,
     slippage_bps: float = 0.0,
+    split_ratio: float | None = None,
+    split_mode: str = "chronological",
 ) -> dict[str, Any]:
     bpy = _BARS_PER_YEAR.get(interval, _BARS_PER_YEAR[_DEFAULT_INTERVAL])
     baseline = run_backtest(
@@ -712,7 +714,241 @@ def build_summary(
             commission_bps=commission_bps,
             slippage_bps=slippage_bps,
         )
+
+    if split_ratio is not None:
+        if split_mode not in _SPLIT_MODES:
+            raise BacktestError(
+                f"split-mode must be one of {_SPLIT_MODES}, got {split_mode!r}"
+            )
+        min_bars = _max_long_window(long_window, long_windows) + 1
+        train_bars, test_bars = split_bars_chronological(
+            bars, split_ratio, min_partition_bars=min_bars,
+        )
+        train_summary = _run_partition(
+            train_bars,
+            symbol=symbol, interval=interval,
+            short_window=short_window, long_window=long_window,
+            short_windows=short_windows, long_windows=long_windows,
+            execution=execution,
+            commission_bps=commission_bps, slippage_bps=slippage_bps,
+            include_trades=include_trades,
+        )
+        test_summary = _run_partition(
+            test_bars,
+            symbol=symbol, interval=interval,
+            short_window=short_window, long_window=long_window,
+            short_windows=short_windows, long_windows=long_windows,
+            execution=execution,
+            commission_bps=commission_bps, slippage_bps=slippage_bps,
+            include_trades=include_trades,
+        )
+        summary["split"] = {
+            "mode": split_mode,
+            "ratio": split_ratio,
+            "total_bar_count": len(bars),
+            "train_bar_count": len(train_bars),
+            "test_bar_count": len(test_bars),
+            "train_start": str(train_bars[0].ts) if train_bars else None,
+            "train_end":   str(train_bars[-1].ts) if train_bars else None,
+            "test_start":  str(test_bars[0].ts) if test_bars else None,
+            "test_end":    str(test_bars[-1].ts) if test_bars else None,
+        }
+        summary["train_summary"] = train_summary
+        summary["test_summary"] = test_summary
+        summary["generalization_report"] = build_generalization_report(
+            train_summary, test_summary,
+        )
+
     return summary
+
+
+_SPLIT_MODES = ("chronological",)
+
+
+def _max_long_window(
+    long_window: int, long_windows: Sequence[int] | None,
+) -> int:
+    """Largest long-window across baseline + sweep — the smallest partition
+    that could still fit a full SMA computation."""
+    candidates = [long_window]
+    if long_windows:
+        candidates.extend(long_windows)
+    return max(candidates)
+
+
+def split_bars_chronological(
+    bars: Sequence[Bar],
+    ratio: float,
+    *,
+    min_partition_bars: int = 2,
+) -> tuple[list[Bar], list[Bar]]:
+    """Split bars chronologically into (train, test).
+
+    Bars are assumed to already be in ascending timestamp order — the
+    caller loaded them via ``load_cached_bars`` which sorts. Splitting
+    is by count only; no timestamp math involved, so order is preserved.
+    """
+    if not (0.0 < ratio < 1.0):
+        raise BacktestError(
+            f"split-ratio must be strictly between 0 and 1, got {ratio}"
+        )
+    n = len(bars)
+    n_train = int(n * ratio)
+    n_test = n - n_train
+    if n_train < min_partition_bars or n_test < min_partition_bars:
+        raise BacktestError(
+            f"split produces a partition too small: train={n_train} "
+            f"test={n_test}, need at least {min_partition_bars} bars each"
+        )
+    return list(bars[:n_train]), list(bars[n_train:])
+
+
+def _run_partition(
+    bars: Sequence[Bar],
+    *,
+    symbol: str,
+    interval: str,
+    short_window: int,
+    long_window: int,
+    short_windows: Sequence[int] | None,
+    long_windows: Sequence[int] | None,
+    execution: str,
+    commission_bps: float,
+    slippage_bps: float,
+    include_trades: bool,
+) -> dict[str, Any]:
+    """Return a compact baseline+sweep summary for a single bar subset.
+
+    This is the per-partition payload used inside ``train_summary`` and
+    ``test_summary`` when a split is enabled.
+    """
+    bpy = _BARS_PER_YEAR.get(interval, _BARS_PER_YEAR[_DEFAULT_INTERVAL])
+    baseline = run_backtest(
+        bars, short_window, long_window,
+        bars_per_year=bpy,
+        execution=execution,
+        commission_bps=commission_bps,
+        slippage_bps=slippage_bps,
+    )
+    payload: dict[str, Any] = {
+        "symbol": symbol,
+        "interval": interval,
+        "bar_count": len(bars),
+        "first_bar_ts": str(bars[0].ts) if bars else None,
+        "last_bar_ts": str(bars[-1].ts) if bars else None,
+        "baseline": baseline.to_dict(include_trades=include_trades),
+        "baseline_comparison": compare_to_baseline(baseline),
+    }
+    if short_windows and long_windows:
+        payload["sweep"] = run_sweep(
+            bars, short_windows, long_windows,
+            bars_per_year=bpy,
+            execution=execution,
+            commission_bps=commission_bps,
+            slippage_bps=slippage_bps,
+        )
+    return payload
+
+
+def _find_matching_result(
+    partition: dict[str, Any], short: int, long: int,
+) -> dict[str, Any] | None:
+    """Return the sweep or baseline result in ``partition`` with the
+    same (short, long) window pair, or ``None`` if not present."""
+    if "sweep" in partition:
+        for r in partition["sweep"].get("sweep", []):
+            if r.get("short_window") == short and r.get("long_window") == long:
+                return r
+    baseline = partition.get("baseline")
+    if (
+        isinstance(baseline, dict)
+        and baseline.get("short_window") == short
+        and baseline.get("long_window") == long
+    ):
+        return baseline
+    return None
+
+
+def _select_best_train(train_summary: dict[str, Any]) -> dict[str, Any] | None:
+    """Winner-by-total-return in train.
+
+    When the sweep is enabled we use ``sweep.rankings.best_by_total_return``;
+    otherwise the baseline stands in as the only "config" to evaluate.
+    """
+    sweep = train_summary.get("sweep")
+    if sweep:
+        best = sweep.get("rankings", {}).get("best_by_total_return")
+        if best:
+            return best
+    return train_summary.get("baseline")
+
+
+def build_generalization_report(
+    train_summary: dict[str, Any],
+    test_summary: dict[str, Any],
+    *,
+    return_gap_threshold: float = 0.10,
+    min_trades_required: int = 3,
+) -> dict[str, Any]:
+    """Compare the train winner against its own performance in test.
+
+    An ``overfit_warning`` is raised when any of the following holds:
+
+    * train_total_return > 0 and test_total_return <= 0
+    * train_sharpe > 0 and test_sharpe <= 0
+    * train_total_return - test_total_return > return_gap_threshold
+    * the train winner traded fewer than ``min_trades_required`` times
+      in either partition
+    """
+    best_train = _select_best_train(train_summary)
+    reasons: list[str] = []
+    best_test: dict[str, Any] | None = None
+    gap_ret = gap_sh = gap_dd = None
+    test_out: bool | None = None
+
+    if best_train is None:
+        reasons.append("NO_TRAIN_WINNER")
+    else:
+        best_test = _find_matching_result(
+            test_summary,
+            best_train.get("short_window"),
+            best_train.get("long_window"),
+        )
+        if best_test is None:
+            reasons.append("NO_MATCHING_TEST_CONFIG")
+        else:
+            train_ret = float(best_train.get("total_return", 0.0))
+            test_ret  = float(best_test.get("total_return", 0.0))
+            train_sh  = float(best_train.get("sharpe_ratio", 0.0))
+            test_sh   = float(best_test.get("sharpe_ratio", 0.0))
+            train_dd  = float(best_train.get("max_drawdown", 0.0))
+            test_dd   = float(best_test.get("max_drawdown", 0.0))
+            gap_ret = train_ret - test_ret
+            gap_sh  = train_sh - test_sh
+            gap_dd  = train_dd - test_dd
+            test_out = test_ret > float(best_test.get("buy_and_hold_return", 0.0))
+
+            if train_ret > 0 and test_ret <= 0:
+                reasons.append("TRAIN_POSITIVE_TEST_NON_POSITIVE_RETURN")
+            if train_sh > 0 and test_sh <= 0:
+                reasons.append("TRAIN_POSITIVE_TEST_NON_POSITIVE_SHARPE")
+            if gap_ret > return_gap_threshold:
+                reasons.append("LARGE_TRAIN_TEST_RETURN_GAP")
+            train_tc = int(best_train.get("completed_trade_count", 0) or 0)
+            test_tc  = int(best_test.get("completed_trade_count", 0) or 0)
+            if train_tc < min_trades_required or test_tc < min_trades_required:
+                reasons.append("INSUFFICIENT_TRADE_COUNT")
+
+    return {
+        "best_train_by_total_return":   best_train,
+        "corresponding_test_result":    best_test,
+        "train_test_return_gap":        gap_ret,
+        "train_test_sharpe_gap":        gap_sh,
+        "train_test_drawdown_gap":      gap_dd,
+        "test_outperformed_buy_and_hold": test_out,
+        "overfit_warning":              bool(reasons),
+        "overfit_reasons":              reasons,
+    }
 
 
 def write_summary(summary: dict[str, Any], output_dir: Path, date_utc: str) -> Path:
@@ -758,6 +994,13 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Per-side slippage in basis points (default 0).")
     p.add_argument("--include-trades", action="store_true",
                    help="Include per-trade details in the JSON output.")
+    p.add_argument("--split-ratio", type=float, default=None,
+                   help="Fraction of bars (0<x<1) used for the train "
+                        "partition; the rest becomes the test partition. "
+                        "Disabled unless explicitly provided.")
+    p.add_argument("--split-mode", default="chronological",
+                   choices=list(_SPLIT_MODES),
+                   help="Split strategy (default: chronological).")
     p.add_argument("--output-dir", default=str(_DEFAULT_OUTPUT_DIR))
     p.add_argument("--no-write", action="store_true",
                    help="Do not write the summary to disk; stdout only.")
@@ -795,6 +1038,8 @@ def main(argv: list[str] | None = None) -> int:
             execution=args.execution,
             commission_bps=args.commission_bps,
             slippage_bps=args.slippage_bps,
+            split_ratio=args.split_ratio,
+            split_mode=args.split_mode,
         )
     except BacktestError as exc:
         print(json.dumps({"error": str(exc)}, indent=2))
