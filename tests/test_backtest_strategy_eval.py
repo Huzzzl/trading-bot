@@ -546,3 +546,230 @@ def test_cli_commission_slippage_flags(
     assert payload["commission_bps"] == 12.5
     assert payload["slippage_bps"] == 3.5
     assert payload["execution"] == "next_open"
+
+
+# ---------------------------------------------------------------------------
+# Ranking + baseline comparison (S57)
+# ---------------------------------------------------------------------------
+
+
+def _mk_result(
+    *, short=1, long=5, total_return=0.0, sharpe_ratio=0.0,
+    max_drawdown=0.0, profit_factor=0.0, completed_trade_count=0,
+) -> dict:
+    """Build a minimal sweep result dict for ranking tests."""
+    return {
+        "short_window": short,
+        "long_window": long,
+        "total_return": total_return,
+        "sharpe_ratio": sharpe_ratio,
+        "max_drawdown": max_drawdown,
+        "profit_factor": profit_factor,
+        "completed_trade_count": completed_trade_count,
+    }
+
+
+def test_ranking_picks_highest_total_return() -> None:
+    results = [
+        _mk_result(short=1, long=10, total_return=0.05, completed_trade_count=3),
+        _mk_result(short=2, long=20, total_return=0.30, completed_trade_count=5),
+        _mk_result(short=3, long=30, total_return=0.10, completed_trade_count=4),
+    ]
+    r = bse.rank_sweep_results(results)
+    assert r["best_by_total_return"]["short_window"] == 2
+    assert r["best_by_total_return"]["long_window"] == 20
+
+
+def test_ranking_picks_highest_sharpe() -> None:
+    results = [
+        _mk_result(short=1, long=10, sharpe_ratio=0.5, completed_trade_count=3),
+        _mk_result(short=2, long=20, sharpe_ratio=1.8, completed_trade_count=5),
+        _mk_result(short=3, long=30, sharpe_ratio=1.2, completed_trade_count=4),
+    ]
+    r = bse.rank_sweep_results(results)
+    assert r["best_by_sharpe_ratio"]["short_window"] == 2
+
+
+def test_drawdown_ranking_prefers_smaller_drawdown() -> None:
+    """Less negative max_drawdown wins (closer to zero)."""
+    results = [
+        _mk_result(short=1, long=10, max_drawdown=-0.30, completed_trade_count=3),
+        _mk_result(short=2, long=20, max_drawdown=-0.05, completed_trade_count=4),
+        _mk_result(short=3, long=30, max_drawdown=-0.15, completed_trade_count=5),
+    ]
+    r = bse.rank_sweep_results(results)
+    assert r["best_by_max_drawdown"]["short_window"] == 2
+    assert r["best_by_max_drawdown"]["max_drawdown"] == -0.05
+
+
+def test_drawdown_ranking_excludes_zero_trade_configs_when_possible() -> None:
+    """A zero-trade config trivially has max_drawdown == 0 — it must
+    not win over configs that actually traded."""
+    results = [
+        _mk_result(short=1, long=10, max_drawdown=0.0, completed_trade_count=0),
+        _mk_result(short=2, long=20, max_drawdown=-0.05, completed_trade_count=5),
+        _mk_result(short=3, long=30, max_drawdown=-0.15, completed_trade_count=4),
+    ]
+    r = bse.rank_sweep_results(results)
+    assert r["best_by_max_drawdown"]["completed_trade_count"] > 0
+    assert r["best_by_max_drawdown"]["short_window"] == 2
+
+
+def test_drawdown_ranking_falls_back_when_all_zero_trades() -> None:
+    """If EVERY config has zero trades, still return the best-by-value
+    rather than None — the operator needs a pointer even in degenerate
+    sweeps."""
+    results = [
+        _mk_result(short=1, long=10, max_drawdown=0.0, completed_trade_count=0),
+        _mk_result(short=2, long=20, max_drawdown=0.0, completed_trade_count=0),
+    ]
+    r = bse.rank_sweep_results(results)
+    assert r["best_by_max_drawdown"] is not None
+    assert r["best_by_max_drawdown"]["completed_trade_count"] == 0
+
+
+def test_profit_factor_ranking_excludes_zero_trades_when_possible() -> None:
+    results = [
+        _mk_result(short=1, long=10, profit_factor=0.0, completed_trade_count=0),
+        _mk_result(short=2, long=20, profit_factor=1.5, completed_trade_count=5),
+        _mk_result(short=3, long=30, profit_factor=2.1, completed_trade_count=6),
+    ]
+    r = bse.rank_sweep_results(results)
+    assert r["best_by_profit_factor"]["profit_factor"] == 2.1
+
+
+def test_return_over_drawdown_ranking() -> None:
+    # r1: 0.10 / 0.10 = 1.0 ; r2: 0.20 / 0.05 = 4.0 ; r3: 0.05 / 0.01 = 5.0
+    results = [
+        _mk_result(short=1, long=10, total_return=0.10, max_drawdown=-0.10,
+                   completed_trade_count=3),
+        _mk_result(short=2, long=20, total_return=0.20, max_drawdown=-0.05,
+                   completed_trade_count=4),
+        _mk_result(short=3, long=30, total_return=0.05, max_drawdown=-0.01,
+                   completed_trade_count=5),
+    ]
+    r = bse.rank_sweep_results(results)
+    assert r["best_by_return_over_drawdown"]["short_window"] == 3
+
+
+def test_return_over_drawdown_zero_dd_positive_return_wins() -> None:
+    """Zero drawdown with a positive return is the ideal case — it
+    should beat any finite-drawdown result."""
+    results = [
+        _mk_result(short=1, long=10, total_return=0.50, max_drawdown=-0.10,
+                   completed_trade_count=3),
+        _mk_result(short=2, long=20, total_return=0.01, max_drawdown=0.0,
+                   completed_trade_count=1),
+    ]
+    r = bse.rank_sweep_results(results)
+    assert r["best_by_return_over_drawdown"]["short_window"] == 2
+
+
+def test_top_10_by_total_return_is_sorted_descending() -> None:
+    results = [
+        _mk_result(short=i, long=i * 2, total_return=i * 0.01)
+        for i in range(1, 15)
+    ]
+    r = bse.rank_sweep_results(results)
+    top = r["top_10_by_total_return"]
+    assert len(top) == 10
+    returns = [t["total_return"] for t in top]
+    assert returns == sorted(returns, reverse=True)
+    assert top[0]["total_return"] == 0.14
+
+
+def test_top_10_by_sharpe_ratio_is_sorted_descending() -> None:
+    results = [
+        _mk_result(short=i, long=i * 2, sharpe_ratio=i * 0.1)
+        for i in range(1, 15)
+    ]
+    r = bse.rank_sweep_results(results)
+    top = r["top_10_by_sharpe_ratio"]
+    assert len(top) == 10
+    values = [t["sharpe_ratio"] for t in top]
+    assert values == sorted(values, reverse=True)
+
+
+def test_ranking_returns_nones_on_empty_sweep() -> None:
+    r = bse.rank_sweep_results([])
+    assert r["best_by_total_return"] is None
+    assert r["best_by_sharpe_ratio"] is None
+    assert r["best_by_max_drawdown"] is None
+    assert r["best_by_profit_factor"] is None
+    assert r["best_by_return_over_drawdown"] is None
+    assert r["top_10_by_total_return"] == []
+    assert r["top_10_by_sharpe_ratio"] == []
+
+
+def test_run_sweep_attaches_rankings() -> None:
+    bars = _bars_from_closes([float(c) for c in range(1, 61)])
+    out = bse.run_sweep(bars, short_windows=[3, 5], long_windows=[10, 20])
+    assert "rankings" in out
+    assert out["rankings"]["best_by_total_return"] is not None
+    assert isinstance(out["rankings"]["top_10_by_total_return"], list)
+
+
+def test_run_sweep_rankings_empty_when_all_combinations_skipped() -> None:
+    bars = _bars_from_closes([float(c) for c in range(1, 41)])
+    out = bse.run_sweep(bars, short_windows=[10, 20], long_windows=[5])
+    assert out["combination_count"] == 0
+    assert out["rankings"]["best_by_total_return"] is None
+    assert out["rankings"]["top_10_by_total_return"] == []
+
+
+def test_compare_to_baseline_outperformed() -> None:
+    baseline = _mk_result(total_return=0.30)
+    baseline["buy_and_hold_return"] = 0.20
+    cmp = bse.compare_to_baseline(baseline)
+    assert cmp["baseline_total_return"] == 0.30
+    assert cmp["buy_and_hold_return"] == 0.20
+    assert cmp["baseline_outperformed_buy_and_hold"] is True
+    assert math.isclose(cmp["baseline_return_gap_vs_buy_and_hold"], 0.10, abs_tol=1e-9)
+
+
+def test_compare_to_baseline_underperformed() -> None:
+    baseline = _mk_result(total_return=0.05)
+    baseline["buy_and_hold_return"] = 0.25
+    cmp = bse.compare_to_baseline(baseline)
+    assert cmp["baseline_outperformed_buy_and_hold"] is False
+    assert math.isclose(cmp["baseline_return_gap_vs_buy_and_hold"], -0.20, abs_tol=1e-9)
+
+
+def test_build_summary_includes_baseline_comparison() -> None:
+    bars = _bars_from_closes([float(c) for c in range(1, 41)])
+    now = datetime(2026, 7, 13, 20, 0, 0, tzinfo=timezone.utc)
+    summary = bse.build_summary(
+        bars=bars, symbol="SPY", interval="60m",
+        now_utc=now, short_window=3, long_window=5,
+    )
+    assert "baseline_comparison" in summary
+    cmp = summary["baseline_comparison"]
+    for field in (
+        "baseline_total_return",
+        "buy_and_hold_return",
+        "baseline_outperformed_buy_and_hold",
+        "baseline_return_gap_vs_buy_and_hold",
+    ):
+        assert field in cmp
+    # Field must be consistent with the baseline result.
+    assert cmp["baseline_total_return"] == summary["baseline"]["total_return"]
+    assert cmp["buy_and_hold_return"] == summary["baseline"]["buy_and_hold_return"]
+
+
+def test_build_summary_sweep_includes_rankings() -> None:
+    bars = _bars_from_closes([float(c) for c in range(1, 61)])
+    now = datetime(2026, 7, 13, 20, 0, 0, tzinfo=timezone.utc)
+    summary = bse.build_summary(
+        bars=bars, symbol="SPY", interval="60m",
+        now_utc=now, short_window=3, long_window=5,
+        short_windows=[3, 5], long_windows=[10, 20],
+    )
+    assert "rankings" in summary["sweep"]
+    rk = summary["sweep"]["rankings"]
+    for key in (
+        "best_by_total_return", "best_by_sharpe_ratio",
+        "best_by_max_drawdown", "best_by_profit_factor",
+        "best_by_return_over_drawdown",
+        "top_10_by_total_return", "top_10_by_sharpe_ratio",
+    ):
+        assert key in rk
