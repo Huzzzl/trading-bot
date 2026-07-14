@@ -27,10 +27,31 @@ The CLI is read-only:
 
 Backtest execution model
 ------------------------
-The signal at bar ``t`` uses closes[0..t] only — no lookahead. A BUY
-signal at ``t`` fills at close[t]; the same-bar convention keeps the
-comparison to the live cycle simple. Tests assert both the crossover
-rule and the no-lookahead property.
+The signal at bar ``t`` uses ``closes[0..t]`` only — no lookahead.
+
+Default execution is ``next_open``: the signal at bar ``t`` is only
+knowable after the bar closes, so the fill happens at
+``bars[t+1].open``. A signal that fires on the final bar cannot
+execute — there is no next bar — and no new trade is opened.
+
+``--execution same_close`` is available only for diagnostic
+comparison: it fills at ``bars[t].close`` on the same bar the signal
+was generated. It is optimistic (the strategy could not act on
+close[t] in real time) and must not be treated as a realistic
+result. Tests assert the crossover rule, the no-lookahead property,
+and that the two execution modes actually behave differently.
+
+Commissions and slippage (``--commission-bps``, ``--slippage-bps``,
+both default 0) are applied on both entry and exit; buy price is
+scaled by ``1 + cost/10_000`` and sell price by ``1 - cost/10_000``.
+
+A position still open at the end of the run is not counted as a
+completed trade — completed-trade metrics (``win_rate``,
+``profit_factor``, ``avg_trade_return``, ``avg_holding_bars``)
+exclude it. ``final_equity`` still marks the open position to market
+against the last close, and open-position details are surfaced via
+``open_position`` / ``open_entry_price`` / ``open_entry_index`` /
+``open_unrealized_return``.
 """
 
 from __future__ import annotations
