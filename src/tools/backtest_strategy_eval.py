@@ -522,6 +522,104 @@ def _parse_window_list(raw: str) -> list[int]:
     return out
 
 
+def _return_over_drawdown(r: dict[str, Any]) -> float:
+    """Return / abs(max_drawdown). Zero drawdown becomes +inf when the
+    strategy actually made money, else 0.0."""
+    dd = r.get("max_drawdown") or 0.0
+    tr = r.get("total_return") or 0.0
+    if dd == 0:
+        return float("inf") if tr > 0 else 0.0
+    return tr / abs(dd)
+
+
+def _pick_best(
+    results: Sequence[dict[str, Any]],
+    key: str | Any,
+    *,
+    filter_zero_trades: bool = False,
+) -> dict[str, Any] | None:
+    """Return the single result maximising ``key``.
+
+    ``key`` is either a string field name or a callable. When
+    ``filter_zero_trades`` is True, configs with
+    ``completed_trade_count == 0`` are excluded — unless every config
+    has zero trades, in which case the whole pool is kept so a "best"
+    is still surfaced.
+    """
+    if not results:
+        return None
+    pool = list(results)
+    if filter_zero_trades:
+        non_zero = [r for r in pool if r.get("completed_trade_count", 0) > 0]
+        if non_zero:
+            pool = non_zero
+    key_fn = key if callable(key) else (lambda r, _k=key: r.get(_k, 0.0))
+    return max(pool, key=key_fn)
+
+
+def _top_n(
+    results: Sequence[dict[str, Any]],
+    key: str,
+    n: int,
+) -> list[dict[str, Any]]:
+    return sorted(
+        results, key=lambda r: r.get(key, 0.0), reverse=True,
+    )[:n]
+
+
+def rank_sweep_results(
+    results: Sequence[dict[str, Any]],
+) -> dict[str, Any]:
+    """Return ranking summaries over a completed sweep."""
+    if not results:
+        return {
+            "best_by_total_return": None,
+            "best_by_sharpe_ratio": None,
+            "best_by_max_drawdown": None,
+            "best_by_profit_factor": None,
+            "best_by_return_over_drawdown": None,
+            "top_10_by_total_return": [],
+            "top_10_by_sharpe_ratio": [],
+        }
+    return {
+        "best_by_total_return":         _pick_best(results, "total_return"),
+        "best_by_sharpe_ratio":         _pick_best(results, "sharpe_ratio"),
+        # max_drawdown is <= 0; the "best" is the closest-to-zero value.
+        # Zero-trade configs trivially score 0 here, so filter them out
+        # unless every config has zero trades.
+        "best_by_max_drawdown":         _pick_best(
+            results, "max_drawdown", filter_zero_trades=True,
+        ),
+        "best_by_profit_factor":        _pick_best(
+            results, "profit_factor", filter_zero_trades=True,
+        ),
+        "best_by_return_over_drawdown": _pick_best(
+            results, _return_over_drawdown,
+        ),
+        "top_10_by_total_return":       _top_n(results, "total_return", 10),
+        "top_10_by_sharpe_ratio":       _top_n(results, "sharpe_ratio", 10),
+    }
+
+
+def compare_to_baseline(
+    baseline: BacktestResult | dict[str, Any],
+) -> dict[str, Any]:
+    """Return baseline vs buy-and-hold comparison fields."""
+    if isinstance(baseline, BacktestResult):
+        bt_return = baseline.total_return
+        bh_return = baseline.buy_and_hold_return
+    else:
+        bt_return = float(baseline.get("total_return", 0.0))
+        bh_return = float(baseline.get("buy_and_hold_return", 0.0))
+    gap = bt_return - bh_return
+    return {
+        "baseline_total_return": bt_return,
+        "buy_and_hold_return": bh_return,
+        "baseline_outperformed_buy_and_hold": bt_return > bh_return,
+        "baseline_return_gap_vs_buy_and_hold": gap,
+    }
+
+
 def run_sweep(
     bars: Sequence[Bar],
     short_windows: Sequence[int],
@@ -535,7 +633,9 @@ def run_sweep(
     """Run a backtest for every valid (short, long) pair.
 
     Combinations where ``short >= long`` are rejected and recorded so the
-    operator sees they were considered but skipped.
+    operator sees they were considered but skipped. Ranking summaries
+    are attached under ``rankings`` so the operator can pick a config
+    without re-sorting the raw ``sweep`` list.
     """
     results: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
@@ -559,6 +659,7 @@ def run_sweep(
         "sweep": results,
         "skipped_combinations": skipped,
         "combination_count": len(results),
+        "rankings": rank_sweep_results(results),
     }
 
 
@@ -601,6 +702,7 @@ def build_summary(
         "commission_bps": commission_bps,
         "slippage_bps": slippage_bps,
         "baseline": baseline.to_dict(include_trades=include_trades),
+        "baseline_comparison": compare_to_baseline(baseline),
     }
     if short_windows and long_windows:
         summary["sweep"] = run_sweep(
