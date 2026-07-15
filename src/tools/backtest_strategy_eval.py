@@ -1107,6 +1107,18 @@ def run_walk_forward(
     effective_shorts = list(short_windows) if short_windows else [baseline_short]
     effective_longs  = list(long_windows) if long_windows else [baseline_long]
 
+    # Every selected long window must fit inside the training slice as
+    # SMA warmup for the following test window. Under next_open the
+    # signal at the first test bar's open reads closes[-2] of the
+    # warmup — so we need max_long + 1 prior bars, not just max_long.
+    max_long = max(effective_longs)
+    if train_bars < max_long + 1:
+        raise BacktestError(
+            f"wf_train_bars ({train_bars}) must be >= max long_window + 1 "
+            f"({max_long + 1}) so every test window can receive full "
+            f"SMA warmup"
+        )
+
     bpy = _BARS_PER_YEAR.get(interval, _BARS_PER_YEAR[_DEFAULT_INTERVAL])
     winners: list[dict[str, Any]] = []
     metric_key = _select_metric_key(selection_metric)
@@ -1132,9 +1144,10 @@ def run_walk_forward(
         s = int(best_train["short_window"])
         l = int(best_train["long_window"])
 
-        # Test evaluation with warmup: prepend the last `l` train bars
-        # as SMA context, and mark them non-executable.
-        warmup = min(l, sts)
+        # Test evaluation with warmup: prepend exactly `l` train bars as
+        # SMA context. The train_bars >= max_long + 1 guard above ensures
+        # every window has enough history — no silent shortening.
+        warmup = l
         warmup_start = sts - warmup
         eval_slice = bars[warmup_start:ste]
         test_result = run_backtest(

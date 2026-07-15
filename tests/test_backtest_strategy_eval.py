@@ -1494,3 +1494,112 @@ def test_walk_forward_tool_still_has_no_broker_or_network_imports() -> None:
         assert tok not in source, (
             f"backtest_strategy_eval must not depend on {tok!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# S59 review — warmup-fit validation
+# ---------------------------------------------------------------------------
+
+
+def test_wf_rejects_train_shorter_than_max_long_window() -> None:
+    """train_bars must be >= max(long_windows) + 1 so every test window
+    can receive full SMA warmup — no silent shortening allowed."""
+    bars = _bars_from_closes([float(c) for c in range(1, 501)])
+    with pytest.raises(BacktestError, match="wf_train_bars"):
+        bse.run_walk_forward(
+            bars, symbol="SPY", interval="60m",
+            baseline_short=3, baseline_long=5,
+            short_windows=[3, 5], long_windows=[10, 50],
+            train_bars=50,   # < 51 required (max_long=50 → need 51)
+            test_bars=50, step_bars=50,
+        )
+
+
+def test_wf_train_exactly_max_long_plus_one_is_accepted() -> None:
+    """train_bars == max_long + 1 is the tightest allowed size."""
+    bars = _bars_from_closes([float(c) for c in range(1, 601)])
+    out = bse.run_walk_forward(
+        bars, symbol="SPY", interval="60m",
+        baseline_short=3, baseline_long=5,
+        short_windows=[3, 5], long_windows=[10, 20],
+        train_bars=21,   # exactly max_long (20) + 1
+        test_bars=50, step_bars=50,
+    )
+    # Should run without raising; may produce windows.
+    assert isinstance(out["windows"], list)
+
+
+def test_wf_train_shorter_than_baseline_long_rejected_even_without_sweep() -> None:
+    """When no sweep is provided, the baseline long_window is the max."""
+    bars = _bars_from_closes([float(c) for c in range(1, 501)])
+    with pytest.raises(BacktestError, match="wf_train_bars"):
+        bse.run_walk_forward(
+            bars, symbol="SPY", interval="60m",
+            baseline_short=5, baseline_long=30,
+            short_windows=None, long_windows=None,
+            train_bars=20,   # < 31 required
+            test_bars=50, step_bars=50,
+        )
+
+
+def test_wf_warmup_exactly_matches_selected_long_window() -> None:
+    """Every emitted test evaluation must have received exactly
+    selected_long_window prior bars as warmup."""
+    bars = _bars_from_closes([float(c) for c in range(1, 601)])
+    out = bse.run_walk_forward(
+        bars, symbol="SPY", interval="60m",
+        baseline_short=3, baseline_long=5,
+        short_windows=[3, 5], long_windows=[10, 20],
+        train_bars=100, test_bars=100, step_bars=100,
+    )
+    assert out["windows"]
+    for w in out["windows"]:
+        # If a trade opened in the test region, its entry_index must be
+        # >= the warmup boundary. The eval_slice length is
+        # warmup + test_bars, and evaluation_start_index = warmup =
+        # selected_long_window. Any open_entry_index (in eval-slice
+        # coordinates) must therefore be >= selected_long_window.
+        test_res = w["selected_test_result"]
+        expected_warmup = w["selected_long_window"]
+        # bar_count is n_eval = eval_slice_len - warmup = test_bars.
+        assert test_res["bar_count"] == w["test_bar_count"]
+        if test_res.get("open_position"):
+            assert test_res["open_entry_index"] >= expected_warmup
+
+
+def test_cli_wf_train_shorter_than_max_long_exits_2(
+    tmp_path: Path, capsys: pytest.CaptureFixture,
+) -> None:
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    _write_cache(cache_dir, [float(c) for c in range(1, 601)])
+    rc = bse.main([
+        "--cache-dir", str(cache_dir),
+        "--walk-forward",
+        "--wf-train-bars", "40",   # < max long (50) + 1
+        "--wf-test-bars", "50",
+        "--wf-step-bars", "50",
+        "--short-windows", "3,5",
+        "--long-windows", "10,50",
+        "--no-write",
+    ])
+    assert rc == 2
+    err = json.loads(capsys.readouterr().out)
+    assert "wf_train_bars" in err["error"]
+
+
+def test_wf_default_1600_400_400_configuration_still_accepted() -> None:
+    """Default 1600/400/400 with the standard 10/20 baseline must
+    continue to be a valid configuration."""
+    bars = _bars_from_closes([float(c) for c in range(1, 2101)])  # 2100 bars
+    out = bse.run_walk_forward(
+        bars, symbol="SPY", interval="60m",
+        baseline_short=10, baseline_long=20,
+        short_windows=None, long_windows=None,
+        train_bars=1600, test_bars=400, step_bars=400,
+    )
+    # 2100 bars produces one complete window: [0:1600] train, [1600:2000] test.
+    assert out["mode"] == "rolling_chronological"
+    assert out["train_bars"] == 1600
+    assert out["test_bars"] == 400
+    assert out["step_bars"] == 400
