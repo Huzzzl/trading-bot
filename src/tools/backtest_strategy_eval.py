@@ -301,6 +301,7 @@ def run_backtest(
     execution: str = "next_open",
     commission_bps: float = 0.0,
     slippage_bps: float = 0.0,
+    evaluation_start_index: int = 0,
 ) -> BacktestResult:
     """Replay the SMA crossover rule bar by bar.
 
@@ -331,6 +332,17 @@ def run_backtest(
     reflects total portfolio value; open-position details are surfaced
     via ``open_position`` / ``open_entry_price`` / ``open_entry_index``
     / ``open_unrealized_return``.
+
+    Warmup
+    ------
+    ``evaluation_start_index`` lets the caller supply prior bars purely
+    as SMA context. During the warmup region ``i < evaluation_start_index``
+    signals are computed as usual (so the SMA warms up) but no trades
+    fire and no equity is tracked, so a training position cannot leak
+    across into the evaluated region. All post-run metrics
+    (``bar_count``, ``buy_and_hold_return``, drawdown, exposure, Sharpe,
+    trades) reflect only the evaluated slice. Default 0 preserves the
+    original behavior.
     """
     if execution not in _EXECUTION_MODES:
         raise BacktestError(
@@ -344,6 +356,11 @@ def run_backtest(
         )
     if commission_bps < 0 or slippage_bps < 0:
         raise BacktestError("commission_bps and slippage_bps must be >= 0")
+    if evaluation_start_index < 0 or evaluation_start_index >= max(1, len(bars)):
+        raise BacktestError(
+            f"evaluation_start_index must be in [0, len(bars)), got "
+            f"{evaluation_start_index} for {len(bars)} bars"
+        )
 
     closes = [b.close for b in bars]
     n = len(bars)
@@ -379,6 +396,12 @@ def run_backtest(
                 signal = sma_crossover_signal(
                     closes, i - 1, short_window, long_window, has_position,
                 )
+
+        # Warmup: compute signals so SMA history builds up, but do not
+        # execute trades or track equity. This guarantees the evaluated
+        # region begins flat.
+        if i < evaluation_start_index:
+            continue
 
         if signal == "BUY" and not has_position:
             raw = _buy_fill_price(bar)
@@ -420,8 +443,14 @@ def run_backtest(
     final_equity = equity_curve[-1] if equity_curve else initial_equity
     total_return = (final_equity - initial_equity) / initial_equity
 
-    first_close = bars[0].close if bars else 0.0
-    last_close = bars[-1].close if bars else 0.0
+    # Buy-and-hold reflects only the evaluated slice — the warmup region
+    # is not part of the strategy comparison.
+    if n > evaluation_start_index:
+        first_close = closes[evaluation_start_index]
+        last_close = closes[-1]
+    else:
+        first_close = 0.0
+        last_close = 0.0
     bh_return = (
         (last_close - first_close) / first_close if first_close > 0 else 0.0
     )
@@ -464,7 +493,8 @@ def run_backtest(
         profit_factor = float("inf")
     else:
         profit_factor = 0.0
-    exposure_time = exposed_bars / n if n else 0.0
+    evaluated_bars = n - evaluation_start_index
+    exposure_time = exposed_bars / evaluated_bars if evaluated_bars else 0.0
 
     return BacktestResult(
         short_window=short_window,
@@ -484,7 +514,7 @@ def run_backtest(
         profit_factor=profit_factor,
         exposure_time=exposure_time,
         final_equity=final_equity,
-        bar_count=n,
+        bar_count=evaluated_bars,
         open_position=open_position,
         open_entry_price=open_entry_price,
         open_entry_index=open_entry_index,
@@ -684,7 +714,16 @@ def build_summary(
     slippage_bps: float = 0.0,
     split_ratio: float | None = None,
     split_mode: str = "chronological",
+    walk_forward: bool = False,
+    wf_train_bars: int = 1600,
+    wf_test_bars: int = 400,
+    wf_step_bars: int = 400,
+    wf_selection_metric: str = "total_return",
 ) -> dict[str, Any]:
+    if walk_forward and split_ratio is not None:
+        raise BacktestError(
+            "--walk-forward and --split-ratio cannot be used together"
+        )
     bpy = _BARS_PER_YEAR.get(interval, _BARS_PER_YEAR[_DEFAULT_INTERVAL])
     baseline = run_backtest(
         bars, short_window, long_window,
@@ -757,6 +796,25 @@ def build_summary(
         summary["test_summary"] = test_summary
         summary["generalization_report"] = build_generalization_report(
             train_summary, test_summary,
+        )
+
+    if walk_forward:
+        summary["walk_forward"] = run_walk_forward(
+            bars,
+            symbol=symbol,
+            interval=interval,
+            baseline_short=short_window,
+            baseline_long=long_window,
+            short_windows=short_windows,
+            long_windows=long_windows,
+            train_bars=wf_train_bars,
+            test_bars=wf_test_bars,
+            step_bars=wf_step_bars,
+            selection_metric=wf_selection_metric,
+            execution=execution,
+            commission_bps=commission_bps,
+            slippage_bps=slippage_bps,
+            include_trades=include_trades,
         )
 
     return summary
@@ -951,6 +1009,313 @@ def build_generalization_report(
     }
 
 
+# ---------------------------------------------------------------------------
+# Walk-forward validation (S59)
+# ---------------------------------------------------------------------------
+
+_WF_SELECTION_METRICS = ("total_return",)
+
+
+def walk_forward_windows(
+    n_bars: int,
+    train_bars: int,
+    test_bars: int,
+    step_bars: int,
+) -> list[tuple[int, int, int, int, int]]:
+    """Return ``(win_index, train_start, train_end, test_start, test_end)``
+    tuples for every complete rolling window.
+
+    Windows advance by ``step_bars``; the final incomplete window (where
+    a full ``test_bars`` cannot be sliced) is dropped rather than
+    trimmed. Train and test are strictly non-overlapping — the guard
+    ``step_bars >= test_bars`` also keeps consecutive test windows from
+    overlapping so aggregate returns compound cleanly.
+    """
+    out: list[tuple[int, int, int, int, int]] = []
+    idx = 0
+    wi = 0
+    while True:
+        train_start = idx
+        train_end = idx + train_bars
+        test_start = train_end
+        test_end = test_start + test_bars
+        if test_end > n_bars:
+            break
+        out.append((wi, train_start, train_end, test_start, test_end))
+        idx += step_bars
+        wi += 1
+    return out
+
+
+def _select_metric_key(metric: str) -> str:
+    """Map a selection metric name to the key inside sweep rankings."""
+    if metric == "total_return":
+        return "best_by_total_return"
+    raise BacktestError(
+        f"walk-forward selection metric must be one of "
+        f"{_WF_SELECTION_METRICS}, got {metric!r}"
+    )
+
+
+def _param_key(short: int, long: int) -> str:
+    return f"{short}/{long}"
+
+
+def run_walk_forward(
+    bars: Sequence[Bar],
+    *,
+    symbol: str,
+    interval: str,
+    baseline_short: int,
+    baseline_long: int,
+    short_windows: Sequence[int] | None,
+    long_windows: Sequence[int] | None,
+    train_bars: int,
+    test_bars: int,
+    step_bars: int,
+    selection_metric: str = "total_return",
+    execution: str = "next_open",
+    commission_bps: float = 0.0,
+    slippage_bps: float = 0.0,
+    include_trades: bool = False,
+) -> dict[str, Any]:
+    """Rolling walk-forward validation.
+
+    For each window: run the full sweep on the training slice, pick the
+    winner by ``selection_metric`` (total_return only in v1), then
+    evaluate exactly that ``(short, long)`` pair on the immediately
+    following test slice — with the last ``long_window`` bars of the
+    training slice attached as SMA warmup, marked so no trades fire and
+    no equity accrues in that region.
+    """
+    if train_bars <= 0 or test_bars <= 0 or step_bars <= 0:
+        raise BacktestError(
+            "wf_train_bars, wf_test_bars, wf_step_bars must all be > 0"
+        )
+    if step_bars < test_bars:
+        raise BacktestError(
+            f"wf_step_bars ({step_bars}) must be >= wf_test_bars "
+            f"({test_bars}) so test windows do not overlap"
+        )
+    _select_metric_key(selection_metric)  # validate name
+    if len(bars) < train_bars + test_bars:
+        raise BacktestError(
+            f"insufficient bars for walk-forward: need at least "
+            f"{train_bars + test_bars}, got {len(bars)}"
+        )
+
+    effective_shorts = list(short_windows) if short_windows else [baseline_short]
+    effective_longs  = list(long_windows) if long_windows else [baseline_long]
+
+    bpy = _BARS_PER_YEAR.get(interval, _BARS_PER_YEAR[_DEFAULT_INTERVAL])
+    winners: list[dict[str, Any]] = []
+    metric_key = _select_metric_key(selection_metric)
+    all_windows = walk_forward_windows(
+        len(bars), train_bars, test_bars, step_bars,
+    )
+
+    for wi, ts, te, sts, ste in all_windows:
+        train_slice = bars[ts:te]
+        test_slice = bars[sts:ste]
+
+        train_sweep = run_sweep(
+            train_slice, effective_shorts, effective_longs,
+            bars_per_year=bpy,
+            execution=execution,
+            commission_bps=commission_bps,
+            slippage_bps=slippage_bps,
+        )
+        best_train = train_sweep.get("rankings", {}).get(metric_key)
+        if best_train is None:
+            # No valid config on this training slice — skip window.
+            continue
+        s = int(best_train["short_window"])
+        l = int(best_train["long_window"])
+
+        # Test evaluation with warmup: prepend the last `l` train bars
+        # as SMA context, and mark them non-executable.
+        warmup = min(l, sts)
+        warmup_start = sts - warmup
+        eval_slice = bars[warmup_start:ste]
+        test_result = run_backtest(
+            eval_slice, s, l,
+            bars_per_year=bpy,
+            execution=execution,
+            commission_bps=commission_bps,
+            slippage_bps=slippage_bps,
+            evaluation_start_index=warmup,
+        )
+        test_dict = test_result.to_dict(include_trades=include_trades)
+
+        # Test-window buy-and-hold (independent of warmup mechanics).
+        first_c = test_slice[0].close
+        last_c = test_slice[-1].close
+        bh = (last_c - first_c) / first_c if first_c > 0 else 0.0
+
+        test_ret = float(test_dict.get("total_return", 0.0))
+        test_sh  = float(test_dict.get("sharpe_ratio", 0.0))
+
+        winners.append({
+            "window_index": wi,
+            "train_start": str(train_slice[0].ts),
+            "train_end":   str(train_slice[-1].ts),
+            "test_start":  str(test_slice[0].ts),
+            "test_end":    str(test_slice[-1].ts),
+            "train_bar_count": len(train_slice),
+            "test_bar_count":  len(test_slice),
+            "selected_short_window": s,
+            "selected_long_window":  l,
+            "selected_train_result": best_train,
+            "selected_test_result":  test_dict,
+            "test_buy_and_hold_return":       bh,
+            "test_outperformed_buy_and_hold": test_ret > bh,
+            "test_profitable":                test_ret > 0,
+            "test_positive_sharpe":           test_sh > 0,
+        })
+
+    aggregate = _aggregate_walk_forward(winners)
+    warnings = _walk_forward_warnings(winners, aggregate)
+
+    return {
+        "mode": "rolling_chronological",
+        "train_bars": train_bars,
+        "test_bars":  test_bars,
+        "step_bars":  step_bars,
+        "selection_metric": selection_metric,
+        "total_bar_count": len(bars),
+        "windows": winners,
+        "aggregate": aggregate,
+        "walk_forward_warning":         warnings["warning"],
+        "walk_forward_warning_reasons": warnings["reasons"],
+    }
+
+
+def _aggregate_walk_forward(windows: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    """Compound per-window returns and summarize test-window performance."""
+    n = len(windows)
+    if n == 0:
+        return {
+            "window_count": 0,
+            "profitable_test_window_count": 0,
+            "profitable_test_window_rate": 0.0,
+            "positive_sharpe_window_count": 0,
+            "positive_sharpe_window_rate": 0.0,
+            "outperformed_buy_and_hold_window_count": 0,
+            "outperformed_buy_and_hold_window_rate": 0.0,
+            "average_test_return": 0.0,
+            "median_test_return": 0.0,
+            "average_test_sharpe": 0.0,
+            "median_test_sharpe": 0.0,
+            "worst_test_return": None,
+            "worst_test_drawdown": None,
+            "total_completed_test_trades": 0,
+            "aggregate_walk_forward_return": 0.0,
+            "aggregate_buy_and_hold_return": 0.0,
+            "aggregate_return_gap_vs_buy_and_hold": 0.0,
+            "best_test_window": None,
+            "worst_test_window": None,
+            "parameter_selection_frequency": {},
+            "unique_selected_parameter_count": 0,
+            "largest_positive_window_contribution": None,
+        }
+
+    test_returns  = [float(w["selected_test_result"].get("total_return", 0.0)) for w in windows]
+    test_sharpes  = [float(w["selected_test_result"].get("sharpe_ratio", 0.0)) for w in windows]
+    test_dds      = [float(w["selected_test_result"].get("max_drawdown", 0.0)) for w in windows]
+    bh_returns    = [float(w["test_buy_and_hold_return"]) for w in windows]
+    test_trades   = [int(w["selected_test_result"].get("completed_trade_count", 0) or 0)
+                     for w in windows]
+
+    profitable  = [w for w in windows if w["test_profitable"]]
+    positive_sh = [w for w in windows if w["test_positive_sharpe"]]
+    outperform  = [w for w in windows if w["test_outperformed_buy_and_hold"]]
+
+    def _median(vals: Sequence[float]) -> float:
+        if not vals:
+            return 0.0
+        s = sorted(vals)
+        mid = len(s) // 2
+        if len(s) % 2:
+            return s[mid]
+        return (s[mid - 1] + s[mid]) / 2.0
+
+    def _compound(rs: Sequence[float]) -> float:
+        prod = 1.0
+        for r in rs:
+            prod *= (1.0 + r)
+        return prod - 1.0
+
+    agg_wf = _compound(test_returns)
+    agg_bh = _compound(bh_returns)
+
+    positive_returns = [r for r in test_returns if r > 0]
+    if positive_returns:
+        largest_contribution = max(positive_returns) / sum(positive_returns)
+    else:
+        largest_contribution = None
+
+    best_win = max(windows, key=lambda w: float(w["selected_test_result"].get("total_return", 0.0)))
+    worst_win = min(windows, key=lambda w: float(w["selected_test_result"].get("total_return", 0.0)))
+
+    freq: dict[str, int] = {}
+    for w in windows:
+        k = _param_key(w["selected_short_window"], w["selected_long_window"])
+        freq[k] = freq.get(k, 0) + 1
+
+    return {
+        "window_count": n,
+        "profitable_test_window_count": len(profitable),
+        "profitable_test_window_rate":  len(profitable) / n,
+        "positive_sharpe_window_count": len(positive_sh),
+        "positive_sharpe_window_rate":  len(positive_sh) / n,
+        "outperformed_buy_and_hold_window_count": len(outperform),
+        "outperformed_buy_and_hold_window_rate":  len(outperform) / n,
+        "average_test_return": sum(test_returns) / n,
+        "median_test_return":  _median(test_returns),
+        "average_test_sharpe": sum(test_sharpes) / n,
+        "median_test_sharpe":  _median(test_sharpes),
+        "worst_test_return":   min(test_returns),
+        "worst_test_drawdown": min(test_dds),
+        "total_completed_test_trades": sum(test_trades),
+        "aggregate_walk_forward_return":    agg_wf,
+        "aggregate_buy_and_hold_return":    agg_bh,
+        "aggregate_return_gap_vs_buy_and_hold": agg_wf - agg_bh,
+        "best_test_window":  best_win,
+        "worst_test_window": worst_win,
+        "parameter_selection_frequency": freq,
+        "unique_selected_parameter_count": len(freq),
+        "largest_positive_window_contribution": largest_contribution,
+    }
+
+
+def _walk_forward_warnings(
+    windows: Sequence[dict[str, Any]],
+    aggregate: dict[str, Any],
+    *,
+    min_windows: int = 3,
+    min_profitable_rate: float = 0.60,
+    min_total_test_trades: int = 15,
+    max_single_window_share: float = 0.60,
+) -> dict[str, Any]:
+    reasons: list[str] = []
+    if aggregate.get("window_count", 0) < min_windows:
+        reasons.append("INSUFFICIENT_WINDOWS")
+    if aggregate.get("profitable_test_window_rate", 0.0) < min_profitable_rate:
+        reasons.append("LOW_PROFITABLE_WINDOW_RATE")
+    if aggregate.get("aggregate_walk_forward_return", 0.0) <= 0:
+        reasons.append("NON_POSITIVE_AGGREGATE_RETURN")
+    if aggregate.get("total_completed_test_trades", 0) < min_total_test_trades:
+        reasons.append("LOW_TOTAL_TEST_TRADE_COUNT")
+    lpc = aggregate.get("largest_positive_window_contribution")
+    if isinstance(lpc, (int, float)) and lpc > max_single_window_share:
+        reasons.append("SINGLE_WINDOW_PROFIT_CONCENTRATION")
+    if aggregate.get("aggregate_walk_forward_return", 0.0) < aggregate.get(
+        "aggregate_buy_and_hold_return", 0.0,
+    ):
+        reasons.append("UNDERPERFORMED_BUY_AND_HOLD")
+    return {"warning": bool(reasons), "reasons": reasons}
+
+
 def write_summary(summary: dict[str, Any], output_dir: Path, date_utc: str) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / f"{date_utc}.json"
@@ -1001,6 +1366,22 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--split-mode", default="chronological",
                    choices=list(_SPLIT_MODES),
                    help="Split strategy (default: chronological).")
+    p.add_argument("--walk-forward", action="store_true",
+                   help="Run rolling walk-forward validation. Disabled "
+                        "unless explicitly provided. Mutually exclusive "
+                        "with --split-ratio in v1.")
+    p.add_argument("--wf-train-bars", type=int, default=1600,
+                   help="Bars per walk-forward training window (default 1600).")
+    p.add_argument("--wf-test-bars", type=int, default=400,
+                   help="Bars per walk-forward test window (default 400).")
+    p.add_argument("--wf-step-bars", type=int, default=400,
+                   help="Bars between successive train starts. Must be "
+                        ">= --wf-test-bars so test windows never overlap "
+                        "(default 400).")
+    p.add_argument("--wf-selection-metric", default="total_return",
+                   choices=list(_WF_SELECTION_METRICS),
+                   help="Sweep metric used to pick the train winner "
+                        "(v1: total_return only).")
     p.add_argument("--output-dir", default=str(_DEFAULT_OUTPUT_DIR))
     p.add_argument("--no-write", action="store_true",
                    help="Do not write the summary to disk; stdout only.")
@@ -1040,6 +1421,11 @@ def main(argv: list[str] | None = None) -> int:
             slippage_bps=args.slippage_bps,
             split_ratio=args.split_ratio,
             split_mode=args.split_mode,
+            walk_forward=args.walk_forward,
+            wf_train_bars=args.wf_train_bars,
+            wf_test_bars=args.wf_test_bars,
+            wf_step_bars=args.wf_step_bars,
+            wf_selection_metric=args.wf_selection_metric,
         )
     except BacktestError as exc:
         print(json.dumps({"error": str(exc)}, indent=2))
