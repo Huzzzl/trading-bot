@@ -1344,9 +1344,16 @@ def _fixed_tiebreak_key(entry: dict[str, Any]) -> tuple:
 
 
 def _return_over_worst_drawdown(entry: dict[str, Any]) -> float | None:
+    """Return ``aggregate_return / abs(worst_test_drawdown)``.
+
+    Missing values return ``None``. A zero drawdown also returns
+    ``None`` because the ratio is undefined — but a genuine zero
+    aggregate return over a non-zero drawdown returns ``0.0``, NOT
+    ``None`` (0.0 is a valid, distinct result).
+    """
     wd = entry.get("worst_test_drawdown")
     ar = entry.get("aggregate_return")
-    if wd in (None, 0, 0.0) or ar is None:
+    if wd is None or ar is None or float(wd) == 0.0:
         return None
     return float(ar) / abs(float(wd))
 
@@ -1376,15 +1383,20 @@ def _build_adaptive_vs_fixed(
     best_by_rate = _best(
         lambda e: float(e.get("profitable_test_window_rate", 0.0)),
     )
+    # Only None means "unavailable" — a genuine 0.0 must survive as a
+    # valid ranking value, so we do not use ``x or default``.
+    def _or_ninf(x: Any) -> float:
+        return float(x) if x is not None else float("-inf")
+
     best_by_worst_return = _best(
-        lambda e: float(e.get("worst_test_return") or float("-inf")),
+        lambda e: _or_ninf(e.get("worst_test_return")),
     )
     best_by_worst_dd = _best(
         # max_drawdown values are <= 0; less negative wins.
-        lambda e: float(e.get("worst_test_drawdown") or float("-inf")),
+        lambda e: _or_ninf(e.get("worst_test_drawdown")),
     )
     best_by_rod = _best(
-        lambda e: float(e.get("return_over_worst_drawdown") or float("-inf")),
+        lambda e: _or_ninf(e.get("return_over_worst_drawdown")),
     )
 
     adaptive_return = float(
@@ -1405,7 +1417,12 @@ def _build_adaptive_vs_fixed(
 
     # Rank = 1 + number of fixed strictly beating adaptive.
     adaptive_rank = len(beating_return) + 1
-    adaptive_beats_all = bool(fixed_entries) and not beating_return
+    # Adaptive "outperformed all" requires strict > on every fixed —
+    # a tie means adaptive did NOT strictly beat that entry.
+    adaptive_beats_all = bool(fixed_entries) and all(
+        adaptive_return > float(e.get("aggregate_return", 0.0))
+        for e in fixed_entries
+    )
 
     return {
         "adaptive_aggregate_return":                     adaptive_return,
@@ -1498,16 +1515,24 @@ def _build_robustness_report(
     reasons: list[str] = []
     if not stable:
         reasons.append("NO_STABLE_FIXED_CANDIDATE")
-    if aggregates and not beat_bh:
+    # Strict underperformance: a fixed pair equal to buy-and-hold has
+    # not underperformed it. Require every fixed strictly below BH.
+    if aggregates and all(
+        float(a.get("aggregate_return", 0.0))
+        < float(a.get("aggregate_buy_and_hold_return", 0.0))
+        for a in aggregates.values()
+    ):
         reasons.append("ALL_FIXED_UNDERPERFORMED_BUY_AND_HOLD")
     if aggregates:
         adaptive_return = float(
             adaptive_aggregate.get("aggregate_walk_forward_return", 0.0)
         )
-        beats_adaptive = _filter(
-            lambda a: float(a.get("aggregate_return", 0.0)) > adaptive_return,
-        )
-        if not beats_adaptive:
+        # Strict underperformance: a fixed pair tied with adaptive has
+        # not underperformed it.
+        if all(
+            float(a.get("aggregate_return", 0.0)) < adaptive_return
+            for a in aggregates.values()
+        ):
             reasons.append("ALL_FIXED_UNDERPERFORMED_ADAPTIVE")
     if not trades_15:
         reasons.append("LOW_FIXED_SAMPLE_TRADE_COUNT")
@@ -1627,8 +1652,17 @@ def run_walk_forward(
         )
         best_train = train_sweep.get("rankings", {}).get(metric_key)
         if best_train is None:
-            # No valid config on this training slice — skip window.
-            continue
+            # Fail closed: silently dropping a window would leave the
+            # adaptive result and the fixed-comparison result running
+            # on different sets of windows, so the
+            # `test_windows_identical_to_adaptive` flag would be a
+            # lie. Force the operator to widen the sweep or the data.
+            raise BacktestError(
+                f"walk-forward window_index={wi} has no valid training "
+                f"winner under selection_metric={selection_metric!r} — "
+                f"every requested (short_window, long_window) pair was "
+                f"rejected. Widen the sweep or the training data."
+            )
         s = int(best_train["short_window"])
         l = int(best_train["long_window"])
 
