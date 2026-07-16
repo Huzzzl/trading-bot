@@ -1034,3 +1034,572 @@ def test_cli_bad_split_ratio_exits_2(
     assert rc == 2
     err = json.loads(capsys.readouterr().out)
     assert "split-ratio" in err["error"]
+
+
+# ---------------------------------------------------------------------------
+# S59 — rolling walk-forward validation
+# ---------------------------------------------------------------------------
+
+
+def _wf_build(bars, **kw):
+    return bse.build_summary(
+        bars=bars, symbol="SPY", interval="60m",
+        now_utc=datetime(2026, 7, 13, 20, 0, 0, tzinfo=timezone.utc),
+        short_window=3, long_window=5,
+        **kw,
+    )
+
+
+# --- Window construction ---
+
+
+def test_wf_window_boundaries_are_correct() -> None:
+    # 4000 bars, train=1600 test=400 step=400 → windows 0..N
+    wins = bse.walk_forward_windows(4000, 1600, 400, 400)
+    # First window: [0..1600), [1600..2000)
+    assert wins[0] == (0, 0, 1600, 1600, 2000)
+    # Second window: [400..2000), [2000..2400)
+    assert wins[1] == (1, 400, 400 + 1600, 2000, 2400)
+    # Last window's test_end == 4000
+    assert wins[-1][4] == 4000
+
+
+def test_wf_windows_preserve_chronological_order() -> None:
+    wins = bse.walk_forward_windows(5000, 1000, 250, 250)
+    for i in range(1, len(wins)):
+        # Each window's train_start is >= the previous window's train_start,
+        # and its train_start increases by exactly step_bars.
+        assert wins[i][1] > wins[i - 1][1]
+        assert wins[i][1] - wins[i - 1][1] == 250
+
+
+def test_wf_train_and_test_never_overlap() -> None:
+    wins = bse.walk_forward_windows(3000, 1000, 200, 200)
+    for wi, ts, te, sts, ste in wins:
+        assert te == sts  # train ends exactly where test starts
+        assert ts < te <= sts < ste
+
+
+def test_wf_incomplete_final_window_excluded() -> None:
+    # 2350 bars, train=1600 test=400 step=400
+    # w0: test_end=2000 (ok); w1: test_end=2400 > 2350 → dropped.
+    wins = bse.walk_forward_windows(2350, 1600, 400, 400)
+    assert len(wins) == 1
+    assert wins[0][4] == 2000
+
+
+def test_wf_rejects_step_smaller_than_test() -> None:
+    bars = _bars_from_closes([float(c) for c in range(1, 401)])
+    with pytest.raises(BacktestError, match="step"):
+        bse.run_walk_forward(
+            bars, symbol="SPY", interval="60m",
+            baseline_short=3, baseline_long=5,
+            short_windows=[3, 5], long_windows=[10, 20],
+            train_bars=100, test_bars=100, step_bars=50,
+        )
+
+
+def test_wf_rejects_non_positive_sizes() -> None:
+    bars = _bars_from_closes([float(c) for c in range(1, 401)])
+    common = dict(
+        symbol="SPY", interval="60m",
+        baseline_short=3, baseline_long=5,
+        short_windows=[3, 5], long_windows=[10, 20],
+    )
+    for kw in (
+        {"train_bars": 0,   "test_bars": 100, "step_bars": 100},
+        {"train_bars": 100, "test_bars": 0,   "step_bars": 100},
+        {"train_bars": 100, "test_bars": 100, "step_bars": 0},
+    ):
+        with pytest.raises(BacktestError):
+            bse.run_walk_forward(bars, **common, **kw)
+
+
+def test_wf_rejects_insufficient_bars() -> None:
+    bars = _bars_from_closes([float(c) for c in range(1, 51)])  # 50 bars
+    with pytest.raises(BacktestError, match="insufficient"):
+        bse.run_walk_forward(
+            bars, symbol="SPY", interval="60m",
+            baseline_short=3, baseline_long=5,
+            short_windows=[3, 5], long_windows=[10, 20],
+            train_bars=100, test_bars=100, step_bars=100,
+        )
+
+
+# --- Test warmup / no leakage ---
+
+
+def test_run_backtest_warmup_no_trades_during_warmup() -> None:
+    """A bullish crossover in the warmup region must not open a trade."""
+    # Uptrend that fires a BUY early on.
+    closes = [float(c) for c in list(range(1, 41))]
+    bars = _bars_from_closes(closes)
+    # Warmup covers the first 15 bars — no trade should originate there.
+    result = bse.run_backtest(
+        bars, short_window=3, long_window=5, evaluation_start_index=15,
+    )
+    # bar_count reflects only the evaluated slice.
+    assert result.bar_count == len(closes) - 15
+    # No trade may reference an entry index < 15.
+    for t in result.trades:
+        assert t.entry_index >= 15
+    if result.open_position:
+        assert result.open_entry_index is not None
+        assert result.open_entry_index >= 15
+
+
+def test_run_backtest_warmup_carries_no_position_into_evaluation() -> None:
+    """A position 'opened' in warmup must not persist into evaluation."""
+    closes = [float(c) for c in list(range(1, 41))]
+    bars = _bars_from_closes(closes)
+    warm = bse.run_backtest(bars, 3, 5, evaluation_start_index=20)
+    # Evaluation region starts fresh — position count is what happens
+    # AFTER bar 20.
+    assert warm.open_entry_index is None or warm.open_entry_index >= 20
+
+
+def test_run_backtest_default_still_works() -> None:
+    """evaluation_start_index=0 must preserve original semantics."""
+    closes = [float(c) for c in range(1, 51)]
+    bars = _bars_from_closes(closes)
+    result = bse.run_backtest(bars, 3, 5)
+    assert result.bar_count == 50
+    assert result.buy_and_hold_return == pytest.approx((50 - 1) / 1, rel=1e-9)
+
+
+def test_run_backtest_warmup_metrics_exclude_warmup() -> None:
+    """buy_and_hold_return must reflect the evaluated slice only."""
+    closes = [float(c) for c in range(1, 51)]  # 1..50
+    bars = _bars_from_closes(closes)
+    # Full run: BH = 49.0
+    full = bse.run_backtest(bars, 3, 5)
+    # With warmup=20: BH uses close[20]=21 to close[-1]=50 → 29/21
+    warm = bse.run_backtest(bars, 3, 5, evaluation_start_index=20)
+    assert full.buy_and_hold_return == pytest.approx(49.0)
+    assert warm.buy_and_hold_return == pytest.approx((50 - 21) / 21)
+
+
+# --- Selection integrity ---
+
+
+def test_wf_selected_windows_match_train_and_test() -> None:
+    bars = _bars_from_closes([float(c) for c in range(1, 501)])
+    out = bse.run_walk_forward(
+        bars, symbol="SPY", interval="60m",
+        baseline_short=3, baseline_long=5,
+        short_windows=[3, 5], long_windows=[10, 20],
+        train_bars=100, test_bars=100, step_bars=100,
+    )
+    assert out["windows"]
+    for w in out["windows"]:
+        s = w["selected_short_window"]
+        l = w["selected_long_window"]
+        assert w["selected_train_result"]["short_window"] == s
+        assert w["selected_train_result"]["long_window"] == l
+        assert w["selected_test_result"]["short_window"] == s
+        assert w["selected_test_result"]["long_window"] == l
+
+
+def test_wf_train_slice_never_includes_test_bars() -> None:
+    bars = _bars_from_closes([float(c) for c in range(1, 601)])
+    out = bse.run_walk_forward(
+        bars, symbol="SPY", interval="60m",
+        baseline_short=3, baseline_long=5,
+        short_windows=[3, 5], long_windows=[10, 20],
+        train_bars=150, test_bars=100, step_bars=100,
+    )
+    for w in out["windows"]:
+        assert w["train_end"] <= w["test_start"]
+
+
+# --- Aggregate correctness ---
+
+
+def _mk_window(wi, *, s=3, l=5, test_return=0.0, sharpe=0.0,
+               drawdown=0.0, trades=5, bh=0.0):
+    return {
+        "window_index": wi,
+        "train_start": "t0", "train_end": "t1",
+        "test_start": "e0", "test_end": "e1",
+        "train_bar_count": 100, "test_bar_count": 50,
+        "selected_short_window": s,
+        "selected_long_window":  l,
+        "selected_train_result": {"short_window": s, "long_window": l,
+                                  "total_return": test_return,
+                                  "sharpe_ratio": sharpe,
+                                  "max_drawdown": drawdown,
+                                  "completed_trade_count": trades},
+        "selected_test_result":  {"short_window": s, "long_window": l,
+                                  "total_return": test_return,
+                                  "sharpe_ratio": sharpe,
+                                  "max_drawdown": drawdown,
+                                  "completed_trade_count": trades,
+                                  "buy_and_hold_return": bh},
+        "test_buy_and_hold_return":       bh,
+        "test_outperformed_buy_and_hold": test_return > bh,
+        "test_profitable":                test_return > 0,
+        "test_positive_sharpe":           sharpe > 0,
+    }
+
+
+def test_wf_aggregate_return_is_product_of_windows() -> None:
+    windows = [
+        _mk_window(0, test_return=0.10, bh=0.05, sharpe=0.5, trades=6),
+        _mk_window(1, test_return=-0.05, bh=0.02, sharpe=-0.3, trades=6),
+        _mk_window(2, test_return=0.08, bh=0.06, sharpe=0.4, trades=6),
+    ]
+    agg = bse._aggregate_walk_forward(windows)
+    expected = (1.10 * 0.95 * 1.08) - 1
+    assert agg["aggregate_walk_forward_return"] == pytest.approx(expected, rel=1e-12)
+
+
+def test_wf_aggregate_bh_compounding_correct() -> None:
+    windows = [
+        _mk_window(0, test_return=0.0, bh=0.05, trades=1),
+        _mk_window(1, test_return=0.0, bh=-0.02, trades=1),
+        _mk_window(2, test_return=0.0, bh=0.10, trades=1),
+    ]
+    agg = bse._aggregate_walk_forward(windows)
+    expected = (1.05 * 0.98 * 1.10) - 1
+    assert agg["aggregate_buy_and_hold_return"] == pytest.approx(expected, rel=1e-12)
+
+
+def test_wf_parameter_selection_frequency_counts_correctly() -> None:
+    windows = [
+        _mk_window(0, s=15, l=20),
+        _mk_window(1, s=15, l=20),
+        _mk_window(2, s=20, l=50),
+        _mk_window(3, s=15, l=20),
+    ]
+    agg = bse._aggregate_walk_forward(windows)
+    assert agg["parameter_selection_frequency"] == {"15/20": 3, "20/50": 1}
+    assert agg["unique_selected_parameter_count"] == 2
+
+
+def test_wf_rates_are_correct() -> None:
+    windows = [
+        _mk_window(0, test_return=0.10, sharpe=0.5, bh=0.05, trades=6),
+        _mk_window(1, test_return=-0.02, sharpe=-0.1, bh=0.01, trades=6),
+        _mk_window(2, test_return=0.05, sharpe=0.3, bh=0.02, trades=6),
+        _mk_window(3, test_return=0.01, sharpe=0.1, bh=0.03, trades=6),
+    ]
+    agg = bse._aggregate_walk_forward(windows)
+    assert agg["profitable_test_window_count"] == 3
+    assert agg["profitable_test_window_rate"] == pytest.approx(0.75)
+    assert agg["positive_sharpe_window_count"] == 3
+    assert agg["positive_sharpe_window_rate"] == pytest.approx(0.75)
+
+
+def test_wf_largest_positive_contribution() -> None:
+    windows = [
+        _mk_window(0, test_return=0.10, trades=6),
+        _mk_window(1, test_return=0.02, trades=6),
+        _mk_window(2, test_return=-0.05, trades=6),
+    ]
+    agg = bse._aggregate_walk_forward(windows)
+    assert agg["largest_positive_window_contribution"] == pytest.approx(
+        0.10 / (0.10 + 0.02),
+    )
+
+
+def test_wf_largest_positive_contribution_none_when_no_positive() -> None:
+    windows = [
+        _mk_window(0, test_return=-0.05, trades=6),
+        _mk_window(1, test_return=-0.02, trades=6),
+    ]
+    agg = bse._aggregate_walk_forward(windows)
+    assert agg["largest_positive_window_contribution"] is None
+
+
+# --- Warnings ---
+
+
+def test_wf_warning_insufficient_windows() -> None:
+    windows = [_mk_window(0, test_return=0.05, sharpe=0.4, trades=6, bh=0.02),
+               _mk_window(1, test_return=0.04, sharpe=0.3, trades=6, bh=0.02)]
+    agg = bse._aggregate_walk_forward(windows)
+    w = bse._walk_forward_warnings(windows, agg)
+    assert w["warning"] is True
+    assert "INSUFFICIENT_WINDOWS" in w["reasons"]
+
+
+def test_wf_warning_low_profitable_rate() -> None:
+    windows = [
+        _mk_window(0, test_return=0.05, sharpe=0.3, trades=6, bh=0.02),
+        _mk_window(1, test_return=-0.02, sharpe=-0.1, trades=6, bh=-0.01),
+        _mk_window(2, test_return=-0.03, sharpe=-0.2, trades=6, bh=-0.01),
+        _mk_window(3, test_return=-0.01, sharpe=-0.05, trades=6, bh=0.01),
+    ]
+    agg = bse._aggregate_walk_forward(windows)
+    w = bse._walk_forward_warnings(windows, agg)
+    assert "LOW_PROFITABLE_WINDOW_RATE" in w["reasons"]
+
+
+def test_wf_warning_single_window_concentration() -> None:
+    # One window contributes ~90% of positive return.
+    windows = [
+        _mk_window(0, test_return=0.50, sharpe=0.4, trades=6, bh=0.05),
+        _mk_window(1, test_return=0.02, sharpe=0.1, trades=6, bh=0.02),
+        _mk_window(2, test_return=0.03, sharpe=0.1, trades=6, bh=0.01),
+    ]
+    agg = bse._aggregate_walk_forward(windows)
+    w = bse._walk_forward_warnings(windows, agg)
+    assert "SINGLE_WINDOW_PROFIT_CONCENTRATION" in w["reasons"]
+
+
+def test_wf_warning_low_test_trade_count() -> None:
+    windows = [
+        _mk_window(0, test_return=0.05, sharpe=0.4, trades=2, bh=0.02),
+        _mk_window(1, test_return=0.06, sharpe=0.5, trades=2, bh=0.03),
+        _mk_window(2, test_return=0.07, sharpe=0.6, trades=2, bh=0.02),
+    ]
+    agg = bse._aggregate_walk_forward(windows)
+    w = bse._walk_forward_warnings(windows, agg)
+    assert "LOW_TOTAL_TEST_TRADE_COUNT" in w["reasons"]
+
+
+def test_wf_warning_underperformed_bh() -> None:
+    windows = [
+        _mk_window(0, test_return=0.01, sharpe=0.1, trades=6, bh=0.10),
+        _mk_window(1, test_return=0.01, sharpe=0.1, trades=6, bh=0.09),
+        _mk_window(2, test_return=0.01, sharpe=0.1, trades=6, bh=0.08),
+    ]
+    agg = bse._aggregate_walk_forward(windows)
+    w = bse._walk_forward_warnings(windows, agg)
+    assert "UNDERPERFORMED_BUY_AND_HOLD" in w["reasons"]
+
+
+def test_wf_stable_performance_no_warnings() -> None:
+    # 4 windows, 3 profitable, positive sharpe, plenty of trades, no
+    # concentration, aggregate return positive and above BH.
+    windows = [
+        _mk_window(0, test_return=0.06, sharpe=0.4, trades=6, bh=0.02),
+        _mk_window(1, test_return=0.04, sharpe=0.3, trades=6, bh=0.01),
+        _mk_window(2, test_return=0.05, sharpe=0.35, trades=6, bh=0.02),
+        _mk_window(3, test_return=0.03, sharpe=0.25, trades=6, bh=0.01),
+    ]
+    agg = bse._aggregate_walk_forward(windows)
+    w = bse._walk_forward_warnings(windows, agg)
+    assert w["warning"] is False
+    assert w["reasons"] == []
+
+
+# --- Integration through build_summary + CLI ---
+
+
+def test_build_summary_no_walk_forward_preserves_schema() -> None:
+    bars = _bars_from_closes([float(c) for c in range(1, 41)])
+    summary = _wf_build(bars)
+    for key in ("walk_forward",):
+        assert key not in summary
+
+
+def test_build_summary_walk_forward_populates_root_key() -> None:
+    bars = _bars_from_closes([float(c) for c in range(1, 501)])
+    summary = _wf_build(
+        bars, walk_forward=True,
+        short_windows=[3, 5], long_windows=[10, 20],
+        wf_train_bars=100, wf_test_bars=50, wf_step_bars=50,
+    )
+    wf = summary["walk_forward"]
+    for field in ("mode", "train_bars", "test_bars", "step_bars",
+                  "selection_metric", "total_bar_count",
+                  "windows", "aggregate",
+                  "walk_forward_warning", "walk_forward_warning_reasons"):
+        assert field in wf
+    for w in wf["windows"]:
+        for field in ("window_index", "train_start", "train_end",
+                      "test_start", "test_end",
+                      "train_bar_count", "test_bar_count",
+                      "selected_short_window", "selected_long_window",
+                      "selected_train_result", "selected_test_result",
+                      "test_buy_and_hold_return",
+                      "test_outperformed_buy_and_hold",
+                      "test_profitable", "test_positive_sharpe"):
+            assert field in w
+
+
+def test_build_summary_rejects_walk_forward_with_split() -> None:
+    bars = _bars_from_closes([float(c) for c in range(1, 501)])
+    with pytest.raises(BacktestError, match="cannot be used together"):
+        _wf_build(bars, walk_forward=True, split_ratio=0.7)
+
+
+def test_cli_walk_forward_flag(
+    tmp_path: Path, capsys: pytest.CaptureFixture,
+) -> None:
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    _write_cache(cache_dir, [float(c) for c in range(1, 601)])
+    rc = bse.main([
+        "--cache-dir", str(cache_dir),
+        "--walk-forward",
+        "--wf-train-bars", "150",
+        "--wf-test-bars", "100",
+        "--wf-step-bars", "100",
+        "--short-windows", "3,5",
+        "--long-windows", "10,20",
+        "--no-write",
+    ])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert "walk_forward" in payload
+    assert payload["walk_forward"]["mode"] == "rolling_chronological"
+    assert payload["walk_forward"]["train_bars"] == 150
+
+
+def test_cli_walk_forward_and_split_together_exits_2(
+    tmp_path: Path, capsys: pytest.CaptureFixture,
+) -> None:
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    _write_cache(cache_dir, [float(c) for c in range(1, 401)])
+    rc = bse.main([
+        "--cache-dir", str(cache_dir),
+        "--walk-forward",
+        "--split-ratio", "0.7",
+        "--no-write",
+    ])
+    assert rc == 2
+    err = json.loads(capsys.readouterr().out)
+    assert "cannot be used together" in err["error"]
+
+
+def test_cli_walk_forward_bad_step_exits_2(
+    tmp_path: Path, capsys: pytest.CaptureFixture,
+) -> None:
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    _write_cache(cache_dir, [float(c) for c in range(1, 401)])
+    rc = bse.main([
+        "--cache-dir", str(cache_dir),
+        "--walk-forward",
+        "--wf-train-bars", "100",
+        "--wf-test-bars", "100",
+        "--wf-step-bars", "50",
+        "--no-write",
+    ])
+    assert rc == 2
+    err = json.loads(capsys.readouterr().out)
+    assert "wf_step_bars" in err["error"]
+
+
+# --- Non-Alpaca / non-network safety ---
+
+
+def test_walk_forward_tool_still_has_no_broker_or_network_imports() -> None:
+    """Re-affirm the S58 safety scan after S59 additions."""
+    source = Path("src/tools/backtest_strategy_eval.py").read_text(encoding="utf-8")
+    for tok in ("alpaca", "requests", "httpx", "urllib.request", "socket"):
+        assert tok not in source, (
+            f"backtest_strategy_eval must not depend on {tok!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# S59 review — warmup-fit validation
+# ---------------------------------------------------------------------------
+
+
+def test_wf_rejects_train_shorter_than_max_long_window() -> None:
+    """train_bars must be >= max(long_windows) + 1 so every test window
+    can receive full SMA warmup — no silent shortening allowed."""
+    bars = _bars_from_closes([float(c) for c in range(1, 501)])
+    with pytest.raises(BacktestError, match="wf_train_bars"):
+        bse.run_walk_forward(
+            bars, symbol="SPY", interval="60m",
+            baseline_short=3, baseline_long=5,
+            short_windows=[3, 5], long_windows=[10, 50],
+            train_bars=50,   # < 51 required (max_long=50 → need 51)
+            test_bars=50, step_bars=50,
+        )
+
+
+def test_wf_train_exactly_max_long_plus_one_is_accepted() -> None:
+    """train_bars == max_long + 1 is the tightest allowed size."""
+    bars = _bars_from_closes([float(c) for c in range(1, 601)])
+    out = bse.run_walk_forward(
+        bars, symbol="SPY", interval="60m",
+        baseline_short=3, baseline_long=5,
+        short_windows=[3, 5], long_windows=[10, 20],
+        train_bars=21,   # exactly max_long (20) + 1
+        test_bars=50, step_bars=50,
+    )
+    # Should run without raising; may produce windows.
+    assert isinstance(out["windows"], list)
+
+
+def test_wf_train_shorter_than_baseline_long_rejected_even_without_sweep() -> None:
+    """When no sweep is provided, the baseline long_window is the max."""
+    bars = _bars_from_closes([float(c) for c in range(1, 501)])
+    with pytest.raises(BacktestError, match="wf_train_bars"):
+        bse.run_walk_forward(
+            bars, symbol="SPY", interval="60m",
+            baseline_short=5, baseline_long=30,
+            short_windows=None, long_windows=None,
+            train_bars=20,   # < 31 required
+            test_bars=50, step_bars=50,
+        )
+
+
+def test_wf_warmup_exactly_matches_selected_long_window() -> None:
+    """Every emitted test evaluation must have received exactly
+    selected_long_window prior bars as warmup."""
+    bars = _bars_from_closes([float(c) for c in range(1, 601)])
+    out = bse.run_walk_forward(
+        bars, symbol="SPY", interval="60m",
+        baseline_short=3, baseline_long=5,
+        short_windows=[3, 5], long_windows=[10, 20],
+        train_bars=100, test_bars=100, step_bars=100,
+    )
+    assert out["windows"]
+    for w in out["windows"]:
+        # If a trade opened in the test region, its entry_index must be
+        # >= the warmup boundary. The eval_slice length is
+        # warmup + test_bars, and evaluation_start_index = warmup =
+        # selected_long_window. Any open_entry_index (in eval-slice
+        # coordinates) must therefore be >= selected_long_window.
+        test_res = w["selected_test_result"]
+        expected_warmup = w["selected_long_window"]
+        # bar_count is n_eval = eval_slice_len - warmup = test_bars.
+        assert test_res["bar_count"] == w["test_bar_count"]
+        if test_res.get("open_position"):
+            assert test_res["open_entry_index"] >= expected_warmup
+
+
+def test_cli_wf_train_shorter_than_max_long_exits_2(
+    tmp_path: Path, capsys: pytest.CaptureFixture,
+) -> None:
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    _write_cache(cache_dir, [float(c) for c in range(1, 601)])
+    rc = bse.main([
+        "--cache-dir", str(cache_dir),
+        "--walk-forward",
+        "--wf-train-bars", "40",   # < max long (50) + 1
+        "--wf-test-bars", "50",
+        "--wf-step-bars", "50",
+        "--short-windows", "3,5",
+        "--long-windows", "10,50",
+        "--no-write",
+    ])
+    assert rc == 2
+    err = json.loads(capsys.readouterr().out)
+    assert "wf_train_bars" in err["error"]
+
+
+def test_wf_default_1600_400_400_configuration_still_accepted() -> None:
+    """Default 1600/400/400 with the standard 10/20 baseline must
+    continue to be a valid configuration."""
+    bars = _bars_from_closes([float(c) for c in range(1, 2101)])  # 2100 bars
+    out = bse.run_walk_forward(
+        bars, symbol="SPY", interval="60m",
+        baseline_short=10, baseline_long=20,
+        short_windows=None, long_windows=None,
+        train_bars=1600, test_bars=400, step_bars=400,
+    )
+    # 2100 bars produces one complete window: [0:1600] train, [1600:2000] test.
+    assert out["mode"] == "rolling_chronological"
+    assert out["train_bars"] == 1600
+    assert out["test_bars"] == 400
+    assert out["step_bars"] == 400
