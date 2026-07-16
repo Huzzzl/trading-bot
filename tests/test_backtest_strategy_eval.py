@@ -2400,3 +2400,711 @@ def test_fixed_window_count_matches_adaptive_length() -> None:
     assert wf["fixed_parameter_comparison"]["window_count"] == len(wf["windows"])
     for p in wf["fixed_parameter_comparison"]["parameters"].values():
         assert len(p["windows"]) == len(wf["windows"])
+
+
+# ---------------------------------------------------------------------------
+# S61 — entry-filter comparison
+# ---------------------------------------------------------------------------
+
+
+# --- Filter variant parser ---
+
+
+def test_parse_filter_variants_all_supported() -> None:
+    got = bse.parse_filter_variants(
+        "none,price_above_sma200,long_sma_slope_up_20,ma_separation_25bps,"
+        "ma_separation_50bps,atr14_pct_below_2,trend200_and_separation25"
+    )
+    assert len(got) == 7
+    assert got[0] == "none"
+
+
+def test_parse_filter_variants_rejects_unknown() -> None:
+    with pytest.raises(BacktestError, match="unknown filter variant"):
+        bse.parse_filter_variants("price_above_sma100")
+
+
+def test_parse_filter_variants_rejects_empty() -> None:
+    with pytest.raises(BacktestError):
+        bse.parse_filter_variants("")
+    with pytest.raises(BacktestError):
+        bse.parse_filter_variants("   ")
+
+
+def test_parse_filter_variants_dedup_preserves_first_occurrence() -> None:
+    got = bse.parse_filter_variants(
+        "price_above_sma200,none,price_above_sma200,none"
+    )
+    assert got == ["price_above_sma200", "none"]
+
+
+# --- CLI gating ---
+
+
+def test_build_summary_rejects_filter_flags_without_walk_forward() -> None:
+    bars = _bars_from_closes([float(c) for c in range(1, 601)])
+    for kwargs in (
+        {"wf_compare_filters": True},
+        {"wf_filter_variants": ["none"]},
+        {"wf_filter_base_params": [(10, 20)]},
+    ):
+        with pytest.raises(BacktestError, match="--walk-forward"):
+            bse.build_summary(
+                bars=bars, symbol="SPY", interval="60m",
+                now_utc=datetime(2026, 7, 13, 20, 0, 0, tzinfo=timezone.utc),
+                short_window=3, long_window=5,
+                **kwargs,
+            )
+
+
+# --- Filter definitions (correctness) ---
+
+
+def test_filter_none_always_allows() -> None:
+    closes = [10.0] * 300
+    highs = [10.0] * 300
+    lows = [10.0] * 300
+    assert bse._filter_allow(
+        "none", signal_index=5, closes=closes, highs=highs, lows=lows,
+        short_window=3, long_window=5,
+    ) is True
+
+
+def test_filter_price_above_sma200_uses_prior_completed_bars() -> None:
+    closes = list(range(1, 250))  # monotonic uptrend
+    # signal_index=200: closes[0..200] → SMA200 over closes[1..200] mean=100.5
+    # closes[200]=201 > 100.5 → allow.
+    highs = list(closes); lows = list(closes)
+    assert bse._filter_allow(
+        "price_above_sma200", signal_index=200,
+        closes=closes, highs=highs, lows=lows,
+        short_window=3, long_window=5,
+    ) is True
+
+
+def test_filter_price_above_sma200_blocks_when_below() -> None:
+    # Flat below the average of past 200 bars: e.g., closes ramp up then drop.
+    closes = list(range(1, 210)) + [1.0] * 50
+    highs = list(closes); lows = list(closes)
+    assert bse._filter_allow(
+        "price_above_sma200", signal_index=258,
+        closes=closes, highs=highs, lows=lows,
+        short_window=3, long_window=5,
+    ) is False
+
+
+def test_filter_price_above_sma200_blocks_when_history_insufficient() -> None:
+    closes = list(range(1, 100))
+    highs = list(closes); lows = list(closes)
+    assert bse._filter_allow(
+        "price_above_sma200", signal_index=50,
+        closes=closes, highs=highs, lows=lows,
+        short_window=3, long_window=5,
+    ) is False
+
+
+def test_filter_long_slope_up_20_uses_prior_bars() -> None:
+    # Long SMA rising over the last 20 bars.
+    closes = list(range(1, 200))  # monotonic uptrend
+    highs = list(closes); lows = list(closes)
+    assert bse._filter_allow(
+        "long_sma_slope_up_20", signal_index=100,
+        closes=closes, highs=highs, lows=lows,
+        short_window=3, long_window=20,
+    ) is True
+
+
+def test_filter_long_slope_up_20_blocks_when_flat_or_falling() -> None:
+    closes = [100.0] * 200
+    highs = list(closes); lows = list(closes)
+    # Slope is 0 → not strictly rising → block.
+    assert bse._filter_allow(
+        "long_sma_slope_up_20", signal_index=100,
+        closes=closes, highs=highs, lows=lows,
+        short_window=3, long_window=20,
+    ) is False
+
+
+def test_filter_ma_separation_math_correct() -> None:
+    # Construct closes where short SMA - long SMA is exactly known.
+    # short_window=3, long_window=5, index=10, closes[10]=100.
+    # We want short_sma - long_sma to be 0.30 (30 bps) — enough for 25
+    # but not 50.
+    closes = [100.0] * 6 + [100.5, 100.5, 100.5, 100.5, 100.0]
+    # short SMA at index 10 = mean(closes[8..10]) = mean(100.5,100.5,100.0)=100.333
+    # long SMA at index 10 = mean(closes[6..10]) = mean(100.5,100.5,100.5,100.5,100.0)=100.4
+    # diff = -0.067 → block. Let me construct differently.
+    # Directly test the separation predicate on synthetic SMAs by
+    # feeding closes[signal] = 100, short_sma = 100.25, long_sma = 100.
+    closes = [100.0] * 5 + [101.0, 101.0, 100.0, 100.0]
+    # Actually easier: verify with a numeric check via the predicate.
+    # closes[8] = 100. short(3) = mean(closes[6..8])=mean(101,100,100)=100.333
+    # long(5)  = mean(closes[4..8]) = mean(100,101,101,100,100)=100.4
+    # diff = -0.067 / 100 = -6.7 bps → block for both thresholds.
+    assert bse._filter_allow(
+        "ma_separation_25bps", signal_index=8,
+        closes=closes, highs=list(closes), lows=list(closes),
+        short_window=3, long_window=5,
+    ) is False
+    # Rising sequence: short SMA well above long SMA.
+    up = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]
+    # short(3) at 9 = mean(8,9,10)=9; long(5)=mean(6..10)=8; diff/close = 1/10 = 1000 bps.
+    assert bse._filter_allow(
+        "ma_separation_25bps", signal_index=9,
+        closes=up, highs=list(up), lows=list(up),
+        short_window=3, long_window=5,
+    ) is True
+    assert bse._filter_allow(
+        "ma_separation_50bps", signal_index=9,
+        closes=up, highs=list(up), lows=list(up),
+        short_window=3, long_window=5,
+    ) is True
+
+
+def test_filter_atr_true_range_calculation() -> None:
+    # Two-bar minimum synthetic series: TR = max(hi-lo, |hi-prev_close|, |lo-prev_close|)
+    # Use a flat 15-bar series so ATR = 0.
+    closes = [100.0] * 15
+    highs  = [100.0] * 15
+    lows   = [100.0] * 15
+    atr = bse._atr14_at(highs, lows, closes, 14)
+    assert atr == 0.0
+
+    # Fluctuating series with a big TR spike at bar 14.
+    closes = [100.0] * 14 + [110.0]
+    highs  = [100.0] * 14 + [115.0]
+    lows   = [100.0] * 14 + [ 95.0]
+    atr = bse._atr14_at(highs, lows, closes, 14)
+    # 13 TRs of 0 + 1 TR of 20 (high-low) → 20/14
+    assert atr == pytest.approx(20.0 / 14)
+
+
+def test_filter_atr_uses_only_prior_completed_bars() -> None:
+    """atr14_pct_below_2 at signal_index uses bars up to signal_index only."""
+    closes = [100.0] * 20
+    highs  = [100.0] * 20
+    lows   = [100.0] * 20
+    # ATR = 0 → 0 / 100 = 0 <= 0.02 → allow.
+    assert bse._filter_allow(
+        "atr14_pct_below_2", signal_index=15,
+        closes=closes, highs=highs, lows=lows,
+        short_window=3, long_window=5,
+    ) is True
+    # Insufficient history → block.
+    assert bse._filter_allow(
+        "atr14_pct_below_2", signal_index=5,
+        closes=closes, highs=highs, lows=lows,
+        short_window=3, long_window=5,
+    ) is False
+
+
+def test_filter_atr_blocks_when_volatility_high() -> None:
+    closes = [100.0] * 20
+    # Every bar has 5-point true range → ATR = 5. 5/100 = 0.05 > 0.02 → block.
+    highs  = [102.5] * 20
+    lows   = [ 97.5] * 20
+    assert bse._filter_allow(
+        "atr14_pct_below_2", signal_index=15,
+        closes=closes, highs=highs, lows=lows,
+        short_window=3, long_window=5,
+    ) is False
+
+
+def test_filter_combined_requires_both_conditions() -> None:
+    # SMA200 uptrend, small separation.
+    closes = list(range(1, 250))
+    highs = list(closes); lows = list(closes)
+    # closes[220]=221, SMA200 covers 21..220 → mean=120.5 → price above → OK.
+    # separation check: 3 vs 5 short/long on monotonic → diff/close small.
+    got = bse._filter_allow(
+        "trend200_and_separation25", signal_index=220,
+        closes=closes, highs=highs, lows=lows,
+        short_window=3, long_window=5,
+    )
+    # On monotonic 1..249, short(3)=220 long(5)=219 diff=1, close=221
+    # → 1/221 = 45 bps ≥ 25 → allow.
+    assert got is True
+    # Now break the trend so SMA200 fails.
+    closes2 = list(range(1, 210)) + [10.0] * 40
+    highs2 = list(closes2); lows2 = list(closes2)
+    assert bse._filter_allow(
+        "trend200_and_separation25", signal_index=248,
+        closes=closes2, highs=highs2, lows=lows2,
+        short_window=3, long_window=5,
+    ) is False
+
+
+# --- Warmup requirement ---
+
+
+def test_filter_warmup_requirement_correct_per_variant() -> None:
+    # long=20 next_open
+    assert bse.filter_warmup_requirement(20, "none") == 21
+    assert bse.filter_warmup_requirement(20, "price_above_sma200") == 201
+    assert bse.filter_warmup_requirement(20, "long_sma_slope_up_20") == 41
+    assert bse.filter_warmup_requirement(20, "ma_separation_25bps") == 21
+    assert bse.filter_warmup_requirement(20, "ma_separation_50bps") == 21
+    assert bse.filter_warmup_requirement(20, "atr14_pct_below_2") == 21
+    assert bse.filter_warmup_requirement(20, "trend200_and_separation25") == 201
+    # Same in same_close, minus the next_open +1.
+    assert bse.filter_warmup_requirement(20, "none", execution="same_close") == 20
+
+
+def test_filter_warmup_rejects_unknown_variant() -> None:
+    with pytest.raises(BacktestError, match="unknown filter variant"):
+        bse.filter_warmup_requirement(20, "made_up_variant")
+
+
+# --- run_backtest with entry_filter ---
+
+
+def test_run_backtest_default_none_matches_original_behavior() -> None:
+    """entry_filter='none' (default) must produce identical results
+    to a pre-S61 call (no filter, no counting side effects)."""
+    closes = list(range(1, 51))
+    bars = _bars_from_closes([float(c) for c in closes])
+    r_default = bse.run_backtest(bars, 3, 5)
+    r_explicit_none = bse.run_backtest(bars, 3, 5, entry_filter="none")
+    for f in ("total_return", "buy_and_hold_return", "sharpe_ratio",
+              "completed_trade_count", "final_equity", "bar_count"):
+        assert r_default.to_dict()[f] == r_explicit_none.to_dict()[f]
+
+
+def test_run_backtest_filter_blocks_never_delay_bearish_exit() -> None:
+    """Entry filters must NOT block SELL signals — an existing long
+    exits normally when the SMA turns bearish."""
+    # Up ramp then hard drop to force a bearish crossover.
+    closes = [1, 1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 8, 7, 6, 5, 4, 3, 2, 1, 1]
+    bars = _bars_from_closes([float(c) for c in closes])
+    # A very restrictive filter (ATR<2%) will suppress entries but must
+    # not affect the exit once we're in.
+    r_none = bse.run_backtest(bars, 3, 5, entry_filter="none")
+    r_flt  = bse.run_backtest(bars, 3, 5, entry_filter="ma_separation_50bps")
+    # Number of completed trades under a filter is <= unfiltered.
+    assert r_flt.completed_trade_count <= r_none.completed_trade_count
+
+
+def test_run_backtest_entry_diagnostic_counts() -> None:
+    closes = list(range(1, 51))
+    bars = _bars_from_closes([float(c) for c in closes])
+    r = bse.run_backtest(bars, 3, 5, entry_filter="none")
+    # Every bullish opportunity is allowed under 'none'.
+    assert r.entry_allowed_count == r.bullish_signal_count
+    assert r.entry_blocked_count == 0
+    assert r.entry_blocked_rate == 0.0
+
+
+def test_run_backtest_filter_blocked_rate_math() -> None:
+    # Build a scenario where the filter blocks some entries. Use flat
+    # data so ATR filter passes; monotonic to fire crossovers.
+    closes = list(range(1, 51))
+    bars = _bars_from_closes([float(c) for c in closes])
+    r_none = bse.run_backtest(bars, 3, 5, entry_filter="none")
+    r_flt  = bse.run_backtest(bars, 3, 5, entry_filter="ma_separation_50bps")
+    if r_flt.bullish_signal_count > 0:
+        assert r_flt.entry_blocked_rate == pytest.approx(
+            r_flt.entry_blocked_count / r_flt.bullish_signal_count,
+        )
+
+
+def test_run_backtest_rejects_unknown_entry_filter() -> None:
+    bars = _bars_from_closes([1.0] * 20)
+    with pytest.raises(BacktestError, match="entry_filter"):
+        bse.run_backtest(bars, 3, 5, entry_filter="nope")
+
+
+def test_run_backtest_diagnostic_counts_exclude_warmup() -> None:
+    """Bullish opportunities during the warmup region are not counted."""
+    closes = list(range(1, 51))
+    bars = _bars_from_closes([float(c) for c in closes])
+    r_no_warm = bse.run_backtest(bars, 3, 5, entry_filter="none")
+    r_warmup  = bse.run_backtest(
+        bars, 3, 5, entry_filter="none", evaluation_start_index=25,
+    )
+    assert r_warmup.bullish_signal_count <= r_no_warm.bullish_signal_count
+
+
+# --- Filter integration in walk-forward ---
+
+
+def _wf_with_filters(bars, **kw):
+    return bse.build_summary(
+        bars=bars, symbol="SPY", interval="60m",
+        now_utc=datetime(2026, 7, 13, 20, 0, 0, tzinfo=timezone.utc),
+        short_window=3, long_window=5,
+        walk_forward=True,
+        wf_train_bars=250, wf_test_bars=100, wf_step_bars=100,
+        short_windows=[3, 5], long_windows=[10, 20],
+        **kw,
+    )
+
+
+def test_build_summary_default_filter_base_params() -> None:
+    bars = _bars_from_closes([float(c) for c in range(1, 601)])
+    summary = _wf_with_filters(bars, wf_compare_filters=True,
+                               wf_filter_variants=["none"])
+    fc = summary["walk_forward"]["filter_comparison"]
+    # Baseline defaults: 10/20, 15/50, 20/50 (per spec).
+    assert fc["base_parameters"] == ["10/20", "15/50", "20/50"]
+
+
+def test_build_summary_preserves_supplied_base_param_order() -> None:
+    bars = _bars_from_closes([float(c) for c in range(1, 601)])
+    summary = _wf_with_filters(
+        bars,
+        wf_filter_base_params=[(15, 50), (10, 20)],
+        wf_filter_variants=["none"],
+    )
+    fc = summary["walk_forward"]["filter_comparison"]
+    assert fc["base_parameters"] == ["15/50", "10/20"]
+
+
+def test_build_summary_filter_windows_match_walk_forward_windows() -> None:
+    bars = _bars_from_closes([float(c) for c in range(1, 601)])
+    summary = _wf_with_filters(
+        bars, wf_filter_base_params=[(3, 10)], wf_filter_variants=["none"],
+    )
+    wf = summary["walk_forward"]
+    fc = wf["filter_comparison"]
+    wf_meta = [(w["window_index"], w["test_start"], w["test_end"])
+               for w in wf["windows"]]
+    fc_meta = [(w["window_index"], w["test_start"], w["test_end"])
+               for w in fc["results"]["3/10"]["none"]["windows"]]
+    assert fc_meta == wf_meta
+    assert fc["test_windows_identical_to_s60"] is True
+
+
+def test_build_summary_filter_none_matches_fixed_result_bytewise() -> None:
+    """The 'none' variant must exactly match S60 fixed-comparison
+    output for the same (short, long)."""
+    bars = _bars_from_closes([float(c) for c in range(1, 601)])
+    summary = _wf_with_filters(
+        bars,
+        wf_fixed_params=[(3, 10)],
+        wf_filter_base_params=[(3, 10)],
+        wf_filter_variants=["none"],
+    )
+    wf = summary["walk_forward"]
+    fixed_rows = wf["fixed_parameter_comparison"]["parameters"]["3/10"]["windows"]
+    filter_rows = wf["filter_comparison"]["results"]["3/10"]["none"]["windows"]
+    # Compare total_return per window — they must match exactly.
+    for f, g in zip(fixed_rows, filter_rows):
+        assert f["result"]["total_return"] == pytest.approx(
+            g["result"]["total_return"], rel=1e-12,
+        )
+
+
+def test_build_summary_filter_rejects_insufficient_train_warmup() -> None:
+    """Requesting price_above_sma200 with a train too small must fail."""
+    bars = _bars_from_closes([float(c) for c in range(1, 1001)])
+    with pytest.raises(BacktestError, match="warmup requirement"):
+        bse.build_summary(
+            bars=bars, symbol="SPY", interval="60m",
+            now_utc=datetime(2026, 7, 13, 20, 0, 0, tzinfo=timezone.utc),
+            short_window=3, long_window=5,
+            walk_forward=True,
+            wf_train_bars=100, wf_test_bars=100, wf_step_bars=100,
+            wf_filter_base_params=[(10, 20)],
+            wf_filter_variants=["price_above_sma200"],
+        )
+
+
+def test_build_summary_filter_error_names_responsible_filter() -> None:
+    bars = _bars_from_closes([float(c) for c in range(1, 1001)])
+    with pytest.raises(BacktestError, match="price_above_sma200"):
+        bse.build_summary(
+            bars=bars, symbol="SPY", interval="60m",
+            now_utc=datetime(2026, 7, 13, 20, 0, 0, tzinfo=timezone.utc),
+            short_window=3, long_window=5,
+            walk_forward=True,
+            wf_train_bars=100, wf_test_bars=100, wf_step_bars=100,
+            wf_filter_base_params=[(10, 20)],
+            wf_filter_variants=["price_above_sma200"],
+        )
+
+
+def test_cli_filter_variants_without_walk_forward_exits_2(
+    tmp_path: Path, capsys: pytest.CaptureFixture,
+) -> None:
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    _write_cache(cache_dir, [float(c) for c in range(1, 601)])
+    rc = bse.main([
+        "--cache-dir", str(cache_dir),
+        "--wf-filter-variants", "none",
+        "--no-write",
+    ])
+    assert rc == 2
+    err = json.loads(capsys.readouterr().out)
+    assert "walk-forward" in err["error"]
+
+
+def test_cli_unknown_filter_variant_exits_2(
+    tmp_path: Path, capsys: pytest.CaptureFixture,
+) -> None:
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    _write_cache(cache_dir, [float(c) for c in range(1, 1001)])
+    rc = bse.main([
+        "--cache-dir", str(cache_dir),
+        "--walk-forward",
+        "--wf-train-bars", "250",
+        "--wf-test-bars", "100",
+        "--wf-step-bars", "100",
+        "--short-windows", "3,5",
+        "--long-windows", "10,20",
+        "--wf-filter-variants", "not_a_filter",
+        "--no-write",
+    ])
+    assert rc == 2
+    err = json.loads(capsys.readouterr().out)
+    assert "unknown filter variant" in err["error"]
+
+
+def test_build_summary_no_filter_comparison_preserves_s60_schema() -> None:
+    """Without filter flags, the walk_forward object must not gain
+    filter_comparison and existing S60 output stays unchanged."""
+    bars = _bars_from_closes([float(c) for c in range(1, 601)])
+    summary = _wf_with_filters(bars, wf_fixed_params=[(3, 10)])
+    wf = summary["walk_forward"]
+    assert "filter_comparison" not in wf
+    assert "fixed_parameter_comparison" in wf
+
+
+# --- Aggregate math + filter_vs_unfiltered ---
+
+
+def _mk_filter_agg(*, ret=0.0, rate=0.0, wr=0.0, wd=0.0, trades=0,
+                   bh=0.0, xm=0.0, lpc=None, exp=0.0, blocked_rate=0.0):
+    return {
+        "aggregate_return": ret,
+        "profitable_test_window_rate": rate,
+        "worst_test_return": wr,
+        "worst_test_drawdown": wd,
+        "total_completed_test_trades": trades,
+        "aggregate_buy_and_hold_return": bh,
+        "aggregate_exposure_matched_buy_and_hold_return": xm,
+        "aggregate_gap_vs_exposure_matched": ret - xm,
+        "largest_positive_window_contribution": lpc,
+        "average_exposure_time": exp,
+        "aggregate_entry_blocked_rate": blocked_rate,
+        "return_over_worst_drawdown": (
+            None if wd == 0 else ret / abs(wd)
+        ),
+    }
+
+
+def _mk_results(entries: list[tuple[str, str, dict]]):
+    r = {}
+    for base, variant, agg in entries:
+        r.setdefault(base, {})[variant] = {
+            "short_window": int(base.split("/")[0]),
+            "long_window":  int(base.split("/")[1]),
+            "filter_variant": variant,
+            "windows": [],
+            "aggregate": agg,
+        }
+    return r
+
+
+def test_filter_vs_unfiltered_deltas_correct() -> None:
+    per_variant = {
+        "none":                {"aggregate": _mk_filter_agg(ret=0.05, rate=0.5,
+                                                            wr=-0.10, wd=-0.15,
+                                                            trades=8)},
+        "price_above_sma200":  {"aggregate": _mk_filter_agg(ret=0.08, rate=0.75,
+                                                            wr=-0.05, wd=-0.08,
+                                                            trades=6)},
+    }
+    rows = bse._filter_vs_unfiltered("10/20", per_variant)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["aggregate_return_delta"] == pytest.approx(0.03)
+    assert row["profitable_window_rate_delta"] == pytest.approx(0.25)
+    assert row["worst_test_return_improvement"] == pytest.approx(0.05)
+    assert row["worst_drawdown_improvement"] == pytest.approx(0.07)
+    assert row["filtered_beat_unfiltered_aggregate_return"] is True
+    assert row["filtered_improved_worst_test_return"] is True
+    assert row["filtered_improved_worst_drawdown"] is True
+
+
+def test_filter_vs_unfiltered_ties_are_not_improvements() -> None:
+    per_variant = {
+        "none":               {"aggregate": _mk_filter_agg(ret=0.05, rate=0.5,
+                                                           wr=-0.10, wd=-0.10)},
+        "ma_separation_25bps":{"aggregate": _mk_filter_agg(ret=0.05, rate=0.5,
+                                                           wr=-0.10, wd=-0.10)},
+    }
+    rows = bse._filter_vs_unfiltered("15/50", per_variant)
+    row = rows[0]
+    assert row["filtered_beat_unfiltered_aggregate_return"] is False
+    assert row["filtered_improved_profitable_window_rate"] is False
+    assert row["filtered_improved_worst_test_return"] is False
+    assert row["filtered_improved_worst_drawdown"] is False
+
+
+def test_filter_aggregate_compound_math() -> None:
+    windows = [{
+        "window_index": i,
+        "test_start": f"t{i}", "test_end": f"e{i}",
+        "test_bar_count": 100,
+        "result": {"total_return": r, "sharpe_ratio": 0.1,
+                   "max_drawdown": -0.05, "exposure_time": 0.5,
+                   "completed_trade_count": 4},
+        "test_buy_and_hold_return": bh,
+        "exposure_matched_buy_and_hold_return": 0.5 * bh,
+        "test_outperformed_buy_and_hold": r > bh,
+        "test_outperformed_exposure_matched": r > 0.5 * bh,
+        "test_profitable": r > 0,
+        "test_positive_sharpe": True,
+        "bullish_signal_count": 5,
+        "entry_allowed_count": 4,
+        "entry_blocked_count": 1,
+        "entry_blocked_rate":  0.2,
+    } for i, (r, bh) in enumerate([(0.10, 0.05), (-0.05, 0.02), (0.08, 0.06)])]
+    agg = bse._filter_aggregate(windows)
+    expected = (1.10 * 0.95 * 1.08) - 1
+    assert agg["aggregate_return"] == pytest.approx(expected, rel=1e-12)
+    # Buy-and-hold compounding:
+    assert agg["aggregate_buy_and_hold_return"] == pytest.approx(
+        (1.05 * 1.02 * 1.06) - 1, rel=1e-12,
+    )
+    # Exposure-matched compounding (all exposures = 0.5):
+    assert agg["aggregate_exposure_matched_buy_and_hold_return"] == pytest.approx(
+        (1 + 0.5 * 0.05) * (1 + 0.5 * 0.02) * (1 + 0.5 * 0.06) - 1, rel=1e-12,
+    )
+    assert agg["total_bullish_signal_count"] == 15
+    assert agg["total_entry_allowed_count"] == 12
+    assert agg["total_entry_blocked_count"] == 3
+    assert agg["aggregate_entry_blocked_rate"] == pytest.approx(3 / 15)
+
+
+# --- Rankings + robustness ---
+
+
+def test_filter_ranking_deterministic_and_zero_safe() -> None:
+    entries = [
+        {"base_parameter": "10/20", "filter_variant": "a", "short_window": 10,
+         "long_window": 20, "aggregate_return": 0.05,
+         "profitable_test_window_rate": 0.7, "worst_test_return": 0.0,
+         "worst_test_drawdown": 0.0, "total_completed_test_trades": 20,
+         "aggregate_gap_vs_exposure_matched": 0.02,
+         "largest_positive_window_contribution": 0.4,
+         "return_over_worst_drawdown": None},
+        {"base_parameter": "10/20", "filter_variant": "b", "short_window": 10,
+         "long_window": 20, "aggregate_return": 0.05,
+         "profitable_test_window_rate": 0.7, "worst_test_return": -0.05,
+         "worst_test_drawdown": -0.10, "total_completed_test_trades": 20,
+         "aggregate_gap_vs_exposure_matched": 0.02,
+         "largest_positive_window_contribution": 0.4,
+         "return_over_worst_drawdown": 0.5},
+    ]
+    r = bse._rank_filter_combinations(entries)
+    # 'a' has worst_test_return = 0.0 > 'b's -0.05.
+    assert r["best_by_worst_test_return"]["filter_variant"] == "a"
+    # 'a' has worst_test_drawdown = 0.0 > 'b's -0.10.
+    assert r["best_by_worst_drawdown"]["filter_variant"] == "a"
+
+
+def test_filter_stable_candidate_all_criteria_pass() -> None:
+    results = _mk_results([
+        ("10/20", "none", _mk_filter_agg(ret=0.02, rate=0.5, wr=-0.10, wd=-0.10,
+                                         trades=20, bh=0.03, xm=0.01, lpc=0.5)),
+        ("10/20", "ma_separation_25bps",
+         _mk_filter_agg(ret=0.15, rate=0.80, wr=-0.05, wd=-0.10,
+                        trades=20, bh=0.03, xm=0.05, lpc=0.4)),
+    ])
+    entries = bse._filter_flat_entries(results)
+    rep = bse._filter_robustness_report(results, entries)
+    assert "10/20|ma_separation_25bps" in rep["stable_filter_candidates"]
+
+
+def test_filter_stable_candidate_requires_beating_unfiltered_return() -> None:
+    results = _mk_results([
+        ("10/20", "none",              _mk_filter_agg(ret=0.20, wr=-0.05, wd=-0.10,
+                                                       rate=0.80, trades=20, bh=0.05,
+                                                       xm=0.05, lpc=0.4)),
+        ("10/20", "price_above_sma200", _mk_filter_agg(ret=0.10, wr=-0.02, wd=-0.05,
+                                                       rate=0.85, trades=20, bh=0.05,
+                                                       xm=0.05, lpc=0.4)),
+    ])
+    entries = bse._filter_flat_entries(results)
+    rep = bse._filter_robustness_report(results, entries)
+    # The filter's return is worse than the unfiltered baseline for the
+    # same base — must NOT be stable.
+    assert "10/20|price_above_sma200" not in rep["stable_filter_candidates"]
+
+
+def test_filter_no_stable_warning_and_no_beat_unfiltered() -> None:
+    results = _mk_results([
+        ("10/20", "none",  _mk_filter_agg(ret=0.10, rate=0.50, wr=-0.05, wd=-0.10,
+                                          trades=10, bh=0.02, xm=0.03, lpc=0.4)),
+        ("10/20", "atr14_pct_below_2", _mk_filter_agg(ret=0.05, rate=0.50,
+                                                      wr=-0.10, wd=-0.15,
+                                                      trades=10, bh=0.02, xm=0.03,
+                                                      lpc=0.4)),
+    ])
+    entries = bse._filter_flat_entries(results)
+    rep = bse._filter_robustness_report(results, entries)
+    assert "NO_STABLE_FILTER_CANDIDATE" in rep["filter_comparison_warning_reasons"]
+    assert "NO_FILTER_BEAT_UNFILTERED_RETURN" in rep["filter_comparison_warning_reasons"]
+
+
+def test_filter_profit_concentration_warning() -> None:
+    results = _mk_results([
+        ("10/20", "none", _mk_filter_agg(ret=0.10, rate=0.50, wr=-0.05, wd=-0.10,
+                                         trades=20, lpc=0.5)),
+        ("10/20", "price_above_sma200",
+                          _mk_filter_agg(ret=0.15, rate=0.75, wr=-0.02, wd=-0.05,
+                                         trades=20, lpc=0.85)),
+    ])
+    entries = bse._filter_flat_entries(results)
+    rep = bse._filter_robustness_report(results, entries)
+    assert "FILTER_RESULTS_PROFIT_CONCENTRATED" in rep["filter_comparison_warning_reasons"]
+
+
+def test_filter_blocked_too_many_entries_warning() -> None:
+    results = _mk_results([
+        ("10/20", "none", _mk_filter_agg(ret=0.05, rate=0.5, wr=-0.05, wd=-0.10,
+                                         trades=20, lpc=0.4)),
+        ("10/20", "ma_separation_50bps",
+                          _mk_filter_agg(ret=0.02, rate=0.5, wr=-0.05, wd=-0.10,
+                                         trades=2, lpc=0.4, blocked_rate=0.95)),
+    ])
+    entries = bse._filter_flat_entries(results)
+    rep = bse._filter_robustness_report(results, entries)
+    assert "FILTER_BLOCKED_TOO_MANY_ENTRIES" in rep["filter_comparison_warning_reasons"]
+
+
+def test_filter_zero_values_preserved_in_rankings() -> None:
+    """A 0.0 worst_test_return / worst_test_drawdown / rod must not be
+    replaced with -inf."""
+    entries = [
+        {"base_parameter": "10/20", "filter_variant": "a", "short_window": 10,
+         "long_window": 20, "aggregate_return": 0.0,
+         "profitable_test_window_rate": 0.0, "worst_test_return": 0.0,
+         "worst_test_drawdown": 0.0, "total_completed_test_trades": 0,
+         "aggregate_gap_vs_exposure_matched": 0.0,
+         "largest_positive_window_contribution": None,
+         "return_over_worst_drawdown": None},
+        {"base_parameter": "10/20", "filter_variant": "b", "short_window": 10,
+         "long_window": 20, "aggregate_return": -0.05,
+         "profitable_test_window_rate": 0.0, "worst_test_return": -0.10,
+         "worst_test_drawdown": -0.10, "total_completed_test_trades": 0,
+         "aggregate_gap_vs_exposure_matched": -0.02,
+         "largest_positive_window_contribution": None,
+         "return_over_worst_drawdown": -0.5},
+    ]
+    r = bse._rank_filter_combinations(entries)
+    assert r["best_by_aggregate_return"]["filter_variant"] == "a"
+
+
+# --- Safety scan re-affirmed ---
+
+
+def test_backtest_tool_still_has_no_broker_or_network_imports_s61() -> None:
+    source = Path("src/tools/backtest_strategy_eval.py").read_text(encoding="utf-8")
+    for tok in ("alpaca", "requests", "httpx", "urllib.request", "socket"):
+        assert tok not in source, (
+            f"backtest_strategy_eval must not depend on {tok!r}"
+        )

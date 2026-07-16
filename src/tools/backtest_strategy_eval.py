@@ -210,6 +210,11 @@ class BacktestResult:
     open_entry_price: float | None
     open_entry_index: int | None
     open_unrealized_return: float | None
+    entry_filter: str = "none"
+    bullish_signal_count: int = 0
+    entry_allowed_count: int = 0
+    entry_blocked_count: int = 0
+    entry_blocked_rate: float = 0.0
     trades: list[Trade] = field(default_factory=list)
 
     def to_dict(self, include_trades: bool = False) -> dict[str, Any]:
@@ -236,6 +241,11 @@ class BacktestResult:
             "open_entry_price": self.open_entry_price,
             "open_entry_index": self.open_entry_index,
             "open_unrealized_return": self.open_unrealized_return,
+            "entry_filter": self.entry_filter,
+            "bullish_signal_count": self.bullish_signal_count,
+            "entry_allowed_count": self.entry_allowed_count,
+            "entry_blocked_count": self.entry_blocked_count,
+            "entry_blocked_rate": self.entry_blocked_rate,
         }
         if include_trades:
             out["trades"] = [
@@ -291,6 +301,173 @@ def sma_crossover_signal(
 _EXECUTION_MODES = ("next_open", "same_close")
 
 
+# ---------------------------------------------------------------------------
+# S61 — entry filters
+# ---------------------------------------------------------------------------
+#
+# Entry filters gate NEW LONG entries only. They must never delay or
+# block an existing bearish SMA exit — the ordinary crossover rule
+# stays authoritative for exits. Every filter uses only information
+# available through the signal bar; under next_open that signal bar is
+# ``i - 1``, so the filter reads at most closes/highs/lows[0..i-1].
+
+_FILTER_VARIANTS = (
+    "none",
+    "price_above_sma200",
+    "long_sma_slope_up_20",
+    "ma_separation_25bps",
+    "ma_separation_50bps",
+    "atr14_pct_below_2",
+    "trend200_and_separation25",
+)
+
+_DEFAULT_FILTER_BASE_PARAMS: tuple[tuple[int, int], ...] = (
+    (10, 20),   # current paper baseline
+    (15, 50),   # best S60 fixed aggregate return
+    (20, 50),   # best S60 worst-window return
+)
+
+
+def parse_filter_variants(raw: str) -> list[str]:
+    """Parse a comma-separated filter list against the allowlist.
+
+    First occurrence wins on duplicates. Unknown or blank entries
+    raise :class:`BacktestError`.
+    """
+    if not isinstance(raw, str) or not raw.strip():
+        raise BacktestError("wf-filter-variants must be a non-empty string")
+    parts = [p.strip() for p in raw.split(",") if p.strip()]
+    seen: set[str] = set()
+    out: list[str] = []
+    for p in parts:
+        if p not in _FILTER_VARIANTS:
+            raise BacktestError(
+                f"unknown filter variant: {p!r}; allowed: {list(_FILTER_VARIANTS)}"
+            )
+        if p in seen:
+            continue
+        seen.add(p)
+        out.append(p)
+    if not out:
+        raise BacktestError("wf-filter-variants yielded no valid entries")
+    return out
+
+
+def _atr14_at(
+    highs: Sequence[float],
+    lows: Sequence[float],
+    closes: Sequence[float],
+    index: int,
+) -> float | None:
+    """Standard 14-period ATR at ``index`` using true-range averaging.
+
+    Each true range needs the previous close, so index 0 cannot be
+    used. Requires 14 complete true ranges (bars 1..14 minimum).
+    Returns ``None`` when not enough history exists.
+    """
+    if index < 14:
+        return None
+    total = 0.0
+    for k in range(index - 13, index + 1):
+        if k <= 0:
+            return None
+        tr = max(
+            highs[k] - lows[k],
+            abs(highs[k] - closes[k - 1]),
+            abs(lows[k] - closes[k - 1]),
+        )
+        total += tr
+    return total / 14
+
+
+def _filter_allow(
+    variant: str,
+    *,
+    signal_index: int,
+    closes: Sequence[float],
+    highs: Sequence[float],
+    lows: Sequence[float],
+    short_window: int,
+    long_window: int,
+) -> bool:
+    """Return ``True`` iff ``variant`` allows a new long entry given
+    the SMA-crossover BUY signal at ``signal_index``.
+
+    Filters read only bars through ``signal_index`` — under next_open
+    that is ``i - 1`` for an order that fills at bar ``i``'s open, so
+    no future information leaks.
+    """
+    if variant == "none":
+        return True
+
+    def _price_above_sma200() -> bool:
+        sma200 = _sma(closes, 200, signal_index)
+        if sma200 is None:
+            return False
+        return closes[signal_index] > sma200
+
+    def _long_slope_up_20() -> bool:
+        current = _sma(closes, long_window, signal_index)
+        earlier = _sma(closes, long_window, signal_index - 20)
+        if current is None or earlier is None:
+            return False
+        return current > earlier
+
+    def _separation(threshold_bps: float) -> bool:
+        ss = _sma(closes, short_window, signal_index)
+        ls = _sma(closes, long_window, signal_index)
+        prev = closes[signal_index]
+        if ss is None or ls is None or prev <= 0:
+            return False
+        return (ss - ls) / prev >= threshold_bps / 10_000.0
+
+    def _atr_below() -> bool:
+        atr = _atr14_at(highs, lows, closes, signal_index)
+        prev = closes[signal_index]
+        if atr is None or prev <= 0:
+            return False
+        return atr / prev <= 0.02
+
+    if variant == "price_above_sma200":
+        return _price_above_sma200()
+    if variant == "long_sma_slope_up_20":
+        return _long_slope_up_20()
+    if variant == "ma_separation_25bps":
+        return _separation(25)
+    if variant == "ma_separation_50bps":
+        return _separation(50)
+    if variant == "atr14_pct_below_2":
+        return _atr_below()
+    if variant == "trend200_and_separation25":
+        return _price_above_sma200() and _separation(25)
+    raise BacktestError(f"unknown filter variant: {variant!r}")
+
+
+def filter_warmup_requirement(
+    long_window: int,
+    variant: str,
+    *,
+    execution: str = "next_open",
+) -> int:
+    """Bars of history a filter needs before the first executable test bar.
+
+    Combines the base SMA requirement with any filter-specific need
+    (SMA200, long_window + 20 for the slope check, 15 for ATR14) and
+    adds 1 when the caller uses ``next_open`` execution.
+    """
+    if variant not in _FILTER_VARIANTS:
+        raise BacktestError(f"unknown filter variant: {variant!r}")
+    reqs = [long_window]
+    if variant in ("price_above_sma200", "trend200_and_separation25"):
+        reqs.append(200)
+    if variant == "long_sma_slope_up_20":
+        reqs.append(long_window + 20)
+    if variant == "atr14_pct_below_2":
+        reqs.append(15)
+    base = max(reqs)
+    return base + (1 if execution == "next_open" else 0)
+
+
 def run_backtest(
     bars: Sequence[Bar],
     short_window: int,
@@ -302,6 +479,7 @@ def run_backtest(
     commission_bps: float = 0.0,
     slippage_bps: float = 0.0,
     evaluation_start_index: int = 0,
+    entry_filter: str = "none",
 ) -> BacktestResult:
     """Replay the SMA crossover rule bar by bar.
 
@@ -361,8 +539,15 @@ def run_backtest(
             f"evaluation_start_index must be in [0, len(bars)), got "
             f"{evaluation_start_index} for {len(bars)} bars"
         )
+    if entry_filter not in _FILTER_VARIANTS:
+        raise BacktestError(
+            f"entry_filter must be one of {_FILTER_VARIANTS}, "
+            f"got {entry_filter!r}"
+        )
 
     closes = [b.close for b in bars]
+    highs = [b.high for b in bars]
+    lows = [b.low for b in bars]
     n = len(bars)
     cost_factor = (commission_bps + slippage_bps) / 10_000.0
 
@@ -373,6 +558,8 @@ def run_backtest(
     entry_index: int | None = None
     cash = initial_equity
     exposed_bars = 0
+    bullish_signal_count = 0
+    entry_allowed_count = 0
 
     def _buy_fill_price(bar: Bar) -> float:
         return bar.close if execution == "same_close" else bar.open
@@ -404,13 +591,27 @@ def run_backtest(
             continue
 
         if signal == "BUY" and not has_position:
-            raw = _buy_fill_price(bar)
-            effective = raw * (1 + cost_factor)
-            if effective > 0:
-                position_qty = cash / effective
-                cash = 0.0
-                entry_price = effective
-                entry_index = i
+            bullish_signal_count += 1
+            # Under next_open, the signal is generated at bar i-1 and
+            # fills at bar i's open — the filter reads the same
+            # signal_index. Under same_close, both the signal and the
+            # fill happen at bar i.
+            signal_index = i - 1 if execution == "next_open" else i
+            allowed = _filter_allow(
+                entry_filter,
+                signal_index=signal_index,
+                closes=closes, highs=highs, lows=lows,
+                short_window=short_window, long_window=long_window,
+            ) if signal_index >= 0 else False
+            if allowed:
+                entry_allowed_count += 1
+                raw = _buy_fill_price(bar)
+                effective = raw * (1 + cost_factor)
+                if effective > 0:
+                    position_qty = cash / effective
+                    cash = 0.0
+                    entry_price = effective
+                    entry_index = i
         elif signal == "SELL" and has_position:
             raw = _sell_fill_price(bar)
             effective = raw * (1 - cost_factor)
@@ -496,6 +697,12 @@ def run_backtest(
     evaluated_bars = n - evaluation_start_index
     exposure_time = exposed_bars / evaluated_bars if evaluated_bars else 0.0
 
+    entry_blocked_count = bullish_signal_count - entry_allowed_count
+    entry_blocked_rate = (
+        entry_blocked_count / bullish_signal_count
+        if bullish_signal_count > 0 else 0.0
+    )
+
     return BacktestResult(
         short_window=short_window,
         long_window=long_window,
@@ -519,6 +726,11 @@ def run_backtest(
         open_entry_price=open_entry_price,
         open_entry_index=open_entry_index,
         open_unrealized_return=open_unrealized_return,
+        entry_filter=entry_filter,
+        bullish_signal_count=bullish_signal_count,
+        entry_allowed_count=entry_allowed_count,
+        entry_blocked_count=entry_blocked_count,
+        entry_blocked_rate=entry_blocked_rate,
         trades=trades,
     )
 
@@ -721,6 +933,9 @@ def build_summary(
     wf_selection_metric: str = "total_return",
     wf_fixed_params: Sequence[tuple[int, int]] | None = None,
     wf_compare_fixed: bool = False,
+    wf_filter_base_params: Sequence[tuple[int, int]] | None = None,
+    wf_filter_variants: Sequence[str] | None = None,
+    wf_compare_filters: bool = False,
 ) -> dict[str, Any]:
     if walk_forward and split_ratio is not None:
         raise BacktestError(
@@ -729,6 +944,13 @@ def build_summary(
     if (wf_fixed_params or wf_compare_fixed) and not walk_forward:
         raise BacktestError(
             "--wf-fixed-params / --wf-compare-fixed require --walk-forward"
+        )
+    if (
+        wf_filter_base_params or wf_filter_variants or wf_compare_filters
+    ) and not walk_forward:
+        raise BacktestError(
+            "--wf-filter-base-params / --wf-filter-variants / "
+            "--wf-compare-filters require --walk-forward"
         )
     bpy = _BARS_PER_YEAR.get(interval, _BARS_PER_YEAR[_DEFAULT_INTERVAL])
     baseline = run_backtest(
@@ -823,6 +1045,13 @@ def build_summary(
             include_trades=include_trades,
             fixed_params=wf_fixed_params,
             compare_fixed=wf_compare_fixed,
+            filter_base_params=wf_filter_base_params,
+            filter_variants=wf_filter_variants,
+            compare_filters=(
+                wf_compare_filters
+                or bool(wf_filter_base_params)
+                or bool(wf_filter_variants)
+            ),
         )
 
     return summary
@@ -1553,6 +1782,541 @@ def _build_robustness_report(
     }
 
 
+# ---------------------------------------------------------------------------
+# S61 — entry-filter comparison + robustness
+# ---------------------------------------------------------------------------
+
+
+def _evaluate_filter_windows(
+    bars: Sequence[Bar],
+    all_windows: Sequence[tuple[int, int, int, int, int]],
+    short_window: int,
+    long_window: int,
+    variant: str,
+    *,
+    bars_per_year: float,
+    execution: str,
+    commission_bps: float,
+    slippage_bps: float,
+    include_trades: bool,
+) -> list[dict[str, Any]]:
+    """Run (short/long, variant) across every walk-forward window.
+
+    Warmup for each window equals the filter's history requirement so
+    every indicator is fully formed by the first executable bar.
+    """
+    warmup = filter_warmup_requirement(long_window, variant, execution=execution)
+    out: list[dict[str, Any]] = []
+    for wi, ts, te, sts, ste in all_windows:
+        test_slice = bars[sts:ste]
+        warmup_start = sts - warmup
+        eval_slice = bars[warmup_start:ste]
+        r = run_backtest(
+            eval_slice, short_window, long_window,
+            bars_per_year=bars_per_year,
+            execution=execution,
+            commission_bps=commission_bps,
+            slippage_bps=slippage_bps,
+            evaluation_start_index=warmup,
+            entry_filter=variant,
+        )
+        rd = r.to_dict(include_trades=include_trades)
+        first_c = test_slice[0].close
+        last_c  = test_slice[-1].close
+        bh = (last_c - first_c) / first_c if first_c > 0 else 0.0
+        exposure = float(rd.get("exposure_time", 0.0))
+        xm = exposure * bh
+        test_ret = float(rd.get("total_return", 0.0))
+        test_sh  = float(rd.get("sharpe_ratio", 0.0))
+        out.append({
+            "window_index": wi,
+            "test_start":  str(test_slice[0].ts),
+            "test_end":    str(test_slice[-1].ts),
+            "test_bar_count": len(test_slice),
+            "result": rd,
+            "test_buy_and_hold_return":            bh,
+            "exposure_matched_buy_and_hold_return": xm,
+            "test_outperformed_buy_and_hold":      test_ret > bh,
+            "test_outperformed_exposure_matched":  test_ret > xm,
+            "test_profitable":                     test_ret > 0,
+            "test_positive_sharpe":                test_sh > 0,
+            "bullish_signal_count": int(rd.get("bullish_signal_count", 0)),
+            "entry_allowed_count":  int(rd.get("entry_allowed_count", 0)),
+            "entry_blocked_count":  int(rd.get("entry_blocked_count", 0)),
+            "entry_blocked_rate":   float(rd.get("entry_blocked_rate", 0.0)),
+        })
+    return out
+
+
+def _filter_aggregate(windows: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    """Aggregate a (base, filter) combination across walk-forward windows."""
+    n = len(windows)
+    if n == 0:
+        return {
+            "window_count": 0,
+            "profitable_test_window_count": 0,
+            "profitable_test_window_rate": 0.0,
+            "positive_sharpe_window_count": 0,
+            "positive_sharpe_window_rate": 0.0,
+            "outperformed_buy_and_hold_window_count": 0,
+            "outperformed_buy_and_hold_window_rate": 0.0,
+            "outperformed_exposure_matched_window_count": 0,
+            "outperformed_exposure_matched_window_rate": 0.0,
+            "average_test_return": 0.0,
+            "median_test_return": 0.0,
+            "average_test_sharpe": 0.0,
+            "median_test_sharpe": 0.0,
+            "average_exposure_time": 0.0,
+            "worst_test_return": None,
+            "worst_test_drawdown": None,
+            "total_completed_test_trades": 0,
+            "total_bullish_signal_count": 0,
+            "total_entry_allowed_count": 0,
+            "total_entry_blocked_count": 0,
+            "aggregate_entry_blocked_rate": 0.0,
+            "aggregate_return": 0.0,
+            "aggregate_buy_and_hold_return": 0.0,
+            "aggregate_exposure_matched_buy_and_hold_return": 0.0,
+            "aggregate_gap_vs_buy_and_hold": 0.0,
+            "aggregate_gap_vs_exposure_matched": 0.0,
+            "largest_positive_window_contribution": None,
+            "best_window": None,
+            "worst_window": None,
+            "return_over_worst_drawdown": None,
+        }
+
+    def _median(vals: Sequence[float]) -> float:
+        if not vals:
+            return 0.0
+        s = sorted(vals)
+        mid = len(s) // 2
+        return s[mid] if len(s) % 2 else (s[mid - 1] + s[mid]) / 2.0
+
+    def _compound(rs: Sequence[float]) -> float:
+        prod = 1.0
+        for r in rs:
+            prod *= (1.0 + r)
+        return prod - 1.0
+
+    test_returns = [float(w["result"].get("total_return", 0.0)) for w in windows]
+    test_sharpes = [float(w["result"].get("sharpe_ratio", 0.0)) for w in windows]
+    test_dds     = [float(w["result"].get("max_drawdown", 0.0)) for w in windows]
+    exposures    = [float(w["result"].get("exposure_time", 0.0)) for w in windows]
+    trades       = [int(w["result"].get("completed_trade_count", 0) or 0) for w in windows]
+    bh_returns   = [float(w["test_buy_and_hold_return"]) for w in windows]
+    xm_returns   = [float(w["exposure_matched_buy_and_hold_return"]) for w in windows]
+    bulls        = [int(w["bullish_signal_count"]) for w in windows]
+    alloweds     = [int(w["entry_allowed_count"]) for w in windows]
+    blockeds     = [int(w["entry_blocked_count"]) for w in windows]
+
+    profitable  = [w for w in windows if w["test_profitable"]]
+    pos_sharpe  = [w for w in windows if w["test_positive_sharpe"]]
+    outperf_bh  = [w for w in windows if w["test_outperformed_buy_and_hold"]]
+    outperf_xm  = [w for w in windows if w["test_outperformed_exposure_matched"]]
+
+    agg_ret = _compound(test_returns)
+    agg_bh  = _compound(bh_returns)
+    agg_xm  = _compound(xm_returns)
+
+    positive_returns = [r for r in test_returns if r > 0]
+    if positive_returns:
+        lpc = max(positive_returns) / sum(positive_returns)
+    else:
+        lpc = None
+
+    best_window  = max(windows, key=lambda w: float(w["result"].get("total_return", 0.0)))
+    worst_window = min(windows, key=lambda w: float(w["result"].get("total_return", 0.0)))
+
+    total_bulls = sum(bulls)
+    total_allowed = sum(alloweds)
+    total_blocked = sum(blockeds)
+    agg_blocked_rate = (total_blocked / total_bulls) if total_bulls > 0 else 0.0
+    worst_dd = min(test_dds)
+
+    if worst_dd == 0.0:
+        rod: float | None = None
+    else:
+        rod = agg_ret / abs(worst_dd)
+
+    return {
+        "window_count": n,
+        "profitable_test_window_count":            len(profitable),
+        "profitable_test_window_rate":             len(profitable) / n,
+        "positive_sharpe_window_count":            len(pos_sharpe),
+        "positive_sharpe_window_rate":             len(pos_sharpe) / n,
+        "outperformed_buy_and_hold_window_count":  len(outperf_bh),
+        "outperformed_buy_and_hold_window_rate":   len(outperf_bh) / n,
+        "outperformed_exposure_matched_window_count": len(outperf_xm),
+        "outperformed_exposure_matched_window_rate":  len(outperf_xm) / n,
+        "average_test_return":   sum(test_returns) / n,
+        "median_test_return":    _median(test_returns),
+        "average_test_sharpe":   sum(test_sharpes) / n,
+        "median_test_sharpe":    _median(test_sharpes),
+        "average_exposure_time": sum(exposures) / n,
+        "worst_test_return":     min(test_returns),
+        "worst_test_drawdown":   worst_dd,
+        "total_completed_test_trades": sum(trades),
+        "total_bullish_signal_count":  total_bulls,
+        "total_entry_allowed_count":   total_allowed,
+        "total_entry_blocked_count":   total_blocked,
+        "aggregate_entry_blocked_rate": agg_blocked_rate,
+        "aggregate_return":                              agg_ret,
+        "aggregate_buy_and_hold_return":                 agg_bh,
+        "aggregate_exposure_matched_buy_and_hold_return": agg_xm,
+        "aggregate_gap_vs_buy_and_hold":                 agg_ret - agg_bh,
+        "aggregate_gap_vs_exposure_matched":             agg_ret - agg_xm,
+        "largest_positive_window_contribution":          lpc,
+        "best_window":  best_window,
+        "worst_window": worst_window,
+        "return_over_worst_drawdown":                    rod,
+    }
+
+
+def _filter_vs_unfiltered(
+    base_key: str,
+    per_variant: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Per-base delta report for every non-``none`` variant."""
+    if "none" not in per_variant:
+        return []
+    unf = per_variant["none"]["aggregate"]
+    rows: list[dict[str, Any]] = []
+
+    def _num(x, default=0.0):
+        return default if x is None else float(x)
+
+    for variant, entry in per_variant.items():
+        if variant == "none":
+            continue
+        agg = entry["aggregate"]
+        u_ret = _num(unf.get("aggregate_return"))
+        f_ret = _num(agg.get("aggregate_return"))
+        u_rate = _num(unf.get("profitable_test_window_rate"))
+        f_rate = _num(agg.get("profitable_test_window_rate"))
+        u_wr = unf.get("worst_test_return")
+        f_wr = agg.get("worst_test_return")
+        u_wd = unf.get("worst_test_drawdown")
+        f_wd = agg.get("worst_test_drawdown")
+
+        # "Improvement" = strictly better. Ties are not improvements.
+        beat_ret = f_ret > u_ret
+        rate_up  = f_rate > u_rate
+        # worst_test_return: less negative wins (higher is better).
+        wr_up = (u_wr is not None and f_wr is not None and f_wr > u_wr)
+        # worst_test_drawdown: less negative wins.
+        wd_up = (u_wd is not None and f_wd is not None and f_wd > u_wd)
+
+        rows.append({
+            "base_parameter": base_key,
+            "filter_variant": variant,
+            "unfiltered_aggregate_return": u_ret,
+            "filtered_aggregate_return":   f_ret,
+            "aggregate_return_delta":      f_ret - u_ret,
+            "unfiltered_profitable_window_rate": u_rate,
+            "filtered_profitable_window_rate":   f_rate,
+            "profitable_window_rate_delta":      f_rate - u_rate,
+            "unfiltered_worst_test_return": u_wr,
+            "filtered_worst_test_return":   f_wr,
+            "worst_test_return_improvement": (
+                (f_wr - u_wr) if (u_wr is not None and f_wr is not None) else None
+            ),
+            "unfiltered_worst_test_drawdown": u_wd,
+            "filtered_worst_test_drawdown":   f_wd,
+            "worst_drawdown_improvement": (
+                (f_wd - u_wd) if (u_wd is not None and f_wd is not None) else None
+            ),
+            "unfiltered_total_completed_test_trades": int(unf.get("total_completed_test_trades", 0)),
+            "filtered_total_completed_test_trades":   int(agg.get("total_completed_test_trades", 0)),
+            "unfiltered_largest_positive_window_contribution":
+                unf.get("largest_positive_window_contribution"),
+            "filtered_largest_positive_window_contribution":
+                agg.get("largest_positive_window_contribution"),
+            "unfiltered_average_exposure_time": _num(unf.get("average_exposure_time")),
+            "filtered_average_exposure_time":   _num(agg.get("average_exposure_time")),
+            "filtered_beat_unfiltered_aggregate_return": beat_ret,
+            "filtered_improved_profitable_window_rate":  rate_up,
+            "filtered_improved_worst_test_return":       wr_up,
+            "filtered_improved_worst_drawdown":          wd_up,
+        })
+    return rows
+
+
+def _filter_flat_entries(
+    results: dict[str, dict[str, dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    """Flatten results into a single list keyed by (base, variant) for
+    cross-filter ranking. Adds the sort keys the tiebreak needs."""
+    out: list[dict[str, Any]] = []
+    for base_key, per_variant in results.items():
+        s, l = (int(x) for x in base_key.split("/"))
+        for variant, entry in per_variant.items():
+            e = dict(entry["aggregate"])
+            e["base_parameter"] = base_key
+            e["filter_variant"] = variant
+            e["short_window"] = s
+            e["long_window"] = l
+            out.append(e)
+    return out
+
+
+def _filter_tiebreak(entry: dict[str, Any]) -> tuple:
+    wd = entry.get("worst_test_drawdown")
+    return (
+        float(entry.get("aggregate_return", 0.0)),
+        float(entry.get("profitable_test_window_rate", 0.0)),
+        -abs(float(wd)) if wd is not None else float("-inf"),
+        int(entry.get("total_completed_test_trades", 0) or 0),
+        -int(entry.get("short_window", 0)),
+        -int(entry.get("long_window", 0)),
+        # Lexicographically smaller filter name wins → invert order via
+        # tuple comparison by using negative sort proxy.
+        tuple(-ord(c) for c in str(entry.get("filter_variant", ""))),
+    )
+
+
+def _or_ninf(x: Any) -> float:
+    return float(x) if x is not None else float("-inf")
+
+
+def _rank_filter_combinations(
+    entries: Sequence[dict[str, Any]],
+) -> dict[str, Any]:
+    """Cross-(base, filter) rankings on every metric."""
+    if not entries:
+        return {
+            "best_by_aggregate_return":         None,
+            "best_by_profitable_window_rate":   None,
+            "best_by_worst_test_return":        None,
+            "best_by_worst_drawdown":           None,
+            "best_by_return_over_drawdown":     None,
+            "best_by_gap_vs_exposure_matched":  None,
+            "lowest_profit_concentration":      None,
+            "highest_trade_count":              None,
+        }
+    pool = list(entries)
+
+    def _best(key_fn) -> dict[str, Any]:
+        return max(pool, key=lambda e: (key_fn(e), _filter_tiebreak(e)))
+
+    best_by_agg = _best(lambda e: float(e.get("aggregate_return", 0.0)))
+    best_by_rate = _best(
+        lambda e: float(e.get("profitable_test_window_rate", 0.0)),
+    )
+    best_by_worst_ret = _best(lambda e: _or_ninf(e.get("worst_test_return")))
+    best_by_worst_dd = _best(lambda e: _or_ninf(e.get("worst_test_drawdown")))
+    best_by_rod = _best(lambda e: _or_ninf(e.get("return_over_worst_drawdown")))
+    best_by_gap_xm = _best(
+        lambda e: float(e.get("aggregate_gap_vs_exposure_matched", 0.0)),
+    )
+    # Lowest concentration: lower is better; treat None (no positive
+    # windows) as "worst" so it doesn't spuriously win.
+    def _neg_lpc(e):
+        lpc = e.get("largest_positive_window_contribution")
+        return -float(lpc) if lpc is not None else float("-inf")
+    lowest_lpc = _best(_neg_lpc)
+    highest_trades = _best(
+        lambda e: int(e.get("total_completed_test_trades", 0) or 0),
+    )
+
+    return {
+        "best_by_aggregate_return":         best_by_agg,
+        "best_by_profitable_window_rate":   best_by_rate,
+        "best_by_worst_test_return":        best_by_worst_ret,
+        "best_by_worst_drawdown":           best_by_worst_dd,
+        "best_by_return_over_drawdown":     best_by_rod,
+        "best_by_gap_vs_exposure_matched":  best_by_gap_xm,
+        "lowest_profit_concentration":      lowest_lpc,
+        "highest_trade_count":              highest_trades,
+    }
+
+
+def _filter_robustness_report(
+    results: dict[str, dict[str, dict[str, Any]]],
+    entries: Sequence[dict[str, Any]],
+) -> dict[str, Any]:
+    """Screen combinations, list stable filter candidates, warn if none."""
+    positive_agg = [
+        f"{e['base_parameter']}|{e['filter_variant']}"
+        for e in entries
+        if float(e.get("aggregate_return", 0.0)) > 0
+    ]
+    profitable_75 = [
+        f"{e['base_parameter']}|{e['filter_variant']}"
+        for e in entries
+        if float(e.get("profitable_test_window_rate", 0.0)) >= 0.75
+    ]
+    beat_bh = [
+        f"{e['base_parameter']}|{e['filter_variant']}"
+        for e in entries
+        if float(e.get("aggregate_return", 0.0))
+           > float(e.get("aggregate_buy_and_hold_return", 0.0))
+    ]
+    beat_xm = [
+        f"{e['base_parameter']}|{e['filter_variant']}"
+        for e in entries
+        if float(e.get("aggregate_return", 0.0))
+           > float(e.get("aggregate_exposure_matched_buy_and_hold_return", 0.0))
+    ]
+    trades_15 = [
+        f"{e['base_parameter']}|{e['filter_variant']}"
+        for e in entries
+        if int(e.get("total_completed_test_trades", 0) or 0) >= 15
+    ]
+    concentration_le_60 = [
+        f"{e['base_parameter']}|{e['filter_variant']}"
+        for e in entries
+        if (e.get("largest_positive_window_contribution") is not None
+            and float(e["largest_positive_window_contribution"]) <= 0.60)
+    ]
+
+    # Per-base unfiltered baselines for strict-improvement checks.
+    baselines: dict[str, dict[str, Any]] = {}
+    for base_key, per_variant in results.items():
+        if "none" in per_variant:
+            baselines[base_key] = per_variant["none"]["aggregate"]
+
+    improving_ret: list[str] = []
+    improving_ww: list[str] = []
+    stable: list[str] = []
+    for e in entries:
+        base_key = e["base_parameter"]
+        variant  = e["filter_variant"]
+        if variant == "none":
+            continue
+        b = baselines.get(base_key)
+        if b is None:
+            continue
+        b_ret = float(b.get("aggregate_return", 0.0))
+        b_wr  = b.get("worst_test_return")
+        combo_key = f"{base_key}|{variant}"
+
+        if float(e.get("aggregate_return", 0.0)) > b_ret:
+            improving_ret.append(combo_key)
+
+        e_wr = e.get("worst_test_return")
+        if (b_wr is not None and e_wr is not None and e_wr > b_wr):
+            improving_ww.append(combo_key)
+
+        lpc = e.get("largest_positive_window_contribution")
+        wd  = e.get("worst_test_drawdown")
+        e_ret = float(e.get("aggregate_return", 0.0))
+        xm_ret = float(e.get("aggregate_exposure_matched_buy_and_hold_return", 0.0))
+
+        if (
+            float(e.get("profitable_test_window_rate", 0.0)) >= 0.75
+            and e_ret > 0
+            and int(e.get("total_completed_test_trades", 0) or 0) >= 15
+            and (lpc is None or float(lpc) <= 0.60)
+            and (wd is not None and float(wd) > -0.15)
+            and e_ret > b_ret
+            and (b_wr is not None and e_wr is not None and e_wr > b_wr)
+            and e_ret > xm_ret
+        ):
+            stable.append(combo_key)
+
+    reasons: list[str] = []
+    if not stable:
+        reasons.append("NO_STABLE_FILTER_CANDIDATE")
+    if entries and not improving_ret:
+        reasons.append("NO_FILTER_BEAT_UNFILTERED_RETURN")
+    if entries and not improving_ww:
+        reasons.append("NO_FILTER_IMPROVED_WORST_WINDOW")
+    if entries and all(
+        float(e.get("aggregate_return", 0.0))
+        < float(e.get("aggregate_exposure_matched_buy_and_hold_return", 0.0))
+        for e in entries
+    ):
+        reasons.append("ALL_FILTERS_UNDERPERFORMED_EXPOSURE_MATCHED")
+    if entries and not trades_15:
+        reasons.append("LOW_FILTER_SAMPLE_TRADE_COUNT")
+    if any(
+        (e.get("largest_positive_window_contribution") is not None
+         and float(e["largest_positive_window_contribution"]) > 0.60)
+        for e in entries
+    ):
+        reasons.append("FILTER_RESULTS_PROFIT_CONCENTRATED")
+    # Blocked-too-many-entries: only about non-none filters. All of
+    # them (if any exist) must have blocked > 80%.
+    non_none = [e for e in entries if e["filter_variant"] != "none"]
+    if non_none and all(
+        float(e.get("aggregate_entry_blocked_rate", 0.0)) > 0.80
+        for e in non_none
+    ):
+        reasons.append("FILTER_BLOCKED_TOO_MANY_ENTRIES")
+
+    return {
+        "combinations_with_positive_aggregate_return":            positive_agg,
+        "combinations_profitable_in_at_least_75_percent_of_windows": profitable_75,
+        "combinations_outperforming_buy_and_hold":                beat_bh,
+        "combinations_outperforming_exposure_matched":            beat_xm,
+        "combinations_with_at_least_15_completed_test_trades":    trades_15,
+        "combinations_with_profit_concentration_at_or_below_60_percent": concentration_le_60,
+        "combinations_improving_unfiltered_return":               improving_ret,
+        "combinations_improving_unfiltered_worst_window":         improving_ww,
+        "stable_filter_candidates":                               stable,
+        "filter_comparison_warning":         bool(reasons),
+        "filter_comparison_warning_reasons": reasons,
+    }
+
+
+def _build_filter_comparison(
+    bars: Sequence[Bar],
+    all_windows: Sequence[tuple[int, int, int, int, int]],
+    base_params: Sequence[tuple[int, int]],
+    variants: Sequence[str],
+    *,
+    bars_per_year: float,
+    execution: str,
+    commission_bps: float,
+    slippage_bps: float,
+    include_trades: bool,
+) -> dict[str, Any]:
+    results: dict[str, dict[str, dict[str, Any]]] = {}
+    filter_vs_unfiltered: dict[str, list[dict[str, Any]]] = {}
+    for s, l in base_params:
+        base_key = _fixed_param_key(s, l)
+        per_variant: dict[str, dict[str, Any]] = {}
+        for variant in variants:
+            windows = _evaluate_filter_windows(
+                bars, all_windows, s, l, variant,
+                bars_per_year=bars_per_year,
+                execution=execution,
+                commission_bps=commission_bps,
+                slippage_bps=slippage_bps,
+                include_trades=include_trades,
+            )
+            per_variant[variant] = {
+                "short_window": s,
+                "long_window":  l,
+                "filter_variant": variant,
+                "windows":  windows,
+                "aggregate": _filter_aggregate(windows),
+            }
+        results[base_key] = per_variant
+        filter_vs_unfiltered[base_key] = _filter_vs_unfiltered(base_key, per_variant)
+
+    flat_entries = _filter_flat_entries(results)
+    rankings = _rank_filter_combinations(flat_entries)
+    robustness = _filter_robustness_report(results, flat_entries)
+
+    return {
+        "base_parameters":       [_fixed_param_key(s, l) for s, l in base_params],
+        "filter_variants":       list(variants),
+        "base_parameter_count":  len(base_params),
+        "filter_variant_count":  len(variants),
+        "window_count":          len(all_windows),
+        "comparison_basis":      "same_walk_forward_test_windows",
+        "test_windows_identical_to_s60": True,
+        "filters_apply_to_entries_only": True,
+        "research_only":                     True,
+        "automatic_filter_promotion_allowed": False,
+        "results":               results,
+        "filter_vs_unfiltered":  filter_vs_unfiltered,
+        "filter_rankings":       rankings,
+        "filter_robustness_report": robustness,
+    }
+
+
 def run_walk_forward(
     bars: Sequence[Bar],
     *,
@@ -1572,6 +2336,9 @@ def run_walk_forward(
     include_trades: bool = False,
     fixed_params: Sequence[tuple[int, int]] | None = None,
     compare_fixed: bool = False,
+    filter_base_params: Sequence[tuple[int, int]] | None = None,
+    filter_variants: Sequence[str] | None = None,
+    compare_filters: bool = False,
 ) -> dict[str, Any]:
     """Rolling walk-forward validation.
 
@@ -1631,6 +2398,29 @@ def run_walk_forward(
                     f"max long_window + 1 ({max_long + 1}) for "
                     f"default fixed-comparison set"
                 )
+
+    # Derive default filter base params / variants when the comparison
+    # is enabled without an explicit list.
+    if compare_filters:
+        if filter_base_params is None:
+            filter_base_params = list(_DEFAULT_FILTER_BASE_PARAMS)
+        if filter_variants is None:
+            filter_variants = list(_FILTER_VARIANTS)
+        # Validate warmup fit for every (base, variant) pair up front.
+        for base_s, base_l in filter_base_params:
+            if base_s <= 0 or base_l <= 0 or base_s >= base_l:
+                raise BacktestError(
+                    f"filter base parameter must be short<long positive: "
+                    f"{base_s}/{base_l}"
+                )
+            for v in filter_variants:
+                need = filter_warmup_requirement(base_l, v, execution=execution)
+                if train_bars < need:
+                    raise BacktestError(
+                        f"wf_train_bars ({train_bars}) is smaller than the "
+                        f"filter warmup requirement ({need}) for base "
+                        f"{base_s}/{base_l} filter={v!r}"
+                    )
 
     bpy = _BARS_PER_YEAR.get(interval, _BARS_PER_YEAR[_DEFAULT_INTERVAL])
     winners: list[dict[str, Any]] = []
@@ -1745,6 +2535,16 @@ def run_walk_forward(
             "research_only":                     True,
             "automatic_parameter_promotion_allowed": False,
         }
+
+    if compare_filters:
+        result["filter_comparison"] = _build_filter_comparison(
+            bars, all_windows, list(filter_base_params), list(filter_variants),
+            bars_per_year=bpy,
+            execution=execution,
+            commission_bps=commission_bps,
+            slippage_bps=slippage_bps,
+            include_trades=include_trades,
+        )
 
     return result
 
@@ -1951,6 +2751,18 @@ def _build_parser() -> argparse.ArgumentParser:
                         "walk-forward test windows. When set without "
                         "--wf-fixed-params, defaults to baseline plus "
                         "every valid sweep pair. Requires --walk-forward.")
+    p.add_argument("--wf-compare-filters", action="store_true",
+                   help="Enable entry-filter robustness comparison on the "
+                        "same walk-forward test windows. Requires "
+                        "--walk-forward.")
+    p.add_argument("--wf-filter-base-params", default=None,
+                   help='Comma-separated base SMA pairs to test filters '
+                        'against, e.g. "10/20,15/50,20/50". Requires '
+                        '--walk-forward. Implies --wf-compare-filters.')
+    p.add_argument("--wf-filter-variants", default=None,
+                   help='Comma-separated filter variant list. Allowed: '
+                        + ",".join(_FILTER_VARIANTS) + '. Requires '
+                        '--walk-forward. Implies --wf-compare-filters.')
     p.add_argument("--output-dir", default=str(_DEFAULT_OUTPUT_DIR))
     p.add_argument("--no-write", action="store_true",
                    help="Do not write the summary to disk; stdout only.")
@@ -1970,6 +2782,14 @@ def main(argv: list[str] | None = None) -> int:
         short_ws = _parse_window_list(args.short_windows) if args.short_windows else None
         long_ws = _parse_window_list(args.long_windows) if args.long_windows else None
         fixed = parse_fixed_params(args.wf_fixed_params) if args.wf_fixed_params else None
+        filter_base = (
+            parse_fixed_params(args.wf_filter_base_params)
+            if args.wf_filter_base_params else None
+        )
+        filter_variants = (
+            parse_filter_variants(args.wf_filter_variants)
+            if args.wf_filter_variants else None
+        )
     except BacktestError as exc:
         print(json.dumps({"error": str(exc)}, indent=2))
         return 2
@@ -2000,6 +2820,13 @@ def main(argv: list[str] | None = None) -> int:
             # Fixed pairs supplied → auto-enable comparison; explicit
             # --wf-compare-fixed also enables it.
             wf_compare_fixed=args.wf_compare_fixed or bool(fixed),
+            wf_filter_base_params=filter_base,
+            wf_filter_variants=filter_variants,
+            wf_compare_filters=(
+                args.wf_compare_filters
+                or bool(filter_base)
+                or bool(filter_variants)
+            ),
         )
     except BacktestError as exc:
         print(json.dumps({"error": str(exc)}, indent=2))
