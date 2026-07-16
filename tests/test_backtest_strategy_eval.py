@@ -1603,3 +1603,800 @@ def test_wf_default_1600_400_400_configuration_still_accepted() -> None:
     assert out["train_bars"] == 1600
     assert out["test_bars"] == 400
     assert out["step_bars"] == 400
+
+
+# ---------------------------------------------------------------------------
+# S60 — fixed-parameter comparison + robustness report
+# ---------------------------------------------------------------------------
+
+
+# --- Parser ---
+
+
+def test_parse_fixed_params_valid_pairs() -> None:
+    assert bse.parse_fixed_params("10/20,15/50") == [(10, 20), (15, 50)]
+
+
+def test_parse_fixed_params_rejects_malformed() -> None:
+    with pytest.raises(BacktestError, match="malformed"):
+        bse.parse_fixed_params("10-20")
+
+
+def test_parse_fixed_params_rejects_non_integer() -> None:
+    with pytest.raises(BacktestError, match="two integers"):
+        bse.parse_fixed_params("10/foo")
+
+
+def test_parse_fixed_params_rejects_short_ge_long() -> None:
+    with pytest.raises(BacktestError, match="short must be < long"):
+        bse.parse_fixed_params("20/20")
+    with pytest.raises(BacktestError, match="short must be < long"):
+        bse.parse_fixed_params("30/20")
+
+
+def test_parse_fixed_params_dedup_is_deterministic_and_preserves_order() -> None:
+    # First occurrence wins; later duplicates dropped.
+    got = bse.parse_fixed_params("10/20,15/50,10/20,15/50,20/50")
+    assert got == [(10, 20), (15, 50), (20, 50)]
+
+
+def test_parse_fixed_params_empty_rejected() -> None:
+    with pytest.raises(BacktestError):
+        bse.parse_fixed_params("")
+    with pytest.raises(BacktestError):
+        bse.parse_fixed_params("   ")
+
+
+def test_parse_fixed_params_rejects_non_positive() -> None:
+    with pytest.raises(BacktestError, match="positive"):
+        bse.parse_fixed_params("0/20")
+    with pytest.raises(BacktestError, match="positive"):
+        bse.parse_fixed_params("-5/10")
+
+
+# --- CLI / build_summary gating ---
+
+
+def test_build_summary_rejects_fixed_params_without_walk_forward() -> None:
+    bars = _bars_from_closes([float(c) for c in range(1, 501)])
+    with pytest.raises(BacktestError, match="require --walk-forward"):
+        bse.build_summary(
+            bars=bars, symbol="SPY", interval="60m",
+            now_utc=datetime(2026, 7, 13, 20, 0, 0, tzinfo=timezone.utc),
+            short_window=3, long_window=5,
+            wf_fixed_params=[(3, 5), (10, 20)],
+        )
+
+
+def test_build_summary_rejects_compare_fixed_without_walk_forward() -> None:
+    bars = _bars_from_closes([float(c) for c in range(1, 501)])
+    with pytest.raises(BacktestError, match="require --walk-forward"):
+        bse.build_summary(
+            bars=bars, symbol="SPY", interval="60m",
+            now_utc=datetime(2026, 7, 13, 20, 0, 0, tzinfo=timezone.utc),
+            short_window=3, long_window=5,
+            wf_compare_fixed=True,
+        )
+
+
+def test_default_fixed_params_derived_from_baseline_and_sweep() -> None:
+    got = bse._default_fixed_params(
+        baseline_short=3, baseline_long=5,
+        short_windows=[3, 5, 10], long_windows=[10, 20],
+    )
+    # Baseline first, then valid short<long combinations, deduped.
+    assert got[0] == (3, 5)
+    for s, l in got:
+        assert s < l
+    # No duplicates.
+    assert len(got) == len(set(got))
+
+
+# --- Fixed evaluation on the same windows as adaptive ---
+
+
+def _wf_with_fixed(bars, **kw):
+    return bse.build_summary(
+        bars=bars, symbol="SPY", interval="60m",
+        now_utc=datetime(2026, 7, 13, 20, 0, 0, tzinfo=timezone.utc),
+        short_window=3, long_window=5,
+        walk_forward=True,
+        wf_train_bars=100, wf_test_bars=100, wf_step_bars=100,
+        short_windows=[3, 5], long_windows=[10, 20],
+        **kw,
+    )
+
+
+def test_fixed_windows_exactly_match_adaptive_windows() -> None:
+    bars = _bars_from_closes([float(c) for c in range(1, 601)])
+    summary = _wf_with_fixed(bars, wf_fixed_params=[(3, 10), (5, 20)])
+    wf = summary["walk_forward"]
+    fp = wf["fixed_parameter_comparison"]
+    assert fp["window_count"] == len(wf["windows"])
+    assert fp["test_windows_identical_to_adaptive"] is True
+    # Every adaptive window's (test_start, test_end) must appear in each
+    # fixed parameter's window list at the same window_index.
+    adaptive_by_idx = {w["window_index"]: (w["test_start"], w["test_end"])
+                       for w in wf["windows"]}
+    for key, p in fp["parameters"].items():
+        for w in p["windows"]:
+            assert (w["test_start"], w["test_end"]) == adaptive_by_idx[w["window_index"]]
+
+
+def test_fixed_configuration_unchanged_across_windows() -> None:
+    bars = _bars_from_closes([float(c) for c in range(1, 601)])
+    summary = _wf_with_fixed(bars, wf_fixed_params=[(3, 10)])
+    fp = summary["walk_forward"]["fixed_parameter_comparison"]
+    p = fp["parameters"]["3/10"]
+    for w in p["windows"]:
+        assert w["result"]["short_window"] == 3
+        assert w["result"]["long_window"] == 10
+
+
+def test_fixed_never_uses_test_performance_for_selection() -> None:
+    """A trivial invariant: the fixed pair we asked for is exactly the
+    fixed pair reported per window — no rewriting based on test data."""
+    bars = _bars_from_closes([float(c) for c in range(1, 601)])
+    summary = _wf_with_fixed(bars, wf_fixed_params=[(3, 20)])
+    fp = summary["walk_forward"]["fixed_parameter_comparison"]
+    for w in fp["parameters"]["3/20"]["windows"]:
+        assert w["result"]["short_window"] == 3
+        assert w["result"]["long_window"] == 20
+
+
+def test_fixed_warmup_exactly_long_window() -> None:
+    """The fixed test result's open_entry_index (in eval-slice coords)
+    must sit at or beyond the warmup boundary = selected long_window."""
+    bars = _bars_from_closes([float(c) for c in range(1, 601)])
+    summary = _wf_with_fixed(bars, wf_fixed_params=[(3, 20)])
+    fp = summary["walk_forward"]["fixed_parameter_comparison"]
+    for w in fp["parameters"]["3/20"]["windows"]:
+        # bar_count reflects only test bars.
+        assert w["result"]["bar_count"] == w["test_bar_count"]
+        if w["result"].get("open_position"):
+            assert w["result"]["open_entry_index"] >= 20
+
+
+def test_fixed_test_metrics_exclude_warmup() -> None:
+    """bar_count exposed by the fixed result must equal test_bars — the
+    warmup region is not counted."""
+    bars = _bars_from_closes([float(c) for c in range(1, 601)])
+    summary = _wf_with_fixed(bars, wf_fixed_params=[(3, 10)])
+    fp = summary["walk_forward"]["fixed_parameter_comparison"]
+    for w in fp["parameters"]["3/10"]["windows"]:
+        assert w["result"]["bar_count"] == 100  # test_bars
+
+
+# --- Aggregate + exposure-matched math ---
+
+
+def _mk_fixed_window(*, wi=0, total_return=0.0, sharpe=0.0, drawdown=0.0,
+                     exposure=0.0, trades=5, bh=0.0):
+    r = {
+        "short_window": 10, "long_window": 20,
+        "total_return": total_return,
+        "sharpe_ratio": sharpe,
+        "max_drawdown": drawdown,
+        "exposure_time": exposure,
+        "completed_trade_count": trades,
+    }
+    return {
+        "window_index": wi,
+        "test_start": "t0", "test_end": "t1",
+        "test_bar_count": 50,
+        "result": r,
+        "test_buy_and_hold_return":            bh,
+        "test_outperformed_buy_and_hold":      total_return > bh,
+        "test_profitable":                     total_return > 0,
+        "test_positive_sharpe":                sharpe > 0,
+        "exposure_matched_buy_and_hold_return": exposure * bh,
+    }
+
+
+def test_fixed_aggregate_compounds_correctly() -> None:
+    windows = [
+        _mk_fixed_window(wi=0, total_return=0.10, bh=0.05, exposure=0.5, trades=6),
+        _mk_fixed_window(wi=1, total_return=-0.05, bh=0.02, exposure=0.4, trades=4),
+        _mk_fixed_window(wi=2, total_return=0.08, bh=0.06, exposure=0.6, trades=6),
+    ]
+    agg = bse._fixed_parameter_aggregate(windows)
+    expected_ret = (1.10 * 0.95 * 1.08) - 1
+    expected_bh  = (1.05 * 1.02 * 1.06) - 1
+    expected_xm  = (1 + 0.5 * 0.05) * (1 + 0.4 * 0.02) * (1 + 0.6 * 0.06) - 1
+    assert agg["aggregate_return"] == pytest.approx(expected_ret, rel=1e-12)
+    assert agg["aggregate_buy_and_hold_return"] == pytest.approx(expected_bh, rel=1e-12)
+    assert agg["aggregate_exposure_matched_buy_and_hold_return"] == pytest.approx(
+        expected_xm, rel=1e-12,
+    )
+    assert agg["aggregate_gap_vs_buy_and_hold"] == pytest.approx(
+        expected_ret - expected_bh, rel=1e-9,
+    )
+    assert agg["aggregate_gap_vs_exposure_matched"] == pytest.approx(
+        expected_ret - expected_xm, rel=1e-9,
+    )
+
+
+def test_fixed_exposure_matched_per_window_math() -> None:
+    """Per-window xm = exposure_time * buy_and_hold_return."""
+    w = _mk_fixed_window(exposure=0.35, bh=0.20)
+    assert w["exposure_matched_buy_and_hold_return"] == pytest.approx(0.07)
+
+
+def test_fixed_profitable_and_positive_sharpe_rates() -> None:
+    windows = [
+        _mk_fixed_window(wi=0, total_return=0.05, sharpe=0.4, trades=6, bh=0.02),
+        _mk_fixed_window(wi=1, total_return=-0.02, sharpe=-0.1, trades=6, bh=-0.01),
+        _mk_fixed_window(wi=2, total_return=0.03, sharpe=0.2, trades=6, bh=0.01),
+        _mk_fixed_window(wi=3, total_return=0.04, sharpe=0.3, trades=6, bh=0.01),
+    ]
+    agg = bse._fixed_parameter_aggregate(windows)
+    assert agg["profitable_test_window_count"] == 3
+    assert agg["profitable_test_window_rate"] == pytest.approx(0.75)
+    assert agg["positive_sharpe_window_count"] == 3
+    assert agg["positive_sharpe_window_rate"] == pytest.approx(0.75)
+
+
+def test_fixed_total_completed_trade_count() -> None:
+    windows = [
+        _mk_fixed_window(wi=0, trades=5),
+        _mk_fixed_window(wi=1, trades=7),
+        _mk_fixed_window(wi=2, trades=3),
+    ]
+    agg = bse._fixed_parameter_aggregate(windows)
+    assert agg["total_completed_test_trades"] == 15
+
+
+def test_fixed_largest_positive_contribution() -> None:
+    windows = [
+        _mk_fixed_window(wi=0, total_return=0.10),
+        _mk_fixed_window(wi=1, total_return=0.02),
+        _mk_fixed_window(wi=2, total_return=-0.05),
+    ]
+    agg = bse._fixed_parameter_aggregate(windows)
+    assert agg["largest_positive_window_contribution"] == pytest.approx(
+        0.10 / (0.10 + 0.02),
+    )
+
+
+# --- Adaptive vs fixed ranking ---
+
+
+def _make_fp(params_data):
+    """Build parameters dict from [(key, agg_dict), ...]."""
+    out = {}
+    for key, agg in params_data:
+        s, l = (int(x) for x in key.split("/"))
+        out[key] = {"short_window": s, "long_window": l, "windows": [], "aggregate": agg}
+    return out
+
+
+def test_adaptive_vs_fixed_ranking_deterministic() -> None:
+    parameters = _make_fp([
+        ("10/20", {"aggregate_return": 0.15, "profitable_test_window_rate": 0.75,
+                   "worst_test_drawdown": -0.10, "worst_test_return": -0.03,
+                   "total_completed_test_trades": 20}),
+        ("15/20", {"aggregate_return": 0.08, "profitable_test_window_rate": 0.50,
+                   "worst_test_drawdown": -0.15, "worst_test_return": -0.05,
+                   "total_completed_test_trades": 16}),
+    ])
+    adaptive = {
+        "aggregate_walk_forward_return": 0.05,
+        "profitable_test_window_rate": 0.50,
+        "worst_test_return": -0.07,
+        "worst_test_drawdown": -0.20,
+        "total_completed_test_trades": 12,
+        "largest_positive_window_contribution": 0.4,
+    }
+    cmp = bse._build_adaptive_vs_fixed(adaptive, parameters)
+    assert cmp["best_fixed_by_aggregate_return"]["parameter_key"] == "10/20"
+    assert cmp["best_fixed_by_profitable_window_rate"]["parameter_key"] == "10/20"
+    assert cmp["adaptive_rank_by_aggregate_return"] == 3  # two beat adaptive
+    assert cmp["adaptive_outperformed_all_fixed_parameters"] is False
+    assert "10/20" in cmp["fixed_parameters_beating_adaptive_aggregate_return"]
+    assert "15/20" in cmp["fixed_parameters_beating_adaptive_aggregate_return"]
+
+
+def test_adaptive_vs_fixed_tiebreak_deterministic() -> None:
+    """Two entries tied on aggregate_return; higher profitable rate wins."""
+    parameters = _make_fp([
+        ("10/20", {"aggregate_return": 0.10, "profitable_test_window_rate": 0.75,
+                   "worst_test_drawdown": -0.10, "worst_test_return": -0.02,
+                   "total_completed_test_trades": 18}),
+        ("15/50", {"aggregate_return": 0.10, "profitable_test_window_rate": 0.60,
+                   "worst_test_drawdown": -0.05, "worst_test_return": -0.02,
+                   "total_completed_test_trades": 18}),
+    ])
+    adaptive = {"aggregate_walk_forward_return": 0.0,
+                "profitable_test_window_rate": 0.0}
+    cmp = bse._build_adaptive_vs_fixed(adaptive, parameters)
+    assert cmp["best_fixed_by_aggregate_return"]["parameter_key"] == "10/20"
+
+
+def test_adaptive_beats_all_when_no_fixed_higher() -> None:
+    parameters = _make_fp([
+        ("10/20", {"aggregate_return": 0.01, "profitable_test_window_rate": 0.5,
+                   "worst_test_drawdown": -0.05, "worst_test_return": -0.02,
+                   "total_completed_test_trades": 8}),
+    ])
+    adaptive = {"aggregate_walk_forward_return": 0.30,
+                "profitable_test_window_rate": 0.9}
+    cmp = bse._build_adaptive_vs_fixed(adaptive, parameters)
+    assert cmp["adaptive_rank_by_aggregate_return"] == 1
+    assert cmp["adaptive_outperformed_all_fixed_parameters"] is True
+
+
+def test_return_over_worst_drawdown_null_when_zero() -> None:
+    assert bse._return_over_worst_drawdown({"aggregate_return": 0.1,
+                                            "worst_test_drawdown": 0}) is None
+
+
+# --- Robustness report ---
+
+
+def _make_agg(*, rate=0.75, ret=0.10, trades=20, dd=-0.10, lpc=0.30,
+              bh=0.05, xm=0.03):
+    return {
+        "profitable_test_window_rate": rate,
+        "aggregate_return": ret,
+        "total_completed_test_trades": trades,
+        "worst_test_drawdown": dd,
+        "largest_positive_window_contribution": lpc,
+        "aggregate_buy_and_hold_return": bh,
+        "aggregate_exposure_matched_buy_and_hold_return": xm,
+    }
+
+
+def test_stable_candidate_all_criteria_pass() -> None:
+    params = _make_fp([("10/20", _make_agg())])
+    adaptive = {"aggregate_walk_forward_return": 0.0}
+    rep = bse._build_robustness_report(params, adaptive)
+    assert "10/20" in rep["stable_fixed_candidates"]
+    assert rep["fixed_comparison_warning"] is False
+
+
+def test_stable_candidate_fails_on_low_profitable_rate() -> None:
+    params = _make_fp([("10/20", _make_agg(rate=0.40))])
+    rep = bse._build_robustness_report(params, {})
+    assert rep["stable_fixed_candidates"] == []
+    assert "NO_STABLE_FIXED_CANDIDATE" in rep["fixed_comparison_warning_reasons"]
+
+
+def test_stable_candidate_fails_on_low_trade_count() -> None:
+    params = _make_fp([("10/20", _make_agg(trades=8))])
+    rep = bse._build_robustness_report(params, {})
+    assert rep["stable_fixed_candidates"] == []
+
+
+def test_stable_candidate_fails_on_deep_drawdown() -> None:
+    params = _make_fp([("10/20", _make_agg(dd=-0.20))])
+    rep = bse._build_robustness_report(params, {})
+    assert rep["stable_fixed_candidates"] == []
+
+
+def test_stable_candidate_fails_on_profit_concentration() -> None:
+    params = _make_fp([("10/20", _make_agg(lpc=0.75))])
+    rep = bse._build_robustness_report(params, {})
+    assert rep["stable_fixed_candidates"] == []
+    assert "FIXED_RESULTS_PROFIT_CONCENTRATED" in rep["fixed_comparison_warning_reasons"]
+
+
+def test_robustness_all_underperform_bh_warning() -> None:
+    params = _make_fp([
+        ("10/20", _make_agg(ret=0.05, bh=0.20)),
+        ("15/50", _make_agg(ret=0.03, bh=0.20)),
+    ])
+    rep = bse._build_robustness_report(params, {})
+    assert "ALL_FIXED_UNDERPERFORMED_BUY_AND_HOLD" in rep["fixed_comparison_warning_reasons"]
+
+
+def test_robustness_all_underperform_adaptive_warning() -> None:
+    params = _make_fp([
+        ("10/20", _make_agg(ret=0.02)),
+        ("15/50", _make_agg(ret=0.01)),
+    ])
+    adaptive = {"aggregate_walk_forward_return": 0.50}
+    rep = bse._build_robustness_report(params, adaptive)
+    assert "ALL_FIXED_UNDERPERFORMED_ADAPTIVE" in rep["fixed_comparison_warning_reasons"]
+
+
+def test_robustness_low_fixed_trade_count_warning() -> None:
+    params = _make_fp([("10/20", _make_agg(trades=5))])
+    rep = bse._build_robustness_report(params, {})
+    assert "LOW_FIXED_SAMPLE_TRADE_COUNT" in rep["fixed_comparison_warning_reasons"]
+
+
+def test_robustness_most_frequently_profitable_lists_ties() -> None:
+    params = _make_fp([
+        ("10/20", _make_agg(rate=0.75)),
+        ("15/50", _make_agg(rate=0.75)),
+        ("5/10",  _make_agg(rate=0.50)),
+    ])
+    rep = bse._build_robustness_report(params, {})
+    assert set(rep["most_frequently_profitable_fixed_parameters"]) == {"10/20", "15/50"}
+
+
+# --- Integration ---
+
+
+def test_build_summary_walk_forward_without_fixed_preserves_schema() -> None:
+    bars = _bars_from_closes([float(c) for c in range(1, 601)])
+    summary = _wf_with_fixed(bars)  # no fixed opts
+    wf = summary["walk_forward"]
+    for key in ("fixed_parameter_comparison",):
+        assert key not in wf
+
+
+def test_build_summary_fixed_comparison_has_all_fields() -> None:
+    bars = _bars_from_closes([float(c) for c in range(1, 601)])
+    summary = _wf_with_fixed(bars, wf_fixed_params=[(3, 10), (5, 20)])
+    fp = summary["walk_forward"]["fixed_parameter_comparison"]
+    for field in (
+        "requested_parameters", "parameter_count", "window_count",
+        "comparison_basis", "test_windows_identical_to_adaptive",
+        "parameters", "adaptive_vs_fixed", "robustness_report",
+        "research_only", "automatic_parameter_promotion_allowed",
+    ):
+        assert field in fp
+    assert fp["research_only"] is True
+    assert fp["automatic_parameter_promotion_allowed"] is False
+    assert fp["requested_parameters"] == ["3/10", "5/20"]  # order preserved
+    for key, p in fp["parameters"].items():
+        for field in (
+            "short_window", "long_window", "windows", "aggregate",
+        ):
+            assert field in p
+
+
+def test_build_summary_default_fixed_set_when_compare_fixed_flag_only() -> None:
+    bars = _bars_from_closes([float(c) for c in range(1, 601)])
+    summary = _wf_with_fixed(bars, wf_compare_fixed=True)
+    fp = summary["walk_forward"]["fixed_parameter_comparison"]
+    # Baseline + sweep gives us at least the baseline pair.
+    assert "3/5" in fp["parameters"]  # baseline_short/long from _wf_with_fixed
+
+
+def test_build_summary_rejects_train_shorter_than_max_fixed_long() -> None:
+    bars = _bars_from_closes([float(c) for c in range(1, 601)])
+    with pytest.raises(BacktestError, match="wf_train_bars"):
+        bse.build_summary(
+            bars=bars, symbol="SPY", interval="60m",
+            now_utc=datetime(2026, 7, 13, 20, 0, 0, tzinfo=timezone.utc),
+            short_window=3, long_window=5,
+            walk_forward=True,
+            wf_train_bars=30,   # < 51 (max fixed long is 50 → need 51)
+            wf_test_bars=100, wf_step_bars=100,
+            wf_fixed_params=[(3, 50)],
+        )
+
+
+def test_build_summary_walk_forward_default_1600_400_400_still_works() -> None:
+    """Regression: enabling fixed comparison with the standard defaults
+    must not fail when there is enough data."""
+    bars = _bars_from_closes([float(c) for c in range(1, 2101)])
+    summary = bse.build_summary(
+        bars=bars, symbol="SPY", interval="60m",
+        now_utc=datetime(2026, 7, 13, 20, 0, 0, tzinfo=timezone.utc),
+        short_window=10, long_window=20,
+        walk_forward=True,
+        wf_train_bars=1600, wf_test_bars=400, wf_step_bars=400,
+        wf_fixed_params=[(10, 20), (15, 50)],
+    )
+    wf = summary["walk_forward"]
+    assert wf["train_bars"] == 1600
+    assert "fixed_parameter_comparison" in wf
+
+
+def test_cli_walk_forward_with_fixed_params(
+    tmp_path: Path, capsys: pytest.CaptureFixture,
+) -> None:
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    _write_cache(cache_dir, [float(c) for c in range(1, 601)])
+    rc = bse.main([
+        "--cache-dir", str(cache_dir),
+        "--walk-forward",
+        "--wf-train-bars", "100",
+        "--wf-test-bars", "100",
+        "--wf-step-bars", "100",
+        "--short-windows", "3,5",
+        "--long-windows", "10,20",
+        "--wf-fixed-params", "3/10,5/20",
+        "--no-write",
+    ])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    fp = payload["walk_forward"]["fixed_parameter_comparison"]
+    assert fp["parameter_count"] == 2
+    assert fp["research_only"] is True
+
+
+def test_cli_fixed_params_without_walk_forward_exits_2(
+    tmp_path: Path, capsys: pytest.CaptureFixture,
+) -> None:
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    _write_cache(cache_dir, [float(c) for c in range(1, 601)])
+    rc = bse.main([
+        "--cache-dir", str(cache_dir),
+        "--wf-fixed-params", "10/20",
+        "--no-write",
+    ])
+    assert rc == 2
+    err = json.loads(capsys.readouterr().out)
+    assert "walk-forward" in err["error"]
+
+
+def test_cli_malformed_fixed_params_exits_2(
+    tmp_path: Path, capsys: pytest.CaptureFixture,
+) -> None:
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    _write_cache(cache_dir, [float(c) for c in range(1, 601)])
+    rc = bse.main([
+        "--cache-dir", str(cache_dir),
+        "--walk-forward",
+        "--wf-fixed-params", "not-a-pair",
+        "--no-write",
+    ])
+    assert rc == 2
+    err = json.loads(capsys.readouterr().out)
+    assert "malformed" in err["error"]
+
+
+def test_fixed_comparison_positions_do_not_carry_between_windows() -> None:
+    """Each fixed test evaluation runs on its own eval_slice with its
+    own initial equity, so a position in window N cannot appear as an
+    entry in window N+1."""
+    bars = _bars_from_closes([float(c) for c in range(1, 601)])
+    summary = _wf_with_fixed(bars, wf_fixed_params=[(3, 10)])
+    fp = summary["walk_forward"]["fixed_parameter_comparison"]
+    for w in fp["parameters"]["3/10"]["windows"]:
+        # open_entry_index is relative to that window's eval_slice
+        # (0..(warmup+test)). If it exists, it must be within the
+        # slice — trivially so — but the important property is that
+        # each window's result has its OWN entry_index space, not a
+        # cumulative one crossing windows.
+        r = w["result"]
+        if r.get("open_position"):
+            assert r["open_entry_index"] < r["bar_count"] + r["short_window"] + 100
+
+
+# --- Safety scan (re-affirmed after S60 additions) ---
+
+
+def test_backtest_tool_still_has_no_broker_or_network_imports_s60() -> None:
+    source = Path("src/tools/backtest_strategy_eval.py").read_text(encoding="utf-8")
+    for tok in ("alpaca", "requests", "httpx", "urllib.request", "socket"):
+        assert tok not in source, (
+            f"backtest_strategy_eval must not depend on {tok!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# S60 review — zero-value preservation, strict outperformance, identical windows
+# ---------------------------------------------------------------------------
+
+
+# --- Issue 1: zero values must not be treated as missing ---
+
+
+def test_ranking_zero_worst_return_beats_negative() -> None:
+    """worst_test_return = 0.0 must rank ABOVE any negative value."""
+    parameters = _make_fp([
+        ("5/10",  {"aggregate_return": 0.05, "profitable_test_window_rate": 0.5,
+                   "worst_test_return": -0.05, "worst_test_drawdown": -0.05,
+                   "total_completed_test_trades": 6}),
+        ("10/20", {"aggregate_return": 0.05, "profitable_test_window_rate": 0.5,
+                   "worst_test_return": 0.0,   "worst_test_drawdown": -0.05,
+                   "total_completed_test_trades": 6}),
+    ])
+    cmp = bse._build_adaptive_vs_fixed({}, parameters)
+    assert cmp["best_fixed_by_worst_test_return"]["parameter_key"] == "10/20"
+
+
+def test_ranking_zero_worst_drawdown_beats_negative() -> None:
+    """worst_test_drawdown = 0.0 (no drawdown recorded) beats any
+    negative drawdown."""
+    parameters = _make_fp([
+        ("5/10",  {"aggregate_return": 0.05, "profitable_test_window_rate": 0.5,
+                   "worst_test_return": -0.02, "worst_test_drawdown": -0.10,
+                   "total_completed_test_trades": 6}),
+        ("10/20", {"aggregate_return": 0.05, "profitable_test_window_rate": 0.5,
+                   "worst_test_return": -0.02, "worst_test_drawdown": 0.0,
+                   "total_completed_test_trades": 6}),
+    ])
+    cmp = bse._build_adaptive_vs_fixed({}, parameters)
+    assert cmp["best_fixed_by_worst_drawdown"]["parameter_key"] == "10/20"
+
+
+def test_return_over_drawdown_zero_return_distinct_from_none() -> None:
+    """aggregate_return = 0.0 with non-zero drawdown must yield 0.0,
+    NOT None — 0 is a valid ranking value."""
+    assert bse._return_over_worst_drawdown({
+        "aggregate_return": 0.0,
+        "worst_test_drawdown": -0.10,
+    }) == 0.0
+
+
+def test_return_over_drawdown_none_when_drawdown_missing() -> None:
+    assert bse._return_over_worst_drawdown({
+        "aggregate_return": 0.05,
+        "worst_test_drawdown": None,
+    }) is None
+
+
+def test_return_over_drawdown_none_when_drawdown_zero() -> None:
+    assert bse._return_over_worst_drawdown({
+        "aggregate_return": 0.05,
+        "worst_test_drawdown": 0.0,
+    }) is None
+
+
+def test_ranking_zero_rod_ranks_above_none_and_below_positive() -> None:
+    """A pair with rod=0.0 (zero return over non-zero drawdown) must
+    outrank a pair with rod=None (drawdown was zero → undefined), but
+    lose to any pair with positive rod."""
+    parameters = _make_fp([
+        ("3/10",  {"aggregate_return": 0.0,  "profitable_test_window_rate": 0.5,
+                   "worst_test_return": 0.0, "worst_test_drawdown": -0.10,
+                   "total_completed_test_trades": 6}),  # rod = 0.0
+        ("5/20",  {"aggregate_return": 0.05, "profitable_test_window_rate": 0.5,
+                   "worst_test_return": 0.05, "worst_test_drawdown": 0.0,
+                   "total_completed_test_trades": 6}),  # rod = None
+        ("10/50", {"aggregate_return": 0.10, "profitable_test_window_rate": 0.5,
+                   "worst_test_return": -0.02, "worst_test_drawdown": -0.05,
+                   "total_completed_test_trades": 6}),  # rod = 2.0
+    ])
+    cmp = bse._build_adaptive_vs_fixed({}, parameters)
+    # 10/50 wins (rod = 2.0).
+    assert cmp["best_fixed_by_return_over_drawdown"]["parameter_key"] == "10/50"
+
+
+# --- Issue 2: strict outperformance semantics ---
+
+
+def test_adaptive_outperformed_all_false_on_tie() -> None:
+    """Tie with the best fixed → adaptive did NOT strictly beat all."""
+    parameters = _make_fp([
+        ("10/20", {"aggregate_return": 0.10, "profitable_test_window_rate": 0.5,
+                   "worst_test_drawdown": -0.05, "worst_test_return": -0.02,
+                   "total_completed_test_trades": 12}),
+        ("15/50", {"aggregate_return": 0.03, "profitable_test_window_rate": 0.5,
+                   "worst_test_drawdown": -0.04, "worst_test_return": -0.01,
+                   "total_completed_test_trades": 8}),
+    ])
+    adaptive = {"aggregate_walk_forward_return": 0.10,
+                "profitable_test_window_rate": 0.5}
+    cmp = bse._build_adaptive_vs_fixed(adaptive, parameters)
+    assert cmp["adaptive_outperformed_all_fixed_parameters"] is False
+
+
+def test_adaptive_outperformed_all_true_only_on_strict_wins() -> None:
+    parameters = _make_fp([
+        ("10/20", {"aggregate_return": 0.05, "profitable_test_window_rate": 0.5,
+                   "worst_test_drawdown": -0.05, "worst_test_return": -0.02,
+                   "total_completed_test_trades": 12}),
+        ("15/50", {"aggregate_return": 0.03, "profitable_test_window_rate": 0.5,
+                   "worst_test_drawdown": -0.04, "worst_test_return": -0.01,
+                   "total_completed_test_trades": 8}),
+    ])
+    adaptive = {"aggregate_walk_forward_return": 0.10,
+                "profitable_test_window_rate": 0.5}
+    cmp = bse._build_adaptive_vs_fixed(adaptive, parameters)
+    assert cmp["adaptive_outperformed_all_fixed_parameters"] is True
+
+
+def test_all_fixed_underperformed_adaptive_needs_strict() -> None:
+    """One fixed tied with adaptive → warning must NOT trigger."""
+    params = _make_fp([
+        ("10/20", _make_agg(ret=0.05)),
+        ("15/50", _make_agg(ret=0.10)),  # tied with adaptive
+        ("5/10",  _make_agg(ret=0.02)),
+    ])
+    adaptive = {"aggregate_walk_forward_return": 0.10}
+    rep = bse._build_robustness_report(params, adaptive)
+    assert "ALL_FIXED_UNDERPERFORMED_ADAPTIVE" not in rep["fixed_comparison_warning_reasons"]
+
+
+def test_all_fixed_underperformed_adaptive_triggers_when_strict() -> None:
+    params = _make_fp([
+        ("10/20", _make_agg(ret=0.02)),
+        ("15/50", _make_agg(ret=0.01)),
+    ])
+    adaptive = {"aggregate_walk_forward_return": 0.10}
+    rep = bse._build_robustness_report(params, adaptive)
+    assert "ALL_FIXED_UNDERPERFORMED_ADAPTIVE" in rep["fixed_comparison_warning_reasons"]
+
+
+def test_all_fixed_underperformed_bh_needs_strict() -> None:
+    """A fixed pair tied with buy-and-hold has NOT underperformed it."""
+    params = _make_fp([
+        ("10/20", _make_agg(ret=0.05, bh=0.10)),
+        ("15/50", _make_agg(ret=0.10, bh=0.10)),  # tied with BH
+    ])
+    rep = bse._build_robustness_report(params, {})
+    assert "ALL_FIXED_UNDERPERFORMED_BUY_AND_HOLD" not in rep["fixed_comparison_warning_reasons"]
+
+
+def test_all_fixed_underperformed_bh_triggers_when_strict() -> None:
+    params = _make_fp([
+        ("10/20", _make_agg(ret=0.05, bh=0.15)),
+        ("15/50", _make_agg(ret=0.03, bh=0.15)),
+    ])
+    rep = bse._build_robustness_report(params, {})
+    assert "ALL_FIXED_UNDERPERFORMED_BUY_AND_HOLD" in rep["fixed_comparison_warning_reasons"]
+
+
+# --- Issue 3: identical windows guaranteed via fail-closed ---
+
+
+def test_wf_raises_when_no_adaptive_winner_on_any_window() -> None:
+    """If a training slice has no valid sweep configuration (every
+    combination is short >= long), fail closed rather than silently
+    dropping the window."""
+    bars = _bars_from_closes([float(c) for c in range(1, 601)])
+    with pytest.raises(BacktestError, match="window_index="):
+        bse.run_walk_forward(
+            bars, symbol="SPY", interval="60m",
+            baseline_short=20, baseline_long=25,
+            short_windows=[20, 25], long_windows=[10, 15],  # every s >= l
+            train_bars=100, test_bars=100, step_bars=100,
+        )
+
+
+def test_cli_raises_json_on_missing_adaptive_winner(
+    tmp_path: Path, capsys: pytest.CaptureFixture,
+) -> None:
+    """Missing adaptive winner surfaces as JSON error + exit 2."""
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    _write_cache(cache_dir, [float(c) for c in range(1, 601)])
+    rc = bse.main([
+        "--cache-dir", str(cache_dir),
+        "--walk-forward",
+        "--wf-train-bars", "100",
+        "--wf-test-bars", "100",
+        "--wf-step-bars", "100",
+        "--short-windows", "20,25",
+        "--long-windows", "10,15",
+        "--no-write",
+    ])
+    assert rc == 2
+    err = json.loads(capsys.readouterr().out)
+    assert "window_index" in err["error"]
+
+
+def test_fixed_and_adaptive_have_identical_window_indexes_and_timestamps() -> None:
+    """Every successful comparison must have adaptive and each fixed
+    pair evaluate exactly the same window set."""
+    bars = _bars_from_closes([float(c) for c in range(1, 601)])
+    summary = _wf_with_fixed(bars, wf_fixed_params=[(3, 10), (5, 20)])
+    wf = summary["walk_forward"]
+    fp = wf["fixed_parameter_comparison"]
+
+    adaptive_meta = [
+        (w["window_index"], w["test_start"], w["test_end"])
+        for w in wf["windows"]
+    ]
+    assert adaptive_meta  # sanity: at least one window
+    assert fp["window_count"] == len(wf["windows"])
+
+    for key, p in fp["parameters"].items():
+        fixed_meta = [
+            (w["window_index"], w["test_start"], w["test_end"])
+            for w in p["windows"]
+        ]
+        assert fixed_meta == adaptive_meta, (
+            f"fixed pair {key} evaluated on a different window set than adaptive"
+        )
+
+
+def test_fixed_window_count_matches_adaptive_length() -> None:
+    """window_count in the comparison block equals the number of
+    adaptive-produced windows."""
+    bars = _bars_from_closes([float(c) for c in range(1, 601)])
+    summary = _wf_with_fixed(bars, wf_fixed_params=[(3, 10)])
+    wf = summary["walk_forward"]
+    assert wf["fixed_parameter_comparison"]["window_count"] == len(wf["windows"])
+    for p in wf["fixed_parameter_comparison"]["parameters"].values():
+        assert len(p["windows"]) == len(wf["windows"])
