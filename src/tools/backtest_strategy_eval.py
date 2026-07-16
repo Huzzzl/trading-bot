@@ -719,10 +719,16 @@ def build_summary(
     wf_test_bars: int = 400,
     wf_step_bars: int = 400,
     wf_selection_metric: str = "total_return",
+    wf_fixed_params: Sequence[tuple[int, int]] | None = None,
+    wf_compare_fixed: bool = False,
 ) -> dict[str, Any]:
     if walk_forward and split_ratio is not None:
         raise BacktestError(
             "--walk-forward and --split-ratio cannot be used together"
+        )
+    if (wf_fixed_params or wf_compare_fixed) and not walk_forward:
+        raise BacktestError(
+            "--wf-fixed-params / --wf-compare-fixed require --walk-forward"
         )
     bpy = _BARS_PER_YEAR.get(interval, _BARS_PER_YEAR[_DEFAULT_INTERVAL])
     baseline = run_backtest(
@@ -815,6 +821,8 @@ def build_summary(
             commission_bps=commission_bps,
             slippage_bps=slippage_bps,
             include_trades=include_trades,
+            fixed_params=wf_fixed_params,
+            compare_fixed=wf_compare_fixed,
         )
 
     return summary
@@ -1061,6 +1069,465 @@ def _param_key(short: int, long: int) -> str:
     return f"{short}/{long}"
 
 
+def parse_fixed_params(raw: str) -> list[tuple[int, int]]:
+    """Parse a ``"10/20,15/50"`` string into deduplicated pairs.
+
+    Duplicates are silently dropped (first occurrence wins) so a caller
+    can concatenate lists without a preprocessing pass. Malformed
+    entries, non-integer values, non-positive values, and pairs where
+    ``short >= long`` all raise :class:`BacktestError`. An empty result
+    is also rejected — a fixed-comparison request must name at least
+    one pair.
+    """
+    if not isinstance(raw, str) or not raw.strip():
+        raise BacktestError("wf-fixed-params must be a non-empty string")
+    parts = [p.strip() for p in raw.split(",") if p.strip()]
+    seen: set[tuple[int, int]] = set()
+    result: list[tuple[int, int]] = []
+    for p in parts:
+        if "/" not in p:
+            raise BacktestError(f"malformed fixed-param pair: {p!r}")
+        sh_str, lo_str = p.split("/", 1)
+        try:
+            s = int(sh_str)
+            l = int(lo_str)
+        except ValueError as exc:
+            raise BacktestError(
+                f"fixed-param pair must be two integers separated by /: {p!r}"
+            ) from exc
+        if s <= 0 or l <= 0:
+            raise BacktestError(f"fixed-param values must be positive: {p!r}")
+        if s >= l:
+            raise BacktestError(
+                f"fixed-param short must be < long: {p!r}"
+            )
+        key = (s, l)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(key)
+    if not result:
+        raise BacktestError("wf-fixed-params yielded no valid pairs")
+    return result
+
+
+def _default_fixed_params(
+    baseline_short: int,
+    baseline_long: int,
+    short_windows: Sequence[int] | None,
+    long_windows: Sequence[int] | None,
+) -> list[tuple[int, int]]:
+    """Derive a default fixed-comparison list from baseline + sweep.
+
+    Order preserved: baseline first, then each valid ``(short, long)``
+    from the requested sweep. Invalid ``short >= long`` combinations
+    and duplicates are dropped deterministically.
+    """
+    seen: set[tuple[int, int]] = set()
+    out: list[tuple[int, int]] = []
+
+    def _add(s: int, l: int) -> None:
+        if s <= 0 or l <= 0 or s >= l:
+            return
+        key = (s, l)
+        if key in seen:
+            return
+        seen.add(key)
+        out.append(key)
+
+    _add(baseline_short, baseline_long)
+    if short_windows and long_windows:
+        for s in short_windows:
+            for l in long_windows:
+                _add(s, l)
+    return out
+
+
+def _fixed_param_key(short: int, long: int) -> str:
+    return f"{short}/{long}"
+
+
+def _evaluate_fixed_on_windows(
+    bars: Sequence[Bar],
+    all_windows: Sequence[tuple[int, int, int, int, int]],
+    fixed_params: Sequence[tuple[int, int]],
+    *,
+    bars_per_year: float,
+    execution: str,
+    commission_bps: float,
+    slippage_bps: float,
+    include_trades: bool,
+) -> dict[str, dict[str, Any]]:
+    """Run each fixed pair on every walk-forward window.
+
+    Returns a dict keyed by ``"short/long"`` so the output preserves
+    the requested parameter order (Python dicts are insertion-ordered).
+    Each entry has ``short_window``, ``long_window``, ``windows`` (a
+    per-window list) and ``aggregate`` (compounded metrics).
+    """
+    parameters: dict[str, dict[str, Any]] = {}
+    for s, l in fixed_params:
+        window_entries: list[dict[str, Any]] = []
+        for wi, ts, te, sts, ste in all_windows:
+            test_slice = bars[sts:ste]
+            warmup = l
+            warmup_start = sts - warmup
+            eval_slice = bars[warmup_start:ste]
+            test_result = run_backtest(
+                eval_slice, s, l,
+                bars_per_year=bars_per_year,
+                execution=execution,
+                commission_bps=commission_bps,
+                slippage_bps=slippage_bps,
+                evaluation_start_index=warmup,
+            )
+            result_dict = test_result.to_dict(include_trades=include_trades)
+
+            first_c = test_slice[0].close
+            last_c  = test_slice[-1].close
+            bh = (last_c - first_c) / first_c if first_c > 0 else 0.0
+            exposure = float(result_dict.get("exposure_time", 0.0))
+            xm = exposure * bh
+            test_ret = float(result_dict.get("total_return", 0.0))
+            test_sh  = float(result_dict.get("sharpe_ratio", 0.0))
+
+            window_entries.append({
+                "window_index": wi,
+                "test_start":  str(test_slice[0].ts),
+                "test_end":    str(test_slice[-1].ts),
+                "test_bar_count": len(test_slice),
+                "result": result_dict,
+                "test_buy_and_hold_return":            bh,
+                "test_outperformed_buy_and_hold":      test_ret > bh,
+                "test_profitable":                     test_ret > 0,
+                "test_positive_sharpe":                test_sh > 0,
+                "exposure_matched_buy_and_hold_return": xm,
+            })
+
+        aggregate = _fixed_parameter_aggregate(window_entries)
+        parameters[_fixed_param_key(s, l)] = {
+            "short_window": s,
+            "long_window":  l,
+            "windows":      window_entries,
+            "aggregate":    aggregate,
+        }
+    return parameters
+
+
+def _fixed_parameter_aggregate(
+    windows: Sequence[dict[str, Any]],
+) -> dict[str, Any]:
+    """Aggregate a fixed pair's per-window metrics.
+
+    Exposure-matched benchmark: ``exposure_time * buy_and_hold_return``
+    on each window, compounded across windows. This is a simple
+    constant-allocation surrogate — it does not replicate the
+    strategy's timing and is not a substitute for full buy-and-hold.
+    """
+    n = len(windows)
+    if n == 0:
+        return {
+            "window_count": 0,
+            "profitable_test_window_count": 0,
+            "profitable_test_window_rate": 0.0,
+            "positive_sharpe_window_count": 0,
+            "positive_sharpe_window_rate": 0.0,
+            "outperformed_buy_and_hold_window_count": 0,
+            "outperformed_buy_and_hold_window_rate": 0.0,
+            "outperformed_exposure_matched_window_count": 0,
+            "outperformed_exposure_matched_window_rate": 0.0,
+            "average_test_return": 0.0,
+            "median_test_return": 0.0,
+            "average_test_sharpe": 0.0,
+            "median_test_sharpe": 0.0,
+            "average_exposure_time": 0.0,
+            "worst_test_return": None,
+            "worst_test_drawdown": None,
+            "total_completed_test_trades": 0,
+            "aggregate_return": 0.0,
+            "aggregate_buy_and_hold_return": 0.0,
+            "aggregate_exposure_matched_buy_and_hold_return": 0.0,
+            "aggregate_gap_vs_buy_and_hold": 0.0,
+            "aggregate_gap_vs_exposure_matched": 0.0,
+            "largest_positive_window_contribution": None,
+            "best_window": None,
+            "worst_window": None,
+        }
+
+    def _median(vals: Sequence[float]) -> float:
+        if not vals:
+            return 0.0
+        s = sorted(vals)
+        mid = len(s) // 2
+        return s[mid] if len(s) % 2 else (s[mid - 1] + s[mid]) / 2.0
+
+    def _compound(rs: Sequence[float]) -> float:
+        prod = 1.0
+        for r in rs:
+            prod *= (1.0 + r)
+        return prod - 1.0
+
+    test_returns  = [float(w["result"].get("total_return", 0.0)) for w in windows]
+    test_sharpes  = [float(w["result"].get("sharpe_ratio", 0.0)) for w in windows]
+    test_dds      = [float(w["result"].get("max_drawdown", 0.0)) for w in windows]
+    exposures     = [float(w["result"].get("exposure_time", 0.0)) for w in windows]
+    trades        = [int(w["result"].get("completed_trade_count", 0) or 0) for w in windows]
+    bh_returns    = [float(w["test_buy_and_hold_return"]) for w in windows]
+    xm_returns    = [float(w["exposure_matched_buy_and_hold_return"]) for w in windows]
+
+    profitable   = [w for w in windows if w["test_profitable"]]
+    positive_sh  = [w for w in windows if w["test_positive_sharpe"]]
+    outperf_bh   = [w for w in windows if w["test_outperformed_buy_and_hold"]]
+    outperf_xm   = [
+        w for w in windows
+        if float(w["result"].get("total_return", 0.0))
+           > float(w["exposure_matched_buy_and_hold_return"])
+    ]
+
+    agg_ret = _compound(test_returns)
+    agg_bh  = _compound(bh_returns)
+    agg_xm  = _compound(xm_returns)
+
+    positive_returns = [r for r in test_returns if r > 0]
+    if positive_returns:
+        lpc = max(positive_returns) / sum(positive_returns)
+    else:
+        lpc = None
+
+    best_window  = max(windows, key=lambda w: float(w["result"].get("total_return", 0.0)))
+    worst_window = min(windows, key=lambda w: float(w["result"].get("total_return", 0.0)))
+
+    return {
+        "window_count": n,
+        "profitable_test_window_count":            len(profitable),
+        "profitable_test_window_rate":             len(profitable) / n,
+        "positive_sharpe_window_count":            len(positive_sh),
+        "positive_sharpe_window_rate":             len(positive_sh) / n,
+        "outperformed_buy_and_hold_window_count":  len(outperf_bh),
+        "outperformed_buy_and_hold_window_rate":   len(outperf_bh) / n,
+        "outperformed_exposure_matched_window_count": len(outperf_xm),
+        "outperformed_exposure_matched_window_rate":  len(outperf_xm) / n,
+        "average_test_return":   sum(test_returns) / n,
+        "median_test_return":    _median(test_returns),
+        "average_test_sharpe":   sum(test_sharpes) / n,
+        "median_test_sharpe":    _median(test_sharpes),
+        "average_exposure_time": sum(exposures) / n,
+        "worst_test_return":     min(test_returns),
+        "worst_test_drawdown":   min(test_dds),
+        "total_completed_test_trades": sum(trades),
+        "aggregate_return":                              agg_ret,
+        "aggregate_buy_and_hold_return":                 agg_bh,
+        "aggregate_exposure_matched_buy_and_hold_return": agg_xm,
+        "aggregate_gap_vs_buy_and_hold":                 agg_ret - agg_bh,
+        "aggregate_gap_vs_exposure_matched":             agg_ret - agg_xm,
+        "largest_positive_window_contribution":          lpc,
+        "best_window":  best_window,
+        "worst_window": worst_window,
+    }
+
+
+def _fixed_tiebreak_key(entry: dict[str, Any]) -> tuple:
+    """Deterministic tiebreak — higher-is-better on every element.
+
+    Order: aggregate return, profitable-window rate, small |drawdown|,
+    trade count, small short window, small long window.
+    """
+    wd = entry.get("worst_test_drawdown") or 0.0
+    return (
+        float(entry.get("aggregate_return", 0.0)),
+        float(entry.get("profitable_test_window_rate", 0.0)),
+        -abs(float(wd)),
+        int(entry.get("total_completed_test_trades", 0) or 0),
+        -int(entry.get("short_window", 0)),
+        -int(entry.get("long_window", 0)),
+    )
+
+
+def _return_over_worst_drawdown(entry: dict[str, Any]) -> float | None:
+    wd = entry.get("worst_test_drawdown")
+    ar = entry.get("aggregate_return")
+    if wd in (None, 0, 0.0) or ar is None:
+        return None
+    return float(ar) / abs(float(wd))
+
+
+def _build_adaptive_vs_fixed(
+    adaptive_aggregate: dict[str, Any],
+    parameters: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Compare adaptive walk-forward against every fixed parameter."""
+    fixed_entries: list[dict[str, Any]] = []
+    for key, p in parameters.items():
+        entry = dict(p["aggregate"])
+        entry["parameter_key"] = key
+        entry["short_window"] = p["short_window"]
+        entry["long_window"] = p["long_window"]
+        entry["return_over_worst_drawdown"] = _return_over_worst_drawdown(entry)
+        fixed_entries.append(entry)
+
+    def _best(key_fn) -> dict[str, Any] | None:
+        if not fixed_entries:
+            return None
+        return max(fixed_entries, key=lambda e: (key_fn(e), _fixed_tiebreak_key(e)))
+
+    best_by_agg = _best(
+        lambda e: float(e.get("aggregate_return", 0.0)),
+    )
+    best_by_rate = _best(
+        lambda e: float(e.get("profitable_test_window_rate", 0.0)),
+    )
+    best_by_worst_return = _best(
+        lambda e: float(e.get("worst_test_return") or float("-inf")),
+    )
+    best_by_worst_dd = _best(
+        # max_drawdown values are <= 0; less negative wins.
+        lambda e: float(e.get("worst_test_drawdown") or float("-inf")),
+    )
+    best_by_rod = _best(
+        lambda e: float(e.get("return_over_worst_drawdown") or float("-inf")),
+    )
+
+    adaptive_return = float(
+        adaptive_aggregate.get("aggregate_walk_forward_return", 0.0)
+    )
+    adaptive_rate = float(
+        adaptive_aggregate.get("profitable_test_window_rate", 0.0)
+    )
+
+    beating_return = [
+        e["parameter_key"] for e in fixed_entries
+        if float(e.get("aggregate_return", 0.0)) > adaptive_return
+    ]
+    beating_rate = [
+        e["parameter_key"] for e in fixed_entries
+        if float(e.get("profitable_test_window_rate", 0.0)) > adaptive_rate
+    ]
+
+    # Rank = 1 + number of fixed strictly beating adaptive.
+    adaptive_rank = len(beating_return) + 1
+    adaptive_beats_all = bool(fixed_entries) and not beating_return
+
+    return {
+        "adaptive_aggregate_return":                     adaptive_return,
+        "adaptive_profitable_window_rate":               adaptive_rate,
+        "adaptive_worst_test_return":                    adaptive_aggregate.get("worst_test_return"),
+        "adaptive_worst_test_drawdown":                  adaptive_aggregate.get("worst_test_drawdown"),
+        "adaptive_total_completed_test_trades":          adaptive_aggregate.get("total_completed_test_trades", 0),
+        "adaptive_largest_positive_window_contribution": adaptive_aggregate.get("largest_positive_window_contribution"),
+        "best_fixed_by_aggregate_return":                best_by_agg,
+        "best_fixed_by_profitable_window_rate":          best_by_rate,
+        "best_fixed_by_worst_test_return":               best_by_worst_return,
+        "best_fixed_by_worst_drawdown":                  best_by_worst_dd,
+        "best_fixed_by_return_over_drawdown":            best_by_rod,
+        "fixed_parameters_beating_adaptive_aggregate_return":       beating_return,
+        "fixed_parameters_beating_adaptive_profitable_window_rate": beating_rate,
+        "adaptive_rank_by_aggregate_return":             adaptive_rank,
+        "adaptive_outperformed_all_fixed_parameters":    adaptive_beats_all,
+    }
+
+
+def _build_robustness_report(
+    parameters: dict[str, dict[str, Any]],
+    adaptive_aggregate: dict[str, Any],
+) -> dict[str, Any]:
+    """Summarize which fixed parameters passed the robustness screens.
+
+    ``stable_fixed_candidates`` requires ALL of:
+      - profitable_test_window_rate >= 0.60
+      - aggregate_return > 0
+      - total_completed_test_trades >= 15
+      - largest_positive_window_contribution <= 0.60
+      - worst_test_drawdown > -0.15
+
+    Buy-and-hold outperformance is reported separately and does NOT
+    gate stable-candidate status — the strategy can be stable without
+    beating buy-and-hold across every regime.
+    """
+    keys = list(parameters.keys())
+    aggregates = {k: parameters[k]["aggregate"] for k in keys}
+
+    if aggregates:
+        max_rate = max(
+            float(a.get("profitable_test_window_rate", 0.0))
+            for a in aggregates.values()
+        )
+        most_freq = [
+            k for k, a in aggregates.items()
+            if float(a.get("profitable_test_window_rate", 0.0)) == max_rate
+        ]
+    else:
+        most_freq = []
+
+    def _filter(pred) -> list[str]:
+        return [k for k, a in aggregates.items() if pred(a)]
+
+    prof_60 = _filter(
+        lambda a: float(a.get("profitable_test_window_rate", 0.0)) >= 0.60,
+    )
+    pos_agg = _filter(
+        lambda a: float(a.get("aggregate_return", 0.0)) > 0,
+    )
+    beat_bh = _filter(
+        lambda a: float(a.get("aggregate_return", 0.0))
+                  > float(a.get("aggregate_buy_and_hold_return", 0.0)),
+    )
+    beat_xm = _filter(
+        lambda a: float(a.get("aggregate_return", 0.0))
+                  > float(a.get("aggregate_exposure_matched_buy_and_hold_return", 0.0)),
+    )
+    trades_15 = _filter(
+        lambda a: int(a.get("total_completed_test_trades", 0) or 0) >= 15,
+    )
+    concentration_60 = _filter(
+        lambda a: (a.get("largest_positive_window_contribution") or 0.0) > 0.60,
+    )
+
+    stable: list[str] = []
+    for k, a in aggregates.items():
+        lpc = a.get("largest_positive_window_contribution")
+        wd  = a.get("worst_test_drawdown")
+        if (
+            float(a.get("profitable_test_window_rate", 0.0)) >= 0.60
+            and float(a.get("aggregate_return", 0.0)) > 0
+            and int(a.get("total_completed_test_trades", 0) or 0) >= 15
+            and (lpc is None or float(lpc) <= 0.60)
+            and wd is not None and float(wd) > -0.15
+        ):
+            stable.append(k)
+
+    reasons: list[str] = []
+    if not stable:
+        reasons.append("NO_STABLE_FIXED_CANDIDATE")
+    if aggregates and not beat_bh:
+        reasons.append("ALL_FIXED_UNDERPERFORMED_BUY_AND_HOLD")
+    if aggregates:
+        adaptive_return = float(
+            adaptive_aggregate.get("aggregate_walk_forward_return", 0.0)
+        )
+        beats_adaptive = _filter(
+            lambda a: float(a.get("aggregate_return", 0.0)) > adaptive_return,
+        )
+        if not beats_adaptive:
+            reasons.append("ALL_FIXED_UNDERPERFORMED_ADAPTIVE")
+    if not trades_15:
+        reasons.append("LOW_FIXED_SAMPLE_TRADE_COUNT")
+    if concentration_60:
+        reasons.append("FIXED_RESULTS_PROFIT_CONCENTRATED")
+
+    return {
+        "most_frequently_profitable_fixed_parameters":            most_freq,
+        "fixed_parameters_profitable_in_at_least_60_percent_of_windows": prof_60,
+        "fixed_parameters_with_positive_aggregate_return":        pos_agg,
+        "fixed_parameters_outperforming_buy_and_hold":            beat_bh,
+        "fixed_parameters_outperforming_exposure_matched_buy_and_hold": beat_xm,
+        "fixed_parameters_with_at_least_15_completed_test_trades": trades_15,
+        "fixed_parameters_with_profit_concentration_above_60_percent": concentration_60,
+        "stable_fixed_candidates":                                stable,
+        "fixed_comparison_warning":                               bool(reasons),
+        "fixed_comparison_warning_reasons":                       reasons,
+    }
+
+
 def run_walk_forward(
     bars: Sequence[Bar],
     *,
@@ -1078,6 +1545,8 @@ def run_walk_forward(
     commission_bps: float = 0.0,
     slippage_bps: float = 0.0,
     include_trades: bool = False,
+    fixed_params: Sequence[tuple[int, int]] | None = None,
+    compare_fixed: bool = False,
 ) -> dict[str, Any]:
     """Rolling walk-forward validation.
 
@@ -1112,12 +1581,31 @@ def run_walk_forward(
     # signal at the first test bar's open reads closes[-2] of the
     # warmup — so we need max_long + 1 prior bars, not just max_long.
     max_long = max(effective_longs)
+    if fixed_params:
+        max_long = max(max_long, max(l for _, l in fixed_params))
     if train_bars < max_long + 1:
         raise BacktestError(
             f"wf_train_bars ({train_bars}) must be >= max long_window + 1 "
             f"({max_long + 1}) so every test window can receive full "
             f"SMA warmup"
         )
+
+    # Derive default fixed comparison set if requested without an
+    # explicit list. Presence of fixed_params always enables comparison.
+    if compare_fixed and fixed_params is None:
+        fixed_params = _default_fixed_params(
+            baseline_short, baseline_long, short_windows, long_windows,
+        )
+        # Re-run the max-long check in case defaults reintroduced a
+        # larger value (defensive; already captured above but harmless).
+        if fixed_params:
+            max_long = max(max_long, max(l for _, l in fixed_params))
+            if train_bars < max_long + 1:
+                raise BacktestError(
+                    f"wf_train_bars ({train_bars}) must be >= "
+                    f"max long_window + 1 ({max_long + 1}) for "
+                    f"default fixed-comparison set"
+                )
 
     bpy = _BARS_PER_YEAR.get(interval, _BARS_PER_YEAR[_DEFAULT_INTERVAL])
     winners: list[dict[str, Any]] = []
@@ -1189,7 +1677,7 @@ def run_walk_forward(
     aggregate = _aggregate_walk_forward(winners)
     warnings = _walk_forward_warnings(winners, aggregate)
 
-    return {
+    result = {
         "mode": "rolling_chronological",
         "train_bars": train_bars,
         "test_bars":  test_bars,
@@ -1201,6 +1689,30 @@ def run_walk_forward(
         "walk_forward_warning":         warnings["warning"],
         "walk_forward_warning_reasons": warnings["reasons"],
     }
+
+    if fixed_params:
+        parameters = _evaluate_fixed_on_windows(
+            bars, all_windows, fixed_params,
+            bars_per_year=bpy,
+            execution=execution,
+            commission_bps=commission_bps,
+            slippage_bps=slippage_bps,
+            include_trades=include_trades,
+        )
+        result["fixed_parameter_comparison"] = {
+            "requested_parameters": [_fixed_param_key(s, l) for s, l in fixed_params],
+            "parameter_count":      len(fixed_params),
+            "window_count":         len(all_windows),
+            "comparison_basis":     "same_walk_forward_test_windows",
+            "test_windows_identical_to_adaptive": True,
+            "parameters":           parameters,
+            "adaptive_vs_fixed":    _build_adaptive_vs_fixed(aggregate, parameters),
+            "robustness_report":    _build_robustness_report(parameters, aggregate),
+            "research_only":                     True,
+            "automatic_parameter_promotion_allowed": False,
+        }
+
+    return result
 
 
 def _aggregate_walk_forward(windows: Sequence[dict[str, Any]]) -> dict[str, Any]:
@@ -1395,6 +1907,16 @@ def _build_parser() -> argparse.ArgumentParser:
                    choices=list(_WF_SELECTION_METRICS),
                    help="Sweep metric used to pick the train winner "
                         "(v1: total_return only).")
+    p.add_argument("--wf-fixed-params", default=None,
+                   help='Comma-separated fixed SMA pairs to evaluate on '
+                        'the same walk-forward test windows as adaptive, '
+                        'e.g. "10/20,15/20,20/50". Requires --walk-forward. '
+                        'Implies --wf-compare-fixed.')
+    p.add_argument("--wf-compare-fixed", action="store_true",
+                   help="Enable fixed-parameter comparison on the same "
+                        "walk-forward test windows. When set without "
+                        "--wf-fixed-params, defaults to baseline plus "
+                        "every valid sweep pair. Requires --walk-forward.")
     p.add_argument("--output-dir", default=str(_DEFAULT_OUTPUT_DIR))
     p.add_argument("--no-write", action="store_true",
                    help="Do not write the summary to disk; stdout only.")
@@ -1413,6 +1935,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         short_ws = _parse_window_list(args.short_windows) if args.short_windows else None
         long_ws = _parse_window_list(args.long_windows) if args.long_windows else None
+        fixed = parse_fixed_params(args.wf_fixed_params) if args.wf_fixed_params else None
     except BacktestError as exc:
         print(json.dumps({"error": str(exc)}, indent=2))
         return 2
@@ -1439,6 +1962,10 @@ def main(argv: list[str] | None = None) -> int:
             wf_test_bars=args.wf_test_bars,
             wf_step_bars=args.wf_step_bars,
             wf_selection_metric=args.wf_selection_metric,
+            wf_fixed_params=fixed,
+            # Fixed pairs supplied → auto-enable comparison; explicit
+            # --wf-compare-fixed also enables it.
+            wf_compare_fixed=args.wf_compare_fixed or bool(fixed),
         )
     except BacktestError as exc:
         print(json.dumps({"error": str(exc)}, indent=2))
