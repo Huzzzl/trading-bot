@@ -217,7 +217,11 @@ class BacktestResult:
     entry_blocked_rate: float = 0.0
     trades: list[Trade] = field(default_factory=list)
 
-    def to_dict(self, include_trades: bool = False) -> dict[str, Any]:
+    def to_dict(
+        self,
+        include_trades: bool = False,
+        include_filter_diagnostics: bool = False,
+    ) -> dict[str, Any]:
         out: dict[str, Any] = {
             "short_window": self.short_window,
             "long_window": self.long_window,
@@ -241,12 +245,16 @@ class BacktestResult:
             "open_entry_price": self.open_entry_price,
             "open_entry_index": self.open_entry_index,
             "open_unrealized_return": self.open_unrealized_return,
-            "entry_filter": self.entry_filter,
-            "bullish_signal_count": self.bullish_signal_count,
-            "entry_allowed_count": self.entry_allowed_count,
-            "entry_blocked_count": self.entry_blocked_count,
-            "entry_blocked_rate": self.entry_blocked_rate,
         }
+        # Filter diagnostics are opt-in so pre-S61 callers (baseline,
+        # sweep, split, adaptive walk-forward, S60 fixed comparison)
+        # see the exact same schema they saw before S61.
+        if include_filter_diagnostics:
+            out["entry_filter"] = self.entry_filter
+            out["bullish_signal_count"] = self.bullish_signal_count
+            out["entry_allowed_count"] = self.entry_allowed_count
+            out["entry_blocked_count"] = self.entry_blocked_count
+            out["entry_blocked_rate"] = self.entry_blocked_rate
         if include_trades:
             out["trades"] = [
                 {
@@ -453,10 +461,16 @@ def filter_warmup_requirement(
 
     Combines the base SMA requirement with any filter-specific need
     (SMA200, long_window + 20 for the slope check, 15 for ATR14) and
-    adds 1 when the caller uses ``next_open`` execution.
+    adds 1 when a filter itself needs it under ``next_open``. The
+    ``none`` variant returns exactly ``long_window`` under every
+    execution mode, matching the S60 fixed-comparison helper
+    byte-for-byte — the S61 output for ``none`` must therefore equal
+    the S60 fixed output for the same base pair.
     """
     if variant not in _FILTER_VARIANTS:
         raise BacktestError(f"unknown filter variant: {variant!r}")
+    if variant == "none":
+        return long_window
     reqs = [long_window]
     if variant in ("price_above_sma200", "trend200_and_separation25"):
         reqs.append(200)
@@ -1820,7 +1834,10 @@ def _evaluate_filter_windows(
             evaluation_start_index=warmup,
             entry_filter=variant,
         )
-        rd = r.to_dict(include_trades=include_trades)
+        rd = r.to_dict(
+            include_trades=include_trades,
+            include_filter_diagnostics=True,
+        )
         first_c = test_slice[0].close
         last_c  = test_slice[-1].close
         bh = (last_c - first_c) / first_c if first_c > 0 else 0.0
@@ -2214,6 +2231,11 @@ def _filter_robustness_report(
         ):
             stable.append(combo_key)
 
+    # These four warnings must judge only the real filters — the
+    # unfiltered baseline is not a "filter" and must neither
+    # suppress nor trigger any filter-specific warning.
+    non_none_entries = [e for e in entries if e["filter_variant"] != "none"]
+
     reasons: list[str] = []
     if not stable:
         reasons.append("NO_STABLE_FILTER_CANDIDATE")
@@ -2221,26 +2243,29 @@ def _filter_robustness_report(
         reasons.append("NO_FILTER_BEAT_UNFILTERED_RETURN")
     if entries and not improving_ww:
         reasons.append("NO_FILTER_IMPROVED_WORST_WINDOW")
-    if entries and all(
+    if non_none_entries and all(
         float(e.get("aggregate_return", 0.0))
         < float(e.get("aggregate_exposure_matched_buy_and_hold_return", 0.0))
-        for e in entries
+        for e in non_none_entries
     ):
         reasons.append("ALL_FILTERS_UNDERPERFORMED_EXPOSURE_MATCHED")
-    if entries and not trades_15:
+    non_none_trades_15 = [
+        e for e in non_none_entries
+        if int(e.get("total_completed_test_trades", 0) or 0) >= 15
+    ]
+    if non_none_entries and not non_none_trades_15:
         reasons.append("LOW_FILTER_SAMPLE_TRADE_COUNT")
     if any(
         (e.get("largest_positive_window_contribution") is not None
          and float(e["largest_positive_window_contribution"]) > 0.60)
-        for e in entries
+        for e in non_none_entries
     ):
         reasons.append("FILTER_RESULTS_PROFIT_CONCENTRATED")
     # Blocked-too-many-entries: only about non-none filters. All of
     # them (if any exist) must have blocked > 80%.
-    non_none = [e for e in entries if e["filter_variant"] != "none"]
-    if non_none and all(
+    if non_none_entries and all(
         float(e.get("aggregate_entry_blocked_rate", 0.0)) > 0.80
-        for e in non_none
+        for e in non_none_entries
     ):
         reasons.append("FILTER_BLOCKED_TOO_MANY_ENTRIES")
 
@@ -2302,6 +2327,7 @@ def _build_filter_comparison(
     return {
         "base_parameters":       [_fixed_param_key(s, l) for s, l in base_params],
         "filter_variants":       list(variants),
+        "mandatory_baseline_variant": "none",
         "base_parameter_count":  len(base_params),
         "filter_variant_count":  len(variants),
         "window_count":          len(all_windows),
@@ -2310,6 +2336,12 @@ def _build_filter_comparison(
         "filters_apply_to_entries_only": True,
         "research_only":                     True,
         "automatic_filter_promotion_allowed": False,
+        "interpretation_guardrails": {
+            "retrospective_test_on_previously_inspected_windows": True,
+            "untouched_holdout_result":                           False,
+            "automatic_strategy_promotion_allowed":               False,
+            "forward_paper_validation_required":                  True,
+        },
         "results":               results,
         "filter_vs_unfiltered":  filter_vs_unfiltered,
         "filter_rankings":       rankings,
@@ -2406,6 +2438,14 @@ def run_walk_forward(
             filter_base_params = list(_DEFAULT_FILTER_BASE_PARAMS)
         if filter_variants is None:
             filter_variants = list(_FILTER_VARIANTS)
+        else:
+            filter_variants = list(filter_variants)
+            # `none` is the mandatory baseline for every stability
+            # check (filter_vs_unfiltered, stable_filter_candidates).
+            # Prepend it if the caller omitted it — never silently
+            # produce empty comparison rows.
+            if "none" not in filter_variants:
+                filter_variants = ["none"] + filter_variants
         # Validate warmup fit for every (base, variant) pair up front.
         for base_s, base_l in filter_base_params:
             if base_s <= 0 or base_l <= 0 or base_s >= base_l:

@@ -2639,14 +2639,17 @@ def test_filter_combined_requires_both_conditions() -> None:
 
 def test_filter_warmup_requirement_correct_per_variant() -> None:
     # long=20 next_open
-    assert bse.filter_warmup_requirement(20, "none") == 21
+    # `none` must equal the S60 fixed warmup (== long_window) so
+    # the S61 "none" output byte-matches S60. All other variants
+    # follow the base + next_open convention.
+    assert bse.filter_warmup_requirement(20, "none") == 20
     assert bse.filter_warmup_requirement(20, "price_above_sma200") == 201
     assert bse.filter_warmup_requirement(20, "long_sma_slope_up_20") == 41
     assert bse.filter_warmup_requirement(20, "ma_separation_25bps") == 21
     assert bse.filter_warmup_requirement(20, "ma_separation_50bps") == 21
     assert bse.filter_warmup_requirement(20, "atr14_pct_below_2") == 21
     assert bse.filter_warmup_requirement(20, "trend200_and_separation25") == 201
-    # Same in same_close, minus the next_open +1.
+    # Same in same_close, minus the next_open +1 for non-none variants.
     assert bse.filter_warmup_requirement(20, "none", execution="same_close") == 20
 
 
@@ -3108,3 +3111,252 @@ def test_backtest_tool_still_has_no_broker_or_network_imports_s61() -> None:
         assert tok not in source, (
             f"backtest_strategy_eval must not depend on {tok!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# S61 review — schema preservation, none == S60 fixed, non-none warnings, none baseline
+# ---------------------------------------------------------------------------
+
+
+# --- Issue 1: pre-S61 callers must not see filter diagnostic fields ---
+
+
+_FILTER_DIAG_KEYS = {
+    "entry_filter", "bullish_signal_count", "entry_allowed_count",
+    "entry_blocked_count", "entry_blocked_rate",
+}
+
+
+def test_baseline_result_dict_omits_filter_diagnostics() -> None:
+    closes = list(range(1, 51))
+    bars = _bars_from_closes([float(c) for c in closes])
+    r = bse.run_backtest(bars, 3, 5)
+    d = r.to_dict()
+    for k in _FILTER_DIAG_KEYS:
+        assert k not in d, (
+            f"pre-S61 callers must not see {k!r} — it changes the JSON schema"
+        )
+
+
+def test_baseline_summary_no_filter_diagnostics_anywhere() -> None:
+    """Complete dict comparison: no baseline/sweep/split/adaptive/S60
+    field carries any filter diagnostic when the caller did not
+    request it."""
+    bars = _bars_from_closes([float(c) for c in range(1, 601)])
+    summary = bse.build_summary(
+        bars=bars, symbol="SPY", interval="60m",
+        now_utc=datetime(2026, 7, 13, 20, 0, 0, tzinfo=timezone.utc),
+        short_window=3, long_window=5,
+        short_windows=[3, 5], long_windows=[10, 20],
+        walk_forward=True,
+        wf_train_bars=250, wf_test_bars=100, wf_step_bars=100,
+        wf_fixed_params=[(3, 10), (5, 20)],
+    )
+
+    def _walk(obj):
+        if isinstance(obj, dict):
+            for k in _FILTER_DIAG_KEYS:
+                assert k not in obj, (
+                    f"pre-S61 caller sees {k!r} at {list(obj.keys())}"
+                )
+            for v in obj.values():
+                _walk(v)
+        elif isinstance(obj, list):
+            for v in obj:
+                _walk(v)
+
+    _walk(summary)
+
+
+def test_filter_diagnostics_appear_only_when_requested() -> None:
+    closes = list(range(1, 51))
+    bars = _bars_from_closes([float(c) for c in closes])
+    r = bse.run_backtest(bars, 3, 5)
+    d = r.to_dict(include_filter_diagnostics=True)
+    for k in _FILTER_DIAG_KEYS:
+        assert k in d
+
+
+# --- Issue 2: 'none' variant must equal S60 fixed byte-for-byte ---
+
+
+def test_filter_none_matches_fixed_result_including_trades_and_open_entry() -> None:
+    """Complete equality: total_return AND trades AND open_entry_index."""
+    # Zig-zag data — every 60 bars: 30 up then 30 down. Creates both
+    # bearish crossovers (→ completed trades) and up-legs at the end
+    # of test windows (→ open positions).
+    zigzag: list[float] = []
+    for _ in range(12):
+        zigzag.extend(range(1, 31))
+        zigzag.extend(range(30, 0, -1))
+    bars = _bars_from_closes([float(c) for c in zigzag])
+    summary = bse.build_summary(
+        bars=bars, symbol="SPY", interval="60m",
+        now_utc=datetime(2026, 7, 13, 20, 0, 0, tzinfo=timezone.utc),
+        short_window=3, long_window=5,
+        walk_forward=True,
+        wf_train_bars=250, wf_test_bars=100, wf_step_bars=100,
+        wf_fixed_params=[(3, 10)],
+        wf_filter_base_params=[(3, 10)],
+        wf_filter_variants=["none"],
+        include_trades=True,
+    )
+    wf = summary["walk_forward"]
+    fixed_windows  = wf["fixed_parameter_comparison"]["parameters"]["3/10"]["windows"]
+    filter_windows = wf["filter_comparison"]["results"]["3/10"]["none"]["windows"]
+    assert len(fixed_windows) == len(filter_windows)
+
+    _WRAPPER_ONLY = _FILTER_DIAG_KEYS  # keys that intentionally exist only on the filter side
+
+    saw_open_position = False
+    saw_completed_trade = False
+    for f, g in zip(fixed_windows, filter_windows):
+        f_result = f["result"]
+        g_result = {k: v for k, v in g["result"].items() if k not in _WRAPPER_ONLY}
+        assert f_result == g_result, (
+            f"none variant does not match S60 fixed at window "
+            f"{f['window_index']}: keys "
+            f"{set(f_result) ^ set(g_result)}"
+        )
+        if g_result["open_position"]:
+            saw_open_position = True
+        if g_result["completed_trade_count"] > 0:
+            saw_completed_trade = True
+    assert saw_completed_trade, "test needs at least one completed trade"
+    assert saw_open_position, "test needs at least one final open position"
+
+
+# --- Issue 3: warnings scoped to non-none entries ---
+
+
+def _mk_agg_r3(*, ret=0.0, rate=0.0, trades=0, dd=-0.05, wr=-0.02, lpc=0.4,
+               bh=0.0, xm=0.0, blocked=0.0):
+    return _mk_filter_agg(
+        ret=ret, rate=rate, wr=wr, wd=dd, trades=trades,
+        bh=bh, xm=xm, lpc=lpc, blocked_rate=blocked,
+    )
+
+
+def test_r3_low_filter_sample_trade_count_ignores_unfiltered() -> None:
+    """Unfiltered has 20 trades but every real filter has <15 → warn."""
+    results = _mk_results([
+        ("10/20", "none",              _mk_agg_r3(ret=0.05, rate=0.5, trades=20)),
+        ("10/20", "price_above_sma200",_mk_agg_r3(ret=0.05, rate=0.5, trades=8)),
+        ("10/20", "ma_separation_25bps", _mk_agg_r3(ret=0.03, rate=0.5, trades=6)),
+    ])
+    entries = bse._filter_flat_entries(results)
+    rep = bse._filter_robustness_report(results, entries)
+    assert "LOW_FILTER_SAMPLE_TRADE_COUNT" in rep["filter_comparison_warning_reasons"]
+
+
+def test_r3_concentration_ignores_unfiltered_concentration() -> None:
+    """Unfiltered concentration is 0.85 but every real filter is <=0.60
+    → no concentration warning."""
+    results = _mk_results([
+        ("10/20", "none",                _mk_agg_r3(ret=0.05, rate=0.5, trades=20, lpc=0.85)),
+        ("10/20", "long_sma_slope_up_20",_mk_agg_r3(ret=0.05, rate=0.5, trades=20, lpc=0.40)),
+        ("10/20", "ma_separation_25bps", _mk_agg_r3(ret=0.05, rate=0.5, trades=20, lpc=0.50)),
+    ])
+    entries = bse._filter_flat_entries(results)
+    rep = bse._filter_robustness_report(results, entries)
+    assert "FILTER_RESULTS_PROFIT_CONCENTRATED" not in rep["filter_comparison_warning_reasons"]
+
+
+def test_r3_concentration_triggers_when_a_real_filter_exceeds() -> None:
+    """One real filter over 0.60 concentration → warning triggers."""
+    results = _mk_results([
+        ("10/20", "none",                _mk_agg_r3(ret=0.05, rate=0.5, trades=20, lpc=0.40)),
+        ("10/20", "long_sma_slope_up_20",_mk_agg_r3(ret=0.05, rate=0.5, trades=20, lpc=0.80)),
+    ])
+    entries = bse._filter_flat_entries(results)
+    rep = bse._filter_robustness_report(results, entries)
+    assert "FILTER_RESULTS_PROFIT_CONCENTRATED" in rep["filter_comparison_warning_reasons"]
+
+
+def test_r3_all_underperformed_exposure_matched_ignores_unfiltered() -> None:
+    """Unfiltered beats exposure-matched but every real filter is
+    strictly below → warning fires."""
+    results = _mk_results([
+        ("10/20", "none",                _mk_agg_r3(ret=0.10, xm=0.05, rate=0.5,
+                                                    trades=20, lpc=0.4)),
+        ("10/20", "atr14_pct_below_2",   _mk_agg_r3(ret=0.02, xm=0.05, rate=0.5,
+                                                    trades=20, lpc=0.4)),
+        ("10/20", "ma_separation_50bps", _mk_agg_r3(ret=0.01, xm=0.05, rate=0.5,
+                                                    trades=20, lpc=0.4)),
+    ])
+    entries = bse._filter_flat_entries(results)
+    rep = bse._filter_robustness_report(results, entries)
+    assert "ALL_FILTERS_UNDERPERFORMED_EXPOSURE_MATCHED" in rep["filter_comparison_warning_reasons"]
+
+
+def test_r3_all_underperformed_exposure_matched_needs_strict() -> None:
+    """A real filter that ties exposure-matched has NOT
+    underperformed it — warning must not trigger."""
+    results = _mk_results([
+        ("10/20", "none",                _mk_agg_r3(ret=0.10, xm=0.05, rate=0.5,
+                                                    trades=20, lpc=0.4)),
+        ("10/20", "ma_separation_25bps", _mk_agg_r3(ret=0.05, xm=0.05, rate=0.5,
+                                                    trades=20, lpc=0.4)),
+    ])
+    entries = bse._filter_flat_entries(results)
+    rep = bse._filter_robustness_report(results, entries)
+    assert "ALL_FILTERS_UNDERPERFORMED_EXPOSURE_MATCHED" not in rep["filter_comparison_warning_reasons"]
+
+
+def test_r3_all_underperformed_exposure_matched_needs_strict_beat() -> None:
+    """A real filter that beats exposure-matched → warning does not fire."""
+    results = _mk_results([
+        ("10/20", "none",                _mk_agg_r3(ret=0.10, xm=0.05, rate=0.5,
+                                                    trades=20, lpc=0.4)),
+        ("10/20", "ma_separation_25bps", _mk_agg_r3(ret=0.06, xm=0.05, rate=0.5,
+                                                    trades=20, lpc=0.4)),
+    ])
+    entries = bse._filter_flat_entries(results)
+    rep = bse._filter_robustness_report(results, entries)
+    assert "ALL_FILTERS_UNDERPERFORMED_EXPOSURE_MATCHED" not in rep["filter_comparison_warning_reasons"]
+
+
+# --- Issue 4: 'none' is always evaluated as the mandatory baseline ---
+
+
+def test_none_is_auto_prepended_when_omitted() -> None:
+    bars = _bars_from_closes([float(c) for c in range(1, 601)])
+    summary = bse.build_summary(
+        bars=bars, symbol="SPY", interval="60m",
+        now_utc=datetime(2026, 7, 13, 20, 0, 0, tzinfo=timezone.utc),
+        short_window=3, long_window=5,
+        walk_forward=True,
+        wf_train_bars=250, wf_test_bars=100, wf_step_bars=100,
+        wf_filter_base_params=[(3, 10)],
+        wf_filter_variants=["ma_separation_25bps"],  # no `none`
+    )
+    fc = summary["walk_forward"]["filter_comparison"]
+    # Effective list starts with `none`.
+    assert fc["filter_variants"][0] == "none"
+    assert "ma_separation_25bps" in fc["filter_variants"]
+    # Mandatory baseline is documented.
+    assert fc["mandatory_baseline_variant"] == "none"
+    # The `none` result actually appears in results.
+    assert "none" in fc["results"]["3/10"]
+
+
+def test_filter_comparison_carries_interpretation_guardrails() -> None:
+    bars = _bars_from_closes([float(c) for c in range(1, 601)])
+    summary = bse.build_summary(
+        bars=bars, symbol="SPY", interval="60m",
+        now_utc=datetime(2026, 7, 13, 20, 0, 0, tzinfo=timezone.utc),
+        short_window=3, long_window=5,
+        walk_forward=True,
+        wf_train_bars=250, wf_test_bars=100, wf_step_bars=100,
+        wf_filter_base_params=[(3, 10)],
+        wf_filter_variants=["none"],
+    )
+    fc = summary["walk_forward"]["filter_comparison"]
+    ig = fc["interpretation_guardrails"]
+    assert ig["retrospective_test_on_previously_inspected_windows"] is True
+    assert ig["untouched_holdout_result"] is False
+    assert ig["automatic_strategy_promotion_allowed"] is False
+    assert ig["forward_paper_validation_required"] is True
+    # The pre-existing guards are still set.
+    assert fc["research_only"] is True
+    assert fc["automatic_filter_promotion_allowed"] is False
