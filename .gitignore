@@ -28,6 +28,10 @@ outputs/
 # Market data cache (generated on demand — do not commit)
 data/cache/
 
+# Runtime state and logs (never commit — includes shadow strategy state)
+logs/
+
+
 # Editor / OS
 .DS_Store
 .idea/
