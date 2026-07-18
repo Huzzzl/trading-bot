@@ -302,12 +302,18 @@ def _is_finite_number(x: Any) -> bool:
 
 def _validate_state(state: dict[str, Any], manifest: dict[str, Any]) -> None:
     """Enforce every state invariant. Raise :class:`ShadowError` on any
-    corruption / drift / consistency failure."""
+    corruption / drift / consistency failure. Exact schema equality —
+    missing OR unexpected top-level keys are rejected."""
     if not isinstance(state, dict):
         raise ShadowError("state must be a JSON object")
-    for k in _STATE_TOP_KEYS:
-        if k not in state:
-            raise ShadowError(f"state missing top-level key {k!r}")
+    got_top = set(state.keys())
+    missing_top = _STATE_TOP_KEYS - got_top
+    extra_top = got_top - _STATE_TOP_KEYS
+    if missing_top or extra_top:
+        raise ShadowError(
+            f"state top-level schema mismatch — missing={sorted(missing_top)} "
+            f"extra={sorted(extra_top)}"
+        )
     if state["experiment_id"] != manifest["experiment_id"]:
         raise ShadowError(
             f"state experiment_id {state['experiment_id']!r} "
@@ -347,21 +353,47 @@ _NON_NEGATIVE_INT_COUNTERS = (
 )
 
 
+_ALLOWED_EPISODE_TYPES = (None, "inherited", "forward_crossover")
+_ALLOWED_ENTRY_TYPES = ("immediate", "delayed", "inherited")
+_ALLOWED_BUY_REASONS = (
+    "bullish_crossover", "inherited_bullish_state",
+    "bullish_state_after_block",
+)
+_ALLOWED_SELL_REASONS = ("bearish_crossover",)
+
+
+def _check_ts(cid: str, key: str, v: Any) -> None:
+    if not isinstance(v, str):
+        raise ShadowError(f"{cid}.{key} must be a UTC ISO-8601 string")
+    try:
+        _parse_ts(v)
+    except Exception as exc:
+        raise ShadowError(f"{cid}.{key} unparseable: {exc}") from exc
+
+
 def _validate_candidate_state(cid: str, cs: dict[str, Any]) -> None:
     if not isinstance(cs, dict):
         raise ShadowError(f"{cid}: candidate state must be a JSON object")
-    if cs.get("candidate_id") != cid:
+    got = set(cs.keys())
+    missing = _CANDIDATE_KEYS - got
+    extra = got - _CANDIDATE_KEYS
+    if missing or extra:
         raise ShadowError(
-            f"{cid}: candidate_id field {cs.get('candidate_id')!r} does not "
+            f"{cid}: candidate schema mismatch — "
+            f"missing={sorted(missing)} extra={sorted(extra)}"
+        )
+    if cs["candidate_id"] != cid:
+        raise ShadowError(
+            f"{cid}: candidate_id field {cs['candidate_id']!r} does not "
             f"match key {cid!r}"
         )
     for key in ("cash", "quantity", "realized_equity", "marked_equity",
                 "peak_equity", "max_drawdown"):
-        if not _is_finite_number(cs.get(key)):
+        if not _is_finite_number(cs[key]):
             raise ShadowError(f"{cid}.{key} must be a finite number")
     for key in _NON_NEGATIVE_INT_COUNTERS:
-        v = cs.get(key)
-        if not isinstance(v, int) or v < 0:
+        v = cs[key]
+        if not isinstance(v, int) or isinstance(v, bool) or v < 0:
             raise ShadowError(f"{cid}.{key} must be a non-negative integer")
     if cs["bullish_signal_count"] != cs["bullish_state_bar_count"]:
         raise ShadowError(
@@ -369,53 +401,126 @@ def _validate_candidate_state(cid: str, cs: dict[str, Any]) -> None:
             f"({cs['bullish_signal_count']}) must equal "
             f"bullish_state_bar_count ({cs['bullish_state_bar_count']})"
         )
+    # Internal episode fields — strict types.
+    if not isinstance(cs["_forward_started"], bool):
+        raise ShadowError(f"{cid}._forward_started must be bool")
+    if not isinstance(cs["_in_bullish_episode"], bool):
+        raise ShadowError(f"{cid}._in_bullish_episode must be bool")
+    if cs["_current_episode_type"] not in _ALLOWED_EPISODE_TYPES:
+        raise ShadowError(
+            f"{cid}._current_episode_type invalid: "
+            f"{cs['_current_episode_type']!r}"
+        )
+    for key in ("_current_episode_had_crossover_block",
+                "_current_episode_had_entry"):
+        if not isinstance(cs[key], bool):
+            raise ShadowError(f"{cid}.{key} must be bool")
+    # entry_forward_index null or non-negative int.
+    efi = cs["entry_forward_index"]
+    if efi is not None:
+        if not isinstance(efi, int) or isinstance(efi, bool) or efi < 0:
+            raise ShadowError(
+                f"{cid}.entry_forward_index must be null or "
+                f"non-negative int, got {efi!r}"
+            )
     # Position consistency.
     if cs["position_open"]:
         if cs["quantity"] <= 0:
             raise ShadowError(f"{cid}: position_open but quantity <= 0")
         if cs["cash"] != 0.0:
             raise ShadowError(f"{cid}: position_open but cash != 0")
-        if not _is_finite_number(cs.get("entry_price")):
+        if not _is_finite_number(cs["entry_price"]):
             raise ShadowError(f"{cid}: position_open but entry_price invalid")
-        if not isinstance(cs.get("entry_timestamp_utc"), str):
+        if not isinstance(cs["entry_timestamp_utc"], str):
             raise ShadowError(f"{cid}: position_open but entry_timestamp_utc missing")
+        _check_ts(cid, "entry_timestamp_utc", cs["entry_timestamp_utc"])
+        if efi is None:
+            raise ShadowError(
+                f"{cid}: position_open but entry_forward_index is null"
+            )
     else:
         if cs["quantity"] != 0.0:
             raise ShadowError(f"{cid}: not position_open but quantity != 0")
-        if cs.get("entry_price") is not None:
+        if cs["entry_price"] is not None:
             raise ShadowError(f"{cid}: not position_open but entry_price set")
-        if cs.get("entry_timestamp_utc") is not None:
+        if cs["entry_timestamp_utc"] is not None:
             raise ShadowError(f"{cid}: not position_open but entry_timestamp_utc set")
+        if efi is not None:
+            raise ShadowError(
+                f"{cid}: not position_open but entry_forward_index set"
+            )
     # Pending action validity.
-    pa = cs.get("pending_action")
+    pa = cs["pending_action"]
     if pa is not None:
         if not isinstance(pa, dict):
             raise ShadowError(f"{cid}.pending_action must be a JSON object")
         if pa.get("side") not in ("buy", "sell"):
             raise ShadowError(f"{cid}.pending_action.side invalid")
-        if not isinstance(pa.get("signal_bar_utc"), str):
+        sig_ts = pa.get("signal_bar_utc")
+        if not isinstance(sig_ts, str):
             raise ShadowError(f"{cid}.pending_action.signal_bar_utc missing")
+        try:
+            _parse_ts(sig_ts)
+        except Exception as exc:
+            raise ShadowError(
+                f"{cid}.pending_action.signal_bar_utc unparseable: {exc}"
+            ) from exc
         if pa["side"] == "buy":
-            if pa.get("entry_type") not in ("immediate", "delayed", "inherited"):
+            if pa.get("entry_type") not in _ALLOWED_ENTRY_TYPES:
                 raise ShadowError(
                     f"{cid}.pending_action.entry_type invalid: "
                     f"{pa.get('entry_type')!r}"
                 )
+            if pa.get("reason") not in _ALLOWED_BUY_REASONS:
+                raise ShadowError(
+                    f"{cid}.pending_action.reason invalid for buy: "
+                    f"{pa.get('reason')!r}"
+                )
+        else:
+            if pa.get("reason") not in _ALLOWED_SELL_REASONS:
+                raise ShadowError(
+                    f"{cid}.pending_action.reason invalid for sell: "
+                    f"{pa.get('reason')!r}"
+                )
     # Timestamp validity.
-    for key in ("processed_through_utc", "last_forward_bar_utc",
-                "first_forward_bar_utc"):
-        v = cs.get(key)
-        if v is not None:
-            if not isinstance(v, str):
-                raise ShadowError(f"{cid}.{key} must be a UTC ISO-8601 string")
-            try:
-                _parse_ts(v)
-            except Exception as exc:
-                raise ShadowError(f"{cid}.{key} unparseable: {exc}") from exc
+    processed = cs["processed_through_utc"]
+    last_fwd = cs["last_forward_bar_utc"]
+    first_fwd = cs["first_forward_bar_utc"]
+    if processed is not None:
+        _check_ts(cid, "processed_through_utc", processed)
+    if last_fwd is not None:
+        _check_ts(cid, "last_forward_bar_utc", last_fwd)
+    if first_fwd is not None:
+        _check_ts(cid, "first_forward_bar_utc", first_fwd)
+
+    # Forward timestamps must accompany forward-bar counts.
+    fwd_count = cs["processed_forward_bar_count"]
+    if fwd_count == 0:
+        if first_fwd is not None or last_fwd is not None:
+            raise ShadowError(
+                f"{cid}: zero forward bars but first/last forward "
+                f"timestamps are not null"
+            )
+    else:
+        if first_fwd is None or last_fwd is None:
+            raise ShadowError(
+                f"{cid}: {fwd_count} forward bars but first_forward_bar_utc "
+                f"or last_forward_bar_utc is null"
+            )
+        # Ordering: first <= last <= processed_through.
+        if _parse_ts(first_fwd) > _parse_ts(last_fwd):
+            raise ShadowError(
+                f"{cid}: first_forward_bar_utc > last_forward_bar_utc"
+            )
+        if processed is None or _parse_ts(last_fwd) > _parse_ts(processed):
+            raise ShadowError(
+                f"{cid}: last_forward_bar_utc > processed_through_utc"
+            )
     # Trades schema.
-    if not isinstance(cs.get("trades"), list):
+    trades = cs["trades"]
+    if not isinstance(trades, list):
         raise ShadowError(f"{cid}.trades must be a list")
-    for i, t in enumerate(cs["trades"]):
+    for i, t in enumerate(trades):
         if not isinstance(t, dict):
             raise ShadowError(f"{cid}.trades[{i}] must be an object")
         for key in ("entry_ts", "exit_ts", "entry_price", "exit_price",
@@ -423,12 +528,37 @@ def _validate_candidate_state(cid: str, cs: dict[str, Any]) -> None:
                     "exit_forward_index"):
             if key not in t:
                 raise ShadowError(f"{cid}.trades[{i}] missing {key!r}")
-        if not _is_finite_number(t["pnl"]):
-            raise ShadowError(f"{cid}.trades[{i}].pnl invalid")
-    if cs["completed_trade_count"] != len(cs["trades"]):
+        _check_ts(cid, f"trades[{i}].entry_ts", t["entry_ts"])
+        _check_ts(cid, f"trades[{i}].exit_ts", t["exit_ts"])
+        for key in ("entry_price", "exit_price", "qty", "pnl"):
+            if not _is_finite_number(t[key]):
+                raise ShadowError(f"{cid}.trades[{i}].{key} not finite")
+        for key in ("bars_held", "entry_forward_index", "exit_forward_index"):
+            v = t[key]
+            if not isinstance(v, int) or isinstance(v, bool) or v < 0:
+                raise ShadowError(
+                    f"{cid}.trades[{i}].{key} must be non-negative int"
+                )
+        if t["exit_forward_index"] < t["entry_forward_index"]:
+            raise ShadowError(
+                f"{cid}.trades[{i}]: exit_forward_index < entry_forward_index"
+            )
+        if t["bars_held"] != t["exit_forward_index"] - t["entry_forward_index"]:
+            raise ShadowError(
+                f"{cid}.trades[{i}]: bars_held "
+                f"({t['bars_held']}) does not equal exit - entry "
+                f"({t['exit_forward_index'] - t['entry_forward_index']})"
+            )
+    if cs["completed_trade_count"] != len(trades):
         raise ShadowError(
             f"{cid}: completed_trade_count ({cs['completed_trade_count']}) "
-            f"!= len(trades) ({len(cs['trades'])})"
+            f"!= len(trades) ({len(trades)})"
+        )
+    if cs["win_count"] + cs["loss_count"] != cs["completed_trade_count"]:
+        raise ShadowError(
+            f"{cid}: win_count + loss_count "
+            f"({cs['win_count'] + cs['loss_count']}) != "
+            f"completed_trade_count ({cs['completed_trade_count']})"
         )
     entries = (
         cs["immediate_entry_count"]
@@ -442,8 +572,54 @@ def _validate_candidate_state(cid: str, cs: dict[str, Any]) -> None:
             f"completed_trade_count + open_position={expected_entries}"
         )
     # Returns series schema.
-    if not isinstance(cs.get("returns_series"), list):
+    rs = cs["returns_series"]
+    if not isinstance(rs, list):
         raise ShadowError(f"{cid}.returns_series must be a list")
+    prev_ts = None
+    for i, r in enumerate(rs):
+        if not isinstance(r, dict):
+            raise ShadowError(f"{cid}.returns_series[{i}] must be an object")
+        if set(r.keys()) != {"ts", "r"}:
+            raise ShadowError(
+                f"{cid}.returns_series[{i}] must have exactly keys {{ts, r}}"
+            )
+        _check_ts(cid, f"returns_series[{i}].ts", r["ts"])
+        if not _is_finite_number(r["r"]):
+            raise ShadowError(
+                f"{cid}.returns_series[{i}].r must be a finite number"
+            )
+        cur_ts = _parse_ts(r["ts"])
+        if prev_ts is not None and cur_ts < prev_ts:
+            raise ShadowError(
+                f"{cid}.returns_series[{i}].ts regresses vs previous entry"
+            )
+        prev_ts = cur_ts
+    # Episode & filter counter relationships.
+    if (
+        cs["unique_bullish_episode_count"]
+        < cs["bullish_crossover_count"]
+    ):
+        raise ShadowError(
+            f"{cid}: unique_bullish_episode_count < bullish_crossover_count"
+        )
+    if (
+        cs["unique_bullish_episode_count"]
+        < cs["inherited_bullish_episode_count"]
+    ):
+        raise ShadowError(
+            f"{cid}: unique_bullish_episode_count < inherited_bullish_episode_count"
+        )
+    if (
+        cs["filter_allowed_count"] + cs["filter_blocked_count"]
+        != cs["filter_evaluation_count"]
+    ):
+        raise ShadowError(
+            f"{cid}: filter_allowed + filter_blocked != filter_evaluation_count"
+        )
+    if cs["blocked_on_crossover_count"] > cs["filter_blocked_count"]:
+        raise ShadowError(
+            f"{cid}: blocked_on_crossover_count > filter_blocked_count"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -515,37 +691,95 @@ def _make_event(
 
 
 def _load_known_event_ids(events_path: Path) -> set[str]:
-    """Strict event log loader.
+    """Strict, fail-closed event log loader.
 
-    Reject silently-malformed lines. Allow a truncated final line to
-    be recovered as an interrupted append — reported by the caller.
+    Any malformed JSONL line — including the final line — raises
+    :class:`ShadowError`. Silently ignoring a truncated tail is unsafe:
+    the next ``_append_events`` call would concatenate a fresh JSON
+    record directly after the corrupted bytes, permanently hiding
+    every subsequently appended event from parsers that split on
+    newlines.
+
+    Operators can either delete the offending line manually or run the
+    dedicated repair helper (see ``_repair_event_log_tail``) while
+    holding the writer lock.
     """
     known: set[str] = set()
     if not events_path.exists():
         return known
     lines = events_path.read_text(encoding="utf-8").splitlines(keepends=False)
     for i, line in enumerate(lines):
-        line = line.strip()
-        if not line:
+        stripped = line.strip()
+        if not stripped:
             continue
         try:
-            e = json.loads(line)
-        except json.JSONDecodeError:
-            # Recover only a truncated FINAL line as an interrupted
-            # append — every other malformed line fails closed.
-            if i == len(lines) - 1:
-                # Silently drop the truncated tail; the caller may
-                # later re-append.
-                continue
+            e = json.loads(stripped)
+        except json.JSONDecodeError as exc:
             raise ShadowError(
-                f"events.jsonl line {i + 1} is malformed — cannot proceed"
-            )
+                f"events.jsonl line {i + 1} is malformed "
+                f"({exc.msg}) — cannot proceed. If this is a truncated "
+                f"final line from an interrupted append, run --once "
+                f"which will atomically repair it under the writer lock."
+            ) from exc
         if not isinstance(e, dict) or "event_id" not in e:
             raise ShadowError(
                 f"events.jsonl line {i + 1} missing event_id"
             )
         known.add(e["event_id"])
     return known
+
+
+def _repair_event_log_tail(events_path: Path) -> dict[str, Any] | None:
+    """Physically truncate a malformed trailing line (only).
+
+    ONLY safe to call while the writer lock is held. Returns an audit
+    detail describing what was removed, or ``None`` if the log is
+    already well-formed. Any malformed interior line still fails
+    closed — this helper only handles the specific case where the
+    final line is a JSON parse failure consistent with an interrupted
+    append.
+    """
+    if not events_path.exists():
+        return None
+    raw = events_path.read_bytes()
+    text = raw.decode("utf-8", errors="strict")
+    lines = text.splitlines(keepends=False)
+    # Validate all-but-last lines. Any middle-line corruption bubbles
+    # up from _load_known_event_ids in the normal path — we do not
+    # attempt to repair those.
+    for i, line in enumerate(lines[:-1]):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            json.loads(stripped)
+        except json.JSONDecodeError:
+            raise ShadowError(
+                f"events.jsonl line {i + 1} is malformed (middle line) — "
+                f"tail repair aborted. Manual investigation required."
+            )
+    if not lines:
+        return None
+    last = lines[-1].strip()
+    if not last:
+        return None
+    try:
+        json.loads(last)
+        return None  # log is fine
+    except json.JSONDecodeError:
+        # Truncate the tail. Preserve every prior complete line
+        # verbatim, ended with a newline; drop the malformed tail.
+        good = "\n".join(lines[:-1])
+        if good:
+            good += "\n"
+        removed_bytes = len(raw) - len(good.encode("utf-8"))
+        tmp = events_path.with_suffix(events_path.suffix + ".tmp")
+        tmp.write_text(good, encoding="utf-8")
+        os.replace(str(tmp), str(events_path))
+        return {
+            "removed_byte_count": removed_bytes,
+            "removed_tail_length": len(last),
+        }
 
 
 def _append_events(events_path: Path, events: Sequence[dict[str, Any]]) -> None:
@@ -628,19 +862,23 @@ def _bar_ts_utc(bar: Bar) -> datetime:
 # ---------------------------------------------------------------------------
 
 
+_EXPERIMENT_CANDIDATE_ID = "__experiment__"
+
+
 def _validate_and_prepare_bars(
     bars: Sequence[Bar],
-) -> tuple[list[Bar], int, list[dict[str, Any]]]:
-    """Return ``(validated_bars, duplicate_bar_skipped_count, gap_events)``.
+) -> tuple[list[Bar], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Return ``(validated_bars, duplicate_records, gap_records)``.
 
     * Non-finite OHLCV → :class:`ShadowError`.
-    * Same timestamp + identical OHLCV → dedupe, count as duplicate.
+    * Same timestamp + identical OHLCV → dedupe; each duplicate
+      contributes a record ``{"timestamp": iso}``.
     * Same timestamp + different OHLCV → :class:`ShadowError`.
     * Intraday gaps within a regular session (gap > 65 minutes, < 12h,
-      same UTC date) are reported (do not synthesize).
+      same UTC date) contribute a record — do not synthesize.
     """
     if not bars:
-        return [], 0, []
+        return [], [], []
     entries: list[tuple[datetime, Bar]] = []
     for b in bars:
         for f in (b.open, b.high, b.low, b.close, b.volume):
@@ -652,7 +890,7 @@ def _validate_and_prepare_bars(
     entries.sort(key=lambda t: t[0])
 
     dedup: list[tuple[datetime, Bar]] = []
-    duplicates = 0
+    duplicate_records: list[dict[str, Any]] = []
     for ts, b in entries:
         if dedup and dedup[-1][0] == ts:
             prev = dedup[-1][1]
@@ -662,30 +900,103 @@ def _validate_and_prepare_bars(
                 raise ShadowError(
                     f"conflicting OHLCV for the same timestamp {ts.isoformat()}"
                 )
-            duplicates += 1
+            duplicate_records.append({"timestamp": ts.isoformat()})
             continue
         dedup.append((ts, b))
 
-    gap_events: list[dict[str, Any]] = []
+    gap_records: list[dict[str, Any]] = []
     for i in range(1, len(dedup)):
         prev_ts, _ = dedup[i - 1]
         cur_ts, _ = dedup[i]
-        delta = cur_ts - prev_ts
-        seconds = delta.total_seconds()
-        # Intraday gap heuristic:
-        #  * same UTC date;
-        #  * > 65 minutes (allows minor jitter);
-        #  * < 12 hours (rules out overnight / weekend / holiday closures).
+        seconds = (cur_ts - prev_ts).total_seconds()
         if (
             prev_ts.date() == cur_ts.date()
             and 65 * 60 < seconds < 12 * 3600
         ):
-            gap_events.append({
+            gap_records.append({
                 "prev_bar_utc": prev_ts.isoformat(),
                 "next_bar_utc": cur_ts.isoformat(),
                 "gap_seconds": seconds,
             })
-    return [b for _, b in dedup], duplicates, gap_events
+    return [b for _, b in dedup], duplicate_records, gap_records
+
+
+def _make_experiment_event(
+    event_type: str,
+    *,
+    signal_bar_utc: str,
+    manifest_hash_str: str,
+    detail: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a deterministic experiment-scoped audit event.
+
+    Uses the reserved candidate ID ``__experiment__``. Deterministic
+    ID derived from experiment_id + event_type + signal_bar +
+    detail-serialized payload so re-running the same input never
+    yields a duplicate entry.
+    """
+    detail_json = json.dumps(detail or {}, sort_keys=True, default=str)
+    return {
+        "event_id": _event_id(
+            EXPERIMENT_ID, _EXPERIMENT_CANDIDATE_ID, event_type,
+            signal_bar_utc, detail_json,
+        ),
+        "experiment_id": EXPERIMENT_ID,
+        "candidate_id": _EXPERIMENT_CANDIDATE_ID,
+        "event_type": event_type,
+        "signal_bar_utc": signal_bar_utc,
+        "execution_bar_utc": None,
+        "event_timestamp_utc": signal_bar_utc,
+        "reason": None,
+        "short_sma": None,
+        "long_sma": None,
+        "filter": None,
+        "filter_result": None,
+        "price": None,
+        "quantity": None,
+        "cash": None,
+        "equity": None,
+        "position_state": None,
+        "manifest_hash": manifest_hash_str,
+        "detail": detail or {},
+    }
+
+
+def _build_experiment_events(
+    duplicate_records: Sequence[dict[str, Any]],
+    gap_records: Sequence[dict[str, Any]],
+    manifest_hash_str: str,
+    known_event_ids: set[str],
+) -> list[dict[str, Any]]:
+    """Build DUPLICATE_BAR_SKIPPED / DATA_GAP_DETECTED events, deduped
+    against the existing event log so reruns do not append copies."""
+    out: list[dict[str, Any]] = []
+    # Merge consecutive duplicates for the same timestamp into a
+    # single event with a count — deterministic if inputs are.
+    counts: dict[str, int] = {}
+    for r in duplicate_records:
+        counts[r["timestamp"]] = counts.get(r["timestamp"], 0) + 1
+    for ts, count in sorted(counts.items()):
+        ev = _make_experiment_event(
+            "DUPLICATE_BAR_SKIPPED",
+            signal_bar_utc=ts,
+            manifest_hash_str=manifest_hash_str,
+            detail={"duplicate_timestamp_utc": ts, "skipped_count": count},
+        )
+        if ev["event_id"] not in known_event_ids:
+            known_event_ids.add(ev["event_id"])
+            out.append(ev)
+    for gap in gap_records:
+        ev = _make_experiment_event(
+            "DATA_GAP_DETECTED",
+            signal_bar_utc=gap["prev_bar_utc"],
+            manifest_hash_str=manifest_hash_str,
+            detail=dict(gap),
+        )
+        if ev["event_id"] not in known_event_ids:
+            known_event_ids.add(ev["event_id"])
+            out.append(ev)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -831,7 +1142,7 @@ def _process_candidate(
                 candidate_state["filter_evaluation_count"] += 1
                 if allowed:
                     candidate_state["filter_allowed_count"] += 1
-                    # Classify the entry.
+                    # Classify the entry — no silent fallback.
                     ep_type = candidate_state["_current_episode_type"]
                     ep_blocked = candidate_state["_current_episode_had_crossover_block"]
                     if bullish_cross:
@@ -844,11 +1155,14 @@ def _process_candidate(
                         entry_type = "delayed"
                         reason = "bullish_state_after_block"
                     else:
-                        # Safety net — should not fire given the
-                        # branches above cover all in-episode
-                        # scenarios. Fall back to delayed.
-                        entry_type = "delayed"
-                        reason = "bullish_state"
+                        raise ShadowError(
+                            f"{cid}: impossible entry-classification state "
+                            f"at {bar_ts.isoformat()} — episode_type="
+                            f"{ep_type!r} had_crossover_block={ep_blocked} "
+                            f"bullish_cross={bullish_cross}. "
+                            "This branch must never be reached; if it "
+                            "does the bookkeeping is inconsistent."
+                        )
                     candidate_state["pending_action"] = {
                         "side": "buy",
                         "signal_bar_utc": bar_ts.isoformat(),
@@ -1028,41 +1342,75 @@ def run_cycle(
         manifest = load_or_init_manifest(state_dir, now_utc)
 
     cutoff = _parse_ts(manifest["forward_cutoff_utc"])
-    validated, duplicates, gap_events = _validate_and_prepare_bars(bars)
+    validated, duplicates_meta, gap_events = _validate_and_prepare_bars(bars)
+    manifest_hash_str = manifest["candidate_manifest_sha256"]
 
     if dry_run:
-        # Load state (must exist), simulate in memory, discard.
         state_path = state_dir / _STATE_FILENAME
         if state_path.exists():
             state = load_state_readonly(state_dir, manifest)
         else:
             state = _init_state(manifest)
         events_path = state_dir / _EVENTS_FILENAME
+        # Read-only in dry-run: no repair, no writes. A corrupted log
+        # surfaces as ShadowError to the caller.
         known_event_ids = _load_known_event_ids(events_path)
         summary = _run_candidates(
             state, manifest, validated, cutoff, known_event_ids,
         )
+        experiment_events = _build_experiment_events(
+            duplicates_meta, gap_events, manifest_hash_str, known_event_ids,
+        )
+        summary.pop("_events", None)
         summary["dry_run"] = True
-        summary["duplicate_bar_skipped_count"] = duplicates
+        summary["duplicate_bar_skipped_count"] = len(duplicates_meta)
+        summary["duplicate_bar_events"] = duplicates_meta
         summary["gap_events"] = gap_events
+        summary["experiment_events_would_persist"] = experiment_events
+        summary["event_log_tail_recovered"] = None
         return summary
 
     lock_path = state_dir / _LOCK_FILENAME
     with _FileLock(lock_path):
-        state = load_or_init_state(state_dir, manifest)
         events_path = state_dir / _EVENTS_FILENAME
+        # We hold the writer lock — attempt a physical tail repair if
+        # the last line is a truncated interrupted append.
+        recovered = _repair_event_log_tail(events_path)
+        state = load_or_init_state(state_dir, manifest)
         known_event_ids = _load_known_event_ids(events_path)
 
         summary = _run_candidates(
             state, manifest, validated, cutoff, known_event_ids,
         )
         collected = summary.pop("_events")
-        _append_events(events_path, collected)
+
+        # Prepend experiment-level events (duplicates + gaps +
+        # recovery audit) — deterministic IDs, deduped against
+        # the existing log.
+        experiment_events = _build_experiment_events(
+            duplicates_meta, gap_events, manifest_hash_str, known_event_ids,
+        )
+        if recovered is not None:
+            recovery_event = _make_experiment_event(
+                "EVENT_LOG_TAIL_RECOVERED",
+                signal_bar_utc=datetime.now(timezone.utc).isoformat(),
+                manifest_hash_str=manifest_hash_str,
+                detail=recovered,
+            )
+            if recovery_event["event_id"] not in known_event_ids:
+                known_event_ids.add(recovery_event["event_id"])
+                experiment_events.insert(0, recovery_event)
+
+        all_events = experiment_events + collected
+        _append_events(events_path, all_events)
         _atomic_write_json(state_dir / _STATE_FILENAME, state)
 
     summary["dry_run"] = False
-    summary["duplicate_bar_skipped_count"] = duplicates
+    summary["duplicate_bar_skipped_count"] = len(duplicates_meta)
+    summary["duplicate_bar_events"] = duplicates_meta
     summary["gap_events"] = gap_events
+    summary["experiment_events_persisted"] = experiment_events
+    summary["event_log_tail_recovered"] = recovered
     return summary
 
 

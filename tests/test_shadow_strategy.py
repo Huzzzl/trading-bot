@@ -1114,14 +1114,98 @@ def test_events_log_rejects_malformed_middle_line(tmp_path: Path) -> None:
         ssc._load_known_event_ids(events_path)
 
 
-def test_events_log_recovers_truncated_last_line(tmp_path: Path) -> None:
+def test_events_log_read_fails_closed_on_truncated_last_line(tmp_path: Path) -> None:
+    """Read paths (status / report / dry-run) must fail closed on a
+    truncated final line — silent recovery would allow the next
+    append to concatenate its JSON onto the corrupted tail."""
     state_dir = tmp_path / "shadow"
     _prime(state_dir)
     events_path = state_dir / ssc._EVENTS_FILENAME
     with events_path.open("a", encoding="utf-8") as f:
         f.write('{"event_id": "abc", "partial')
+    with pytest.raises(ssc.ShadowError, match="malformed"):
+        ssc._load_known_event_ids(events_path)
+
+
+def test_repair_event_log_tail_truncates_bad_final_line(tmp_path: Path) -> None:
+    """The explicit repair helper physically removes a malformed
+    final line, returning a diagnostic with removed byte count."""
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    before_size = events_path.stat().st_size
+    with events_path.open("a", encoding="utf-8") as f:
+        f.write('{"event_id": "abc", "partial')
+    diag = ssc._repair_event_log_tail(events_path)
+    assert diag is not None
+    assert diag["removed_byte_count"] > 0
+    # After repair the loader must succeed and the file size must
+    # equal the pre-append size.
     known = ssc._load_known_event_ids(events_path)
     assert isinstance(known, set)
+    assert events_path.stat().st_size == before_size
+
+
+def test_new_event_after_repair_is_parseable(tmp_path: Path) -> None:
+    """After tail repair, subsequently appended events remain
+    independently parseable JSONL records."""
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    with events_path.open("a", encoding="utf-8") as f:
+        f.write('{"event_id": "abc", "partial')
+    # Run --once through the runner — which repairs under the lock,
+    # then appends new events cleanly.
+    bars = _many_bars_across_cutoff(pre=800, post=110)
+    ssc.run_cycle(bars, state_dir=state_dir, now_utc=_NOW)
+    # Every line in events.jsonl must now be independently parseable.
+    for line in events_path.read_text().splitlines():
+        stripped = line.strip()
+        if stripped:
+            json.loads(stripped)
+
+
+def test_repeated_runs_do_not_leave_malformed_tail(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    bars = _many_bars_across_cutoff(pre=800, post=100)
+    for _ in range(3):
+        ssc.run_cycle(bars, state_dir=state_dir, now_utc=_NOW)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    for line in events_path.read_text().splitlines():
+        stripped = line.strip()
+        if stripped:
+            json.loads(stripped)
+
+
+def test_dry_run_detects_corrupted_event_log(tmp_path: Path) -> None:
+    """Dry-run is read-only and must surface event-log corruption
+    rather than silently pretending nothing is wrong."""
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    with events_path.open("a", encoding="utf-8") as f:
+        f.write('{"event_id": "abc", "partial')
+    # Small synthetic bar set so dry-run does not need the cache.
+    bars = _many_bars_across_cutoff(pre=800, post=50)
+    with pytest.raises(ssc.ShadowError, match="malformed"):
+        ssc.run_cycle(
+            bars, state_dir=state_dir, now_utc=_NOW, dry_run=True,
+        )
+
+
+def test_valid_event_ids_remain_unique_after_repair(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    with events_path.open("a", encoding="utf-8") as f:
+        f.write('{"event_id": "partial-x')
+    bars = _many_bars_across_cutoff(pre=800, post=105)
+    ssc.run_cycle(bars, state_dir=state_dir, now_utc=_NOW)
+    ids = [
+        json.loads(l)["event_id"]
+        for l in events_path.read_text().splitlines() if l.strip()
+    ]
+    assert len(ids) == len(set(ids))
 
 
 # --- Issue 5: data integrity ---
@@ -1173,7 +1257,7 @@ def test_intraday_gap_detected(tmp_path: Path) -> None:
     # Force these bars past the cutoff by pretending manifest cutoff is
     # July 1st for this test.
     validated, dups, gaps = ssc._validate_and_prepare_bars([b1, b2])
-    assert dups == 0
+    assert len(dups) == 0
     assert len(gaps) == 1
     assert gaps[0]["gap_seconds"] == pytest.approx(3 * 3600)
 
@@ -1343,3 +1427,326 @@ def test_crash_recovery_events_appended_state_missing(tmp_path: Path) -> None:
         for l in reference_events.strip().split("\n") if l.strip()
     }
     assert set(recovered_ids) == ref_ids
+
+
+# ---------------------------------------------------------------------------
+# S62 review round 3 — strict schema, impossible-state fail-closed,
+# experiment-level audit events, strengthened crash-recovery parity
+# ---------------------------------------------------------------------------
+
+
+def test_state_top_level_missing_key_rejected(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    def _drop(state):
+        state.pop("experiment_id")
+    _corrupt_state(state_dir, _drop)
+    manifest = ssc.load_manifest_readonly(state_dir)
+    with pytest.raises(ssc.ShadowError, match="top-level"):
+        ssc.load_state_readonly(state_dir, manifest)
+
+
+def test_state_top_level_extra_key_rejected(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    def _add(state):
+        state["extra_root"] = "spurious"
+    _corrupt_state(state_dir, _add)
+    manifest = ssc.load_manifest_readonly(state_dir)
+    with pytest.raises(ssc.ShadowError, match="top-level"):
+        ssc.load_state_readonly(state_dir, manifest)
+
+
+def test_candidate_missing_field_rejected(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    def _drop(state):
+        state["candidates"]["research_10_20_none"].pop("marked_equity")
+    _corrupt_state(state_dir, _drop)
+    manifest = ssc.load_manifest_readonly(state_dir)
+    with pytest.raises(ssc.ShadowError, match="candidate schema mismatch"):
+        ssc.load_state_readonly(state_dir, manifest)
+
+
+def test_candidate_extra_field_rejected(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    def _add(state):
+        state["candidates"]["research_10_20_none"]["stowaway"] = 42
+    _corrupt_state(state_dir, _add)
+    manifest = ssc.load_manifest_readonly(state_dir)
+    with pytest.raises(ssc.ShadowError, match="candidate schema mismatch"):
+        ssc.load_state_readonly(state_dir, manifest)
+
+
+def test_internal_field_type_rejected(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    def _bad(state):
+        state["candidates"]["research_10_20_none"]["_forward_started"] = "yes"
+    _corrupt_state(state_dir, _bad)
+    manifest = ssc.load_manifest_readonly(state_dir)
+    with pytest.raises(ssc.ShadowError, match="_forward_started"):
+        ssc.load_state_readonly(state_dir, manifest)
+
+
+def test_invalid_current_episode_type_rejected(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    def _bad(state):
+        state["candidates"]["research_10_20_none"]["_current_episode_type"] = "spanish"
+    _corrupt_state(state_dir, _bad)
+    manifest = ssc.load_manifest_readonly(state_dir)
+    with pytest.raises(ssc.ShadowError, match="_current_episode_type"):
+        ssc.load_state_readonly(state_dir, manifest)
+
+
+def test_entry_forward_index_negative_rejected(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    def _bad(state):
+        state["candidates"]["research_10_20_none"]["entry_forward_index"] = -1
+    _corrupt_state(state_dir, _bad)
+    manifest = ssc.load_manifest_readonly(state_dir)
+    with pytest.raises(ssc.ShadowError, match="entry_forward_index"):
+        ssc.load_state_readonly(state_dir, manifest)
+
+
+def test_pending_action_timestamp_unparseable_rejected(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    def _bad(state):
+        state["candidates"]["research_10_20_none"]["pending_action"] = {
+            "side": "buy",
+            "signal_bar_utc": "not-a-timestamp",
+            "reason": "bullish_crossover",
+            "entry_type": "immediate",
+        }
+    _corrupt_state(state_dir, _bad)
+    manifest = ssc.load_manifest_readonly(state_dir)
+    with pytest.raises(ssc.ShadowError, match="signal_bar_utc"):
+        ssc.load_state_readonly(state_dir, manifest)
+
+
+def test_pending_action_invalid_reason_rejected(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    def _bad(state):
+        state["candidates"]["research_10_20_none"]["pending_action"] = {
+            "side": "buy",
+            "signal_bar_utc": "2026-07-20T00:00:00+00:00",
+            "reason": "made_up_reason",
+            "entry_type": "immediate",
+        }
+    _corrupt_state(state_dir, _bad)
+    manifest = ssc.load_manifest_readonly(state_dir)
+    with pytest.raises(ssc.ShadowError, match="pending_action.reason"):
+        ssc.load_state_readonly(state_dir, manifest)
+
+
+def test_trade_bars_held_mismatch_rejected(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    def _bad(state):
+        for cid, cs in state["candidates"].items():
+            if cs["trades"]:
+                cs["trades"][0]["bars_held"] = cs["trades"][0]["bars_held"] + 1
+                return
+    _corrupt_state(state_dir, _bad)
+    manifest = ssc.load_manifest_readonly(state_dir)
+    with pytest.raises(ssc.ShadowError, match="bars_held"):
+        ssc.load_state_readonly(state_dir, manifest)
+
+
+def test_trade_exit_before_entry_rejected(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    def _bad(state):
+        for cid, cs in state["candidates"].items():
+            if cs["trades"]:
+                t = cs["trades"][0]
+                t["exit_forward_index"] = t["entry_forward_index"] - 1
+                t["bars_held"] = -1
+                return
+    _corrupt_state(state_dir, _bad)
+    manifest = ssc.load_manifest_readonly(state_dir)
+    with pytest.raises(ssc.ShadowError):
+        ssc.load_state_readonly(state_dir, manifest)
+
+
+def test_returns_series_missing_key_rejected(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    def _bad(state):
+        for cid, cs in state["candidates"].items():
+            if cs["returns_series"]:
+                cs["returns_series"][0] = {"ts": cs["returns_series"][0]["ts"]}
+                return
+    _corrupt_state(state_dir, _bad)
+    manifest = ssc.load_manifest_readonly(state_dir)
+    with pytest.raises(ssc.ShadowError, match="returns_series"):
+        ssc.load_state_readonly(state_dir, manifest)
+
+
+def test_returns_series_regression_rejected(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    def _bad(state):
+        for cid, cs in state["candidates"].items():
+            if len(cs["returns_series"]) >= 2:
+                cs["returns_series"][1]["ts"] = "1990-01-01T00:00:00+00:00"
+                return
+    _corrupt_state(state_dir, _bad)
+    manifest = ssc.load_manifest_readonly(state_dir)
+    with pytest.raises(ssc.ShadowError, match="regresses"):
+        ssc.load_state_readonly(state_dir, manifest)
+
+
+def test_forward_timestamp_ordering_rejected(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    def _bad(state):
+        for cid, cs in state["candidates"].items():
+            if cs["processed_forward_bar_count"] > 0:
+                # Swap so first > last.
+                cs["first_forward_bar_utc"] = cs["last_forward_bar_utc"]
+                cs["last_forward_bar_utc"] = "2026-07-18T00:00:00+00:00"
+                return
+    _corrupt_state(state_dir, _bad)
+    manifest = ssc.load_manifest_readonly(state_dir)
+    with pytest.raises(ssc.ShadowError, match="first_forward_bar_utc"):
+        ssc.load_state_readonly(state_dir, manifest)
+
+
+def test_zero_forward_bars_implies_null_timestamps(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    def _bad(state):
+        cs = next(iter(state["candidates"].values()))
+        cs["processed_forward_bar_count"] = 0
+        cs["cumulative_exposure_bars"] = 0
+    _corrupt_state(state_dir, _bad)
+    manifest = ssc.load_manifest_readonly(state_dir)
+    with pytest.raises(ssc.ShadowError, match="zero forward bars"):
+        ssc.load_state_readonly(state_dir, manifest)
+
+
+def test_win_plus_loss_must_equal_completed_trades(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    def _bad(state):
+        for cid, cs in state["candidates"].items():
+            if cs["completed_trade_count"] > 0:
+                cs["win_count"] += 1
+                return
+    _corrupt_state(state_dir, _bad)
+    manifest = ssc.load_manifest_readonly(state_dir)
+    with pytest.raises(ssc.ShadowError, match="win_count \\+ loss_count"):
+        ssc.load_state_readonly(state_dir, manifest)
+
+
+def test_experiment_event_duplicate_bar(tmp_path: Path) -> None:
+    """DUPLICATE_BAR_SKIPPED events are written to events.jsonl with
+    the reserved __experiment__ candidate ID and a deterministic ID."""
+    state_dir = tmp_path / "shadow"
+    bars = _many_bars_across_cutoff(pre=800, post=50)
+    duplicated = bars + [bars[-1]]
+    ssc.run_cycle(duplicated, state_dir=state_dir, now_utc=_NOW)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    dup_events = [
+        json.loads(l) for l in events_path.read_text().splitlines()
+        if l.strip() and json.loads(l).get("event_type") == "DUPLICATE_BAR_SKIPPED"
+    ]
+    assert dup_events
+    e = dup_events[0]
+    assert e["candidate_id"] == "__experiment__"
+    assert e["manifest_hash"]
+    assert "duplicate_timestamp_utc" in e["detail"]
+
+
+def test_experiment_event_gap_detected(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    ssc.load_or_init_manifest(state_dir, _NOW)
+    cutoff = pd.Timestamp("2026-07-20 14:30", tz="UTC")
+    intraday_gap = [
+        Bar(ts=cutoff, open=100.0, high=100.0, low=100.0, close=100.0, volume=1_000),
+        Bar(ts=cutoff + pd.Timedelta(hours=3), open=101.0, high=101.0, low=101.0,
+            close=101.0, volume=1_000),
+    ]
+    # Small pre-cutoff prefix.
+    pre = _bar_seq([float(c) for c in range(1, 800)],
+                   start=cutoff - pd.Timedelta(hours=1000))
+    bars = pre + intraday_gap
+    ssc.run_cycle(bars, state_dir=state_dir, now_utc=_NOW)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    gap_events = [
+        json.loads(l) for l in events_path.read_text().splitlines()
+        if l.strip() and json.loads(l).get("event_type") == "DATA_GAP_DETECTED"
+    ]
+    assert gap_events
+    e = gap_events[0]
+    assert e["candidate_id"] == "__experiment__"
+    assert "prev_bar_utc" in e["detail"]
+    assert "next_bar_utc" in e["detail"]
+    assert "gap_seconds" in e["detail"]
+
+
+def test_experiment_events_deduped_on_rerun(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    bars = _many_bars_across_cutoff(pre=800, post=50)
+    dup = bars + [bars[-1]]
+    ssc.run_cycle(dup, state_dir=state_dir, now_utc=_NOW)
+    ssc.run_cycle(dup, state_dir=state_dir, now_utc=_NOW)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    dup_events = [
+        json.loads(l) for l in events_path.read_text().splitlines()
+        if l.strip() and json.loads(l).get("event_type") == "DUPLICATE_BAR_SKIPPED"
+    ]
+    assert len(dup_events) == len({e["event_id"] for e in dup_events})
+
+
+def test_dry_run_reports_but_does_not_persist_experiment_events(
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / "shadow"
+    bars = _many_bars_across_cutoff(pre=800, post=50)
+    ssc.run_cycle(bars, state_dir=state_dir, now_utc=_NOW)
+    # Now dry-run with duplicates: they must be reported in the
+    # summary but not appear in events.jsonl.
+    dup = bars + [bars[-1]]
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    events_before = events_path.read_bytes()
+    summary = ssc.run_cycle(
+        dup, state_dir=state_dir, now_utc=_NOW, dry_run=True,
+    )
+    assert summary["duplicate_bar_skipped_count"] >= 1
+    assert summary["experiment_events_would_persist"]
+    assert events_path.read_bytes() == events_before
+
+
+def test_crash_recovery_state_fully_matches_reference(tmp_path: Path) -> None:
+    """After a simulated crash between event append and state write,
+    a subsequent run must reconstruct state identical to a
+    single-shot run — checked against every persisted field."""
+    a_dir = tmp_path / "reference"
+    b_dir = tmp_path / "recovering"
+    bars = _many_bars_across_cutoff(pre=800, post=100)
+    ssc.run_cycle(bars, state_dir=a_dir, now_utc=_NOW)
+    ssc.run_cycle(bars, state_dir=b_dir, now_utc=_NOW)
+    # Simulate crash: delete state.json but keep events.jsonl.
+    (b_dir / ssc._STATE_FILENAME).unlink()
+    ssc.run_cycle(bars, state_dir=b_dir, now_utc=_NOW)
+    state_a = json.loads((a_dir / ssc._STATE_FILENAME).read_text())
+    state_b = json.loads((b_dir / ssc._STATE_FILENAME).read_text())
+    for cid in state_a["candidates"]:
+        a = state_a["candidates"][cid]
+        b = state_b["candidates"][cid]
+        for k in a:
+            assert a[k] == b[k], f"{cid}.{k} drift: {a[k]!r} vs {b[k]!r}"
+    # Also assert event ID set is identical and has no duplicates.
+    events_a = (a_dir / ssc._EVENTS_FILENAME).read_text().splitlines()
+    events_b = (b_dir / ssc._EVENTS_FILENAME).read_text().splitlines()
+    ids_a = [json.loads(l)["event_id"] for l in events_a if l.strip()]
+    ids_b = [json.loads(l)["event_id"] for l in events_b if l.strip()]
+    assert set(ids_a) == set(ids_b)
+    assert len(ids_b) == len(set(ids_b))
