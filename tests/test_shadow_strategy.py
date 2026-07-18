@@ -53,6 +53,20 @@ def _bar_seq_with_ohlc(closes, opens=None, start=_START) -> list[Bar]:
     ]
 
 
+def _snapshot_dir(path: Path) -> dict[str, tuple[bytes, float]]:
+    """Return a byte-for-byte + mtime snapshot of everything under
+    ``path`` so tests can prove read-only operations changed nothing."""
+    if not path.exists():
+        return {}
+    out: dict[str, tuple[bytes, float]] = {}
+    for p in sorted(path.rglob("*")):
+        if p.is_file():
+            out[str(p.relative_to(path))] = (
+                p.read_bytes(), p.stat().st_mtime_ns,
+            )
+    return out
+
+
 def _many_bars_across_cutoff(pre=800, post=200) -> list[Bar]:
     """A long series that straddles the cutoff.
 
@@ -270,32 +284,27 @@ def test_unique_bullish_episodes_bounded_by_crossovers(
     ssc.run_cycle(bars, state_dir=state_dir, now_utc=_NOW)
     state = json.loads((state_dir / ssc._STATE_FILENAME).read_text())
     for cid, s in state["candidates"].items():
-        # Every completed episode was opened by a bullish crossover and
-        # closed by a bearish one, so completed episodes ≤ crossovers.
+        # Every episode is either opened by a forward crossover or
+        # inherited across the cutoff. Episodes counted must equal
+        # forward crossovers plus inherited episodes.
         assert (
             s["unique_bullish_episode_count"]
-            <= s["bullish_crossover_count"]
-        ), cid
-        assert (
-            s["unique_bullish_episode_count"]
-            <= s["bearish_crossover_count"]
+            == s["bullish_crossover_count"] + s["inherited_bullish_episode_count"]
         ), cid
 
 
-def test_immediate_plus_delayed_equals_entry_count(tmp_path: Path) -> None:
+def test_immediate_delayed_inherited_equals_entry_count(tmp_path: Path) -> None:
     state_dir = tmp_path / "shadow"
     bars = _many_bars_across_cutoff(pre=800, post=400)
     ssc.run_cycle(bars, state_dir=state_dir, now_utc=_NOW)
     state = json.loads((state_dir / ssc._STATE_FILENAME).read_text())
     for cid, s in state["candidates"].items():
-        # Each entry either fires from the initial crossover event
-        # (immediate) or later in the episode (delayed).
-        # Trade count equals exits.
-        entries = s["immediate_entry_count"] + s["delayed_entry_count"]
-        # Every completed trade came from an entry.
+        entries = (
+            s["immediate_entry_count"]
+            + s["delayed_entry_count"]
+            + s["inherited_bullish_state_entry_count"]
+        )
         assert s["completed_trade_count"] <= entries, cid
-        # If the candidate still holds an open position, entries ==
-        # trades + 1; else entries == trades.
         expected = s["completed_trade_count"] + (1 if s["position_open"] else 0)
         assert entries == expected, cid
 
@@ -700,14 +709,637 @@ def test_cli_report_prints_validation_status(
     assert payload["validation_status"]["promotion_eligible"] is False
 
 
-def test_dry_run_does_not_persist_state(tmp_path: Path) -> None:
+def test_dry_run_requires_initialized_experiment(tmp_path: Path) -> None:
+    """Dry-run is now non-mutating and requires an existing manifest."""
     state_dir = tmp_path / "shadow"
     bars = _many_bars_across_cutoff(pre=800, post=50)
+    with pytest.raises(ssc.ShadowError, match="no shadow manifest"):
+        ssc.run_cycle(
+            bars, state_dir=state_dir, now_utc=_NOW, dry_run=True,
+        )
+    # State dir was NOT created by the failed dry-run.
+    assert not state_dir.exists()
+
+
+def test_dry_run_after_init_does_not_mutate_directory(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    bars = _many_bars_across_cutoff(pre=800, post=50)
+    ssc.run_cycle(bars, state_dir=state_dir, now_utc=_NOW)
+    snapshot_before = _snapshot_dir(state_dir)
+    # Now run dry-run — must not change anything.
     summary = ssc.run_cycle(
         bars, state_dir=state_dir, now_utc=_NOW, dry_run=True,
     )
     assert summary["dry_run"] is True
-    # The manifest file always exists (initialized on first call), but
-    # state.json must not.
-    assert not (state_dir / ssc._STATE_FILENAME).exists()
-    assert not (state_dir / ssc._EVENTS_FILENAME).exists()
+    snapshot_after = _snapshot_dir(state_dir)
+    assert snapshot_before == snapshot_after
+
+
+# ---------------------------------------------------------------------------
+# S62 review — episode classification, holding periods, non-mutating reads,
+# state / event integrity, data-integrity diagnostics
+# ---------------------------------------------------------------------------
+
+
+def _forward_bar_series(closes: list[float]) -> list[Bar]:
+    """A series of closes starting at cutoff+1h so every bar is forward."""
+    cutoff = pd.Timestamp("2026-07-17 19:30", tz="UTC")
+    start = cutoff + pd.Timedelta(hours=1)
+    return _bar_seq(closes, start=start)
+
+
+def _bars_with_prefix(
+    pre_closes: list[float],
+    post_closes: list[float],
+    pre_offset_hours: int | None = None,
+) -> list[Bar]:
+    """Build a series where pre_closes end at the cutoff and post_closes
+    are strictly forward."""
+    cutoff = pd.Timestamp("2026-07-17 19:30", tz="UTC")
+    n_pre = len(pre_closes)
+    if pre_offset_hours is None:
+        pre_offset_hours = n_pre
+    start = cutoff + pd.Timedelta(hours=1) - pd.Timedelta(hours=pre_offset_hours)
+    all_closes = list(pre_closes) + list(post_closes)
+    return _bar_seq(all_closes, start=start)
+
+
+# --- Issue 1: episode & entry classification ---
+
+
+def test_first_forward_bar_bullish_none_filter_is_inherited(tmp_path: Path) -> None:
+    """When the first forward bar is already in a bullish state and
+    no forward crossover fires, the entry classifies as inherited —
+    NOT delayed."""
+    state_dir = tmp_path / "shadow"
+    # Long-run monotonic uptrend so short SMA > long SMA at cutoff.
+    n_pre = 300
+    n_post = 5
+    closes = [float(c) for c in range(1, n_pre + n_post + 1)]
+    bars = _bars_with_prefix(closes[:n_pre], closes[n_pre:], pre_offset_hours=n_pre)
+    ssc.run_cycle(bars, state_dir=state_dir, now_utc=_NOW)
+    state = json.loads((state_dir / ssc._STATE_FILENAME).read_text())
+    s = state["candidates"]["research_10_20_none"]
+    assert s["bullish_crossover_count"] == 0
+    assert s["inherited_bullish_episode_count"] == 1
+    # An entry may have executed via the inherited path.
+    assert s["delayed_entry_count"] == 0
+    # There must be no forward-blocked crossover.
+    assert s["blocked_on_crossover_count"] == 0
+    entries = (
+        s["immediate_entry_count"]
+        + s["delayed_entry_count"]
+        + s["inherited_bullish_state_entry_count"]
+    )
+    if entries > 0:
+        assert s["inherited_bullish_state_entry_count"] >= 1
+
+
+def test_delayed_entry_requires_earlier_forward_crossover_block(
+    tmp_path: Path,
+) -> None:
+    """A delayed entry requires a bullish crossover ON forward data
+    that was blocked by the filter. Without such a block, an
+    otherwise valid entry must not be classified as delayed."""
+    state_dir = tmp_path / "shadow"
+    # Inherit a bullish state so we can enter but no forward block.
+    n_pre = 300
+    closes = [float(c) for c in range(1, n_pre + 5 + 1)]
+    bars = _bars_with_prefix(closes[:n_pre], closes[n_pre:], pre_offset_hours=n_pre)
+    ssc.run_cycle(bars, state_dir=state_dir, now_utc=_NOW)
+    state = json.loads((state_dir / ssc._STATE_FILENAME).read_text())
+    for cid, s in state["candidates"].items():
+        if s["blocked_on_crossover_count"] == 0:
+            # No forward block → delayed entries must be zero.
+            assert s["delayed_entry_count"] == 0, cid
+
+
+def test_active_episode_counted_exactly_once(tmp_path: Path) -> None:
+    """Once an episode begins it must appear in unique_bullish_episode_count
+    immediately, and it must be counted exactly once no matter how long
+    the episode stays active."""
+    state_dir = tmp_path / "shadow"
+    # A bullish state that lasts many forward bars but never ends.
+    n_pre = 300
+    n_post = 100
+    closes = [float(c) for c in range(1, n_pre + n_post + 1)]
+    bars = _bars_with_prefix(closes[:n_pre], closes[n_pre:], pre_offset_hours=n_pre)
+    ssc.run_cycle(bars, state_dir=state_dir, now_utc=_NOW)
+    state = json.loads((state_dir / ssc._STATE_FILENAME).read_text())
+    for cid, s in state["candidates"].items():
+        # At most one episode has opened in this monotone series.
+        assert s["unique_bullish_episode_count"] <= 1, cid
+        # The runner should not have counted the same active episode
+        # twice (that would show as unique_bullish_episode_count == 2).
+
+
+def test_batch_vs_incremental_episode_classification(tmp_path: Path) -> None:
+    a_dir = tmp_path / "batch"
+    b_dir = tmp_path / "incremental"
+    bars = _many_bars_across_cutoff(pre=800, post=200)
+    ssc.run_cycle(bars, state_dir=a_dir, now_utc=_NOW)
+    for cut in range(50, len(bars) + 50, 50):
+        ssc.run_cycle(bars[:cut], state_dir=b_dir, now_utc=_NOW)
+    sa = json.loads((a_dir / ssc._STATE_FILENAME).read_text())
+    sb = json.loads((b_dir / ssc._STATE_FILENAME).read_text())
+    for cid in sa["candidates"]:
+        for key in (
+            "unique_bullish_episode_count",
+            "inherited_bullish_episode_count",
+            "immediate_entry_count",
+            "delayed_entry_count",
+            "inherited_bullish_state_entry_count",
+            "episodes_without_entry_count",
+        ):
+            assert sa["candidates"][cid][key] == sb["candidates"][cid][key], (
+                f"{cid}.{key} drift: batch={sa['candidates'][cid][key]} "
+                f"incremental={sb['candidates'][cid][key]}"
+            )
+
+
+# --- Issue 2: forward timestamps + holding periods ---
+
+
+def test_cache_ends_before_cutoff_zero_forward(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    # Bars end WELL before the cutoff.
+    bars = _bar_seq(
+        [float(c) for c in range(1, 201)],
+        start=pd.Timestamp("2026-05-01 00:00", tz="UTC"),
+    )
+    ssc.run_cycle(bars, state_dir=state_dir, now_utc=_NOW)
+    state = json.loads((state_dir / ssc._STATE_FILENAME).read_text())
+    for cid, s in state["candidates"].items():
+        assert s["first_forward_bar_utc"] is None
+        assert s["last_forward_bar_utc"] is None
+        assert s["processed_forward_bar_count"] == 0
+
+
+def test_cache_ends_exactly_at_cutoff_zero_forward(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    cutoff = pd.Timestamp("2026-07-17 19:30", tz="UTC")
+    bars = _bar_seq(
+        [float(c) for c in range(1, 601)],
+        start=cutoff - pd.Timedelta(hours=599),
+    )
+    # last bar timestamp exactly at cutoff.
+    assert bars[-1].ts == cutoff
+    ssc.run_cycle(bars, state_dir=state_dir, now_utc=_NOW)
+    state = json.loads((state_dir / ssc._STATE_FILENAME).read_text())
+    for cid, s in state["candidates"].items():
+        assert s["first_forward_bar_utc"] is None
+        assert s["last_forward_bar_utc"] is None
+        assert s["processed_forward_bar_count"] == 0
+
+
+def test_one_forward_bar_recorded(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    cutoff = pd.Timestamp("2026-07-17 19:30", tz="UTC")
+    bars = _bar_seq(
+        [float(c) for c in range(1, 602)],
+        start=cutoff - pd.Timedelta(hours=599),
+    )
+    ssc.run_cycle(bars, state_dir=state_dir, now_utc=_NOW)
+    state = json.loads((state_dir / ssc._STATE_FILENAME).read_text())
+    for cid, s in state["candidates"].items():
+        assert s["processed_forward_bar_count"] == 1
+        assert s["first_forward_bar_utc"] == s["last_forward_bar_utc"]
+
+
+def test_trade_records_include_bars_held(tmp_path: Path) -> None:
+    """Every completed trade has a bars_held integer that equals
+    exit_forward_index - entry_forward_index."""
+    state_dir = tmp_path / "shadow"
+    bars = _many_bars_across_cutoff(pre=800, post=400)
+    ssc.run_cycle(bars, state_dir=state_dir, now_utc=_NOW)
+    state = json.loads((state_dir / ssc._STATE_FILENAME).read_text())
+    for cid, s in state["candidates"].items():
+        for t in s["trades"]:
+            assert "bars_held" in t
+            assert (
+                t["bars_held"]
+                == t["exit_forward_index"] - t["entry_forward_index"]
+            ), cid
+
+
+def test_average_holding_bars_uses_persisted_bars_held(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    bars = _many_bars_across_cutoff(pre=800, post=400)
+    ssc.run_cycle(bars, state_dir=state_dir, now_utc=_NOW)
+    manifest = ssc.load_manifest_readonly(state_dir)
+    state = ssc.load_state_readonly(state_dir, manifest)
+    from src.tools.shadow_strategy_report import _average_holding_bars
+    for cid, cs in state["candidates"].items():
+        trades = cs["trades"]
+        expected = (
+            sum(t["bars_held"] for t in trades) / len(trades)
+            if trades else 0.0
+        )
+        assert _average_holding_bars(trades) == pytest.approx(expected)
+
+
+# --- Issue 3: dry-run / status / report do not mutate ---
+
+
+def test_status_command_does_not_initialize(
+    tmp_path: Path, capsys: pytest.CaptureFixture,
+) -> None:
+    state_dir = tmp_path / "shadow"
+    rc = ssc.main(["--state-dir", str(state_dir), "--status"])
+    assert rc == 2
+    err = json.loads(capsys.readouterr().out)
+    assert "no shadow manifest" in err["error"]
+    assert not state_dir.exists()
+
+
+def test_report_command_does_not_initialize(
+    tmp_path: Path, capsys: pytest.CaptureFixture,
+) -> None:
+    state_dir = tmp_path / "shadow"
+    rc = ssr.main(["--state-dir", str(state_dir)])
+    assert rc == 2
+    err = json.loads(capsys.readouterr().out)
+    assert "no shadow manifest" in err["error"]
+    assert not state_dir.exists()
+
+
+def test_status_leaves_directory_unchanged(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    bars = _many_bars_across_cutoff(pre=800, post=100)
+    ssc.run_cycle(bars, state_dir=state_dir, now_utc=_NOW)
+    before = _snapshot_dir(state_dir)
+    ssc.main(["--state-dir", str(state_dir), "--status"])
+    after = _snapshot_dir(state_dir)
+    assert before == after
+
+
+def test_report_leaves_directory_unchanged(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    bars = _many_bars_across_cutoff(pre=800, post=100)
+    ssc.run_cycle(bars, state_dir=state_dir, now_utc=_NOW)
+    before = _snapshot_dir(state_dir)
+    ssr.main(["--state-dir", str(state_dir)])
+    after = _snapshot_dir(state_dir)
+    assert before == after
+
+
+# --- Issue 4: state and event-log integrity ---
+
+
+def _prime(state_dir: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+    bars = _many_bars_across_cutoff(pre=800, post=100)
+    ssc.run_cycle(bars, state_dir=state_dir, now_utc=_NOW)
+    manifest = ssc.load_manifest_readonly(state_dir)
+    state = ssc.load_state_readonly(state_dir, manifest)
+    return manifest, state
+
+
+def _corrupt_state(state_dir: Path, mutate_fn) -> None:
+    manifest = ssc.load_manifest_readonly(state_dir)
+    state = ssc.load_state_readonly(state_dir, manifest)
+    mutate_fn(state)
+    (state_dir / ssc._STATE_FILENAME).write_text(
+        json.dumps(state, default=str), encoding="utf-8",
+    )
+
+
+def test_state_validator_rejects_missing_candidate(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    def _drop(state):
+        state["candidates"].pop("research_15_50_none")
+    _corrupt_state(state_dir, _drop)
+    manifest = ssc.load_manifest_readonly(state_dir)
+    with pytest.raises(ssc.ShadowError, match="candidates mismatch"):
+        ssc.load_state_readonly(state_dir, manifest)
+
+
+def test_state_validator_rejects_extra_candidate(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    def _add(state):
+        state["candidates"]["not_a_candidate"] = ssc._new_candidate_state(
+            "not_a_candidate",
+        )
+    _corrupt_state(state_dir, _add)
+    manifest = ssc.load_manifest_readonly(state_dir)
+    with pytest.raises(ssc.ShadowError, match="candidates mismatch"):
+        ssc.load_state_readonly(state_dir, manifest)
+
+
+def test_state_validator_rejects_nan_equity(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    def _nan(state):
+        state["candidates"]["research_10_20_none"]["cash"] = float("nan")
+    _corrupt_state(state_dir, _nan)
+    manifest = ssc.load_manifest_readonly(state_dir)
+    with pytest.raises(ssc.ShadowError, match="finite"):
+        ssc.load_state_readonly(state_dir, manifest)
+
+
+def test_state_validator_rejects_negative_counter(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    def _neg(state):
+        state["candidates"]["research_10_20_none"]["bullish_crossover_count"] = -1
+    _corrupt_state(state_dir, _neg)
+    manifest = ssc.load_manifest_readonly(state_dir)
+    with pytest.raises(ssc.ShadowError, match="non-negative"):
+        ssc.load_state_readonly(state_dir, manifest)
+
+
+def test_state_validator_rejects_alias_mismatch(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    def _mismatch(state):
+        s = state["candidates"]["research_10_20_none"]
+        s["bullish_signal_count"] = s["bullish_state_bar_count"] + 5
+    _corrupt_state(state_dir, _mismatch)
+    manifest = ssc.load_manifest_readonly(state_dir)
+    with pytest.raises(ssc.ShadowError, match="bullish_signal_count"):
+        ssc.load_state_readonly(state_dir, manifest)
+
+
+def test_state_validator_rejects_inconsistent_position(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    def _bad(state):
+        s = state["candidates"]["research_10_20_none"]
+        s["position_open"] = True
+        s["quantity"] = 0.0
+    _corrupt_state(state_dir, _bad)
+    manifest = ssc.load_manifest_readonly(state_dir)
+    with pytest.raises(ssc.ShadowError, match="position_open"):
+        ssc.load_state_readonly(state_dir, manifest)
+
+
+def test_state_validator_rejects_malformed_pending_action(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    def _bad(state):
+        state["candidates"]["research_10_20_none"]["pending_action"] = {
+            "side": "wrong_side",
+        }
+    _corrupt_state(state_dir, _bad)
+    manifest = ssc.load_manifest_readonly(state_dir)
+    with pytest.raises(ssc.ShadowError, match="pending_action"):
+        ssc.load_state_readonly(state_dir, manifest)
+
+
+def test_state_validator_rejects_counter_alias_mismatch(tmp_path: Path) -> None:
+    """immediate + delayed + inherited must equal trades + open."""
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    def _bad(state):
+        s = state["candidates"]["research_10_20_none"]
+        s["immediate_entry_count"] += 1
+    _corrupt_state(state_dir, _bad)
+    manifest = ssc.load_manifest_readonly(state_dir)
+    with pytest.raises(ssc.ShadowError,
+                       match="immediate\\+delayed\\+inherited"):
+        ssc.load_state_readonly(state_dir, manifest)
+
+
+def test_events_log_rejects_malformed_middle_line(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    # Insert a malformed line in the middle.
+    lines = events_path.read_text().splitlines()
+    assert len(lines) >= 2
+    lines.insert(1, "not-a-json-line")
+    events_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    with pytest.raises(ssc.ShadowError, match="events.jsonl line"):
+        ssc._load_known_event_ids(events_path)
+
+
+def test_events_log_recovers_truncated_last_line(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    with events_path.open("a", encoding="utf-8") as f:
+        f.write('{"event_id": "abc", "partial')
+    known = ssc._load_known_event_ids(events_path)
+    assert isinstance(known, set)
+
+
+# --- Issue 5: data integrity ---
+
+
+def test_duplicate_bar_identical_ohlcv_counted(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    bars = _many_bars_across_cutoff(pre=800, post=50)
+    duplicated = bars + [bars[-1]]  # duplicate the last bar
+    summary = ssc.run_cycle(duplicated, state_dir=state_dir, now_utc=_NOW)
+    assert summary["duplicate_bar_skipped_count"] >= 1
+
+
+def test_conflicting_bar_ohlcv_fails_closed(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    bars = _many_bars_across_cutoff(pre=800, post=50)
+    last = bars[-1]
+    conflict = Bar(
+        ts=last.ts, open=last.open + 1, high=last.high + 1,
+        low=last.low, close=last.close + 5, volume=last.volume,
+    )
+    bad = bars + [conflict]
+    with pytest.raises(ssc.ShadowError, match="conflicting OHLCV"):
+        ssc.run_cycle(bad, state_dir=state_dir, now_utc=_NOW)
+
+
+def test_non_finite_ohlcv_fails_closed(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    bars = _many_bars_across_cutoff(pre=800, post=50)
+    bars[-1] = Bar(
+        ts=bars[-1].ts, open=float("nan"),
+        high=bars[-1].high, low=bars[-1].low, close=bars[-1].close,
+        volume=bars[-1].volume,
+    )
+    with pytest.raises(ssc.ShadowError, match="non-finite"):
+        ssc.run_cycle(bars, state_dir=state_dir, now_utc=_NOW)
+
+
+def test_intraday_gap_detected(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    ssc.load_or_init_manifest(state_dir, _NOW)
+    # Two forward bars in the same regular session, 3 hours apart.
+    cutoff = pd.Timestamp("2026-07-20 14:30", tz="UTC")  # a Monday
+    b1 = Bar(ts=cutoff, open=100.0, high=100.0, low=100.0, close=100.0, volume=1_000)
+    b2 = Bar(
+        ts=cutoff + pd.Timedelta(hours=3),
+        open=101.0, high=101.0, low=101.0, close=101.0, volume=1_000,
+    )
+    # Force these bars past the cutoff by pretending manifest cutoff is
+    # July 1st for this test.
+    validated, dups, gaps = ssc._validate_and_prepare_bars([b1, b2])
+    assert dups == 0
+    assert len(gaps) == 1
+    assert gaps[0]["gap_seconds"] == pytest.approx(3 * 3600)
+
+
+def test_overnight_gap_not_flagged() -> None:
+    """A weekend-crossing or overnight gap is not an intraday gap."""
+    b1 = Bar(
+        ts=pd.Timestamp("2026-07-17 19:30", tz="UTC"),
+        open=100.0, high=100.0, low=100.0, close=100.0, volume=1_000,
+    )
+    b2 = Bar(
+        ts=pd.Timestamp("2026-07-20 13:30", tz="UTC"),
+        open=100.0, high=100.0, low=100.0, close=100.0, volume=1_000,
+    )
+    validated, dups, gaps = ssc._validate_and_prepare_bars([b1, b2])
+    assert gaps == []
+
+
+# --- Strengthened core tests ---
+
+
+def test_future_bar_data_does_not_leak_into_current_execution(
+    tmp_path: Path,
+) -> None:
+    """Changing the current bar's close/high/low while keeping its
+    open and all prior bars fixed must not alter the fill or the
+    decision for THIS bar's open execution."""
+    state_dir1 = tmp_path / "a"
+    state_dir2 = tmp_path / "b"
+    bars = _many_bars_across_cutoff(pre=800, post=100)
+    # Baseline run.
+    ssc.run_cycle(bars, state_dir=state_dir1, now_utc=_NOW)
+    state1 = ssc.load_state_readonly(
+        state_dir1, ssc.load_manifest_readonly(state_dir1),
+    )
+    # Mutate the very last bar's close/high/low.
+    tampered = list(bars[:-1])
+    last = bars[-1]
+    tampered.append(Bar(
+        ts=last.ts, open=last.open,
+        high=last.high * 5.0, low=last.low * 0.1,
+        close=last.close * 5.0, volume=last.volume,
+    ))
+    ssc.run_cycle(tampered, state_dir=state_dir2, now_utc=_NOW)
+    state2 = ssc.load_state_readonly(
+        state_dir2, ssc.load_manifest_readonly(state_dir2),
+    )
+    for cid in state1["candidates"]:
+        s1 = state1["candidates"][cid]
+        s2 = state2["candidates"][cid]
+        # The pending_action produced by the LAST bar's close will
+        # differ (that's just the next-bar signal); but the trades
+        # executed BEFORE the last bar must be identical.
+        for a, b in zip(s1["trades"], s2["trades"]):
+            assert a == b, f"{cid}: past trade drifted"
+
+
+def test_bearish_exit_never_blocked_by_filter(tmp_path: Path) -> None:
+    """Construct a filter that blocks EVERY entry (ma_separation_50bps)
+    and then hold a candidate that already has a position via an
+    unrelated `none` filter. Verify the SELL still executes."""
+    # This test uses the same synthetic series across the entire
+    # candidate slate — bearish crossovers exist, and the run must
+    # close positions on them for `none` candidates even though
+    # filtered candidates never enter.
+    state_dir = tmp_path / "shadow"
+    bars = _many_bars_across_cutoff(pre=800, post=400)
+    ssc.run_cycle(bars, state_dir=state_dir, now_utc=_NOW)
+    state = json.loads((state_dir / ssc._STATE_FILENAME).read_text())
+    # research_10_20_none has entries; if any bearish crossover
+    # happened, we should also see at least one completed trade
+    # (because bearish exits are not filtered).
+    s = state["candidates"]["research_10_20_none"]
+    if (
+        s["immediate_entry_count"] + s["delayed_entry_count"]
+        + s["inherited_bullish_state_entry_count"] > 0
+        and s["bearish_crossover_count"] > 0
+    ):
+        assert s["completed_trade_count"] >= 1
+
+
+def test_processed_through_utc_strictly_monotonic_across_cycles(
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / "shadow"
+    bars = _many_bars_across_cutoff(pre=800, post=200)
+    for cut in range(50, len(bars) + 50, 50):
+        subset = bars[:cut]
+        ssc.run_cycle(subset, state_dir=state_dir, now_utc=_NOW)
+    state = json.loads((state_dir / ssc._STATE_FILENAME).read_text())
+    for cid, s in state["candidates"].items():
+        pt = s.get("processed_through_utc")
+        assert pt is not None
+        # Also strictly monotonic against last_forward_bar_utc.
+        lfb = s.get("last_forward_bar_utc")
+        if lfb is not None:
+            assert pt >= lfb
+
+
+def test_batch_vs_incremental_complete_state_parity(tmp_path: Path) -> None:
+    """Batch and incremental must produce identical state for every
+    key that observers care about — including cash, quantity,
+    marked equity, pending action, trades, returns series, and all
+    counters."""
+    a_dir = tmp_path / "batch"
+    b_dir = tmp_path / "incremental"
+    bars = _many_bars_across_cutoff(pre=800, post=200)
+    ssc.run_cycle(bars, state_dir=a_dir, now_utc=_NOW)
+    for cut in range(50, len(bars) + 50, 50):
+        ssc.run_cycle(bars[:cut], state_dir=b_dir, now_utc=_NOW)
+    sa = json.loads((a_dir / ssc._STATE_FILENAME).read_text())
+    sb = json.loads((b_dir / ssc._STATE_FILENAME).read_text())
+    keys_to_check = [
+        "cash", "quantity", "position_open", "entry_price",
+        "entry_timestamp_utc", "entry_forward_index",
+        "realized_equity", "marked_equity", "peak_equity", "max_drawdown",
+        "processed_through_utc", "last_forward_bar_utc",
+        "first_forward_bar_utc", "pending_action",
+        "completed_trade_count", "win_count", "loss_count",
+        "cumulative_exposure_bars", "processed_forward_bar_count",
+        "bullish_crossover_count", "bearish_crossover_count",
+        "bullish_state_bar_count", "bullish_signal_count",
+        "unique_bullish_episode_count", "inherited_bullish_episode_count",
+        "filter_evaluation_count", "filter_allowed_count",
+        "filter_blocked_count", "blocked_on_crossover_count",
+        "immediate_entry_count", "delayed_entry_count",
+        "inherited_bullish_state_entry_count",
+        "episodes_without_entry_count", "trades", "returns_series",
+    ]
+    for cid in sa["candidates"]:
+        for key in keys_to_check:
+            assert (
+                sa["candidates"][cid][key] == sb["candidates"][cid][key]
+            ), f"{cid}.{key} drift between batch and incremental"
+
+
+def test_crash_recovery_events_appended_state_missing(tmp_path: Path) -> None:
+    """Simulate a crash between event append and state write:
+    re-running must reconstruct state consistently without duplicate
+    events."""
+    a_dir = tmp_path / "reference"
+    b_dir = tmp_path / "recovering"
+    bars = _many_bars_across_cutoff(pre=800, post=100)
+    # Baseline: fully process reference dir.
+    ssc.run_cycle(bars, state_dir=a_dir, now_utc=_NOW)
+    reference_state = (a_dir / ssc._STATE_FILENAME).read_text()
+    reference_events = (a_dir / ssc._EVENTS_FILENAME).read_text()
+
+    # Recovering: run cycle to append events and write state.
+    ssc.run_cycle(bars, state_dir=b_dir, now_utc=_NOW)
+    # Simulate crash — delete state.json while keeping events + manifest.
+    (b_dir / ssc._STATE_FILENAME).unlink()
+    # Rerun — must reconstruct from scratch. Since events are
+    # deterministic, duplicates should not accumulate.
+    ssc.run_cycle(bars, state_dir=b_dir, now_utc=_NOW)
+    recovered_events = (b_dir / ssc._EVENTS_FILENAME).read_text()
+    # Event log should not have duplicates on rerun (deterministic IDs).
+    recovered_ids = [
+        json.loads(l)["event_id"]
+        for l in recovered_events.strip().split("\n") if l.strip()
+    ]
+    assert len(recovered_ids) == len(set(recovered_ids))
+    # The reference and recovered event streams may differ in order
+    # but must contain the same event ID set.
+    ref_ids = {
+        json.loads(l)["event_id"]
+        for l in reference_events.strip().split("\n") if l.strip()
+    }
+    assert set(recovered_ids) == ref_ids

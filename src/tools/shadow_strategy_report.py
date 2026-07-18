@@ -3,12 +3,11 @@ tools/shadow_strategy_report.py
 ================================
 Read-only report over the S62 shadow-strategy state.
 
-Reads ``logs/shadow_strategy/state.json`` produced by
-``run_shadow_strategy_cycle`` and emits a JSON summary. Does not
-touch broker credentials, submit orders, mutate state, or change any
-paper trading configuration. Always emits a ``validation_status``
-block with ``promotion_eligible: false`` — S62 does not select a
-winner, it collects forward evidence.
+Never mutates the state directory — it does not initialize a
+manifest, state, or events file. If either is missing or corrupt the
+report exits with a JSON error and status code 2. Always emits
+``validation_status.promotion_eligible = false``; S62 collects
+forward evidence, it does not declare a winner.
 """
 
 from __future__ import annotations
@@ -17,20 +16,18 @@ import argparse
 import json
 import math
 import sys
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Sequence
 
 from src.tools.run_shadow_strategy_cycle import (
     ShadowError,
     _DEFAULT_STATE_DIR,
-    _MANIFEST_FILENAME,
-    _STATE_FILENAME,
-    load_or_init_manifest,
-    load_or_init_state,
+    load_manifest_readonly,
+    load_state_readonly,
 )
 
-_BARS_PER_YEAR = 6.5 * 252  # 60m
+_BARS_PER_YEAR = 6.5 * 252  # 60m bars per trading year
 
 
 def _sharpe(rs: Sequence[float]) -> float:
@@ -55,16 +52,19 @@ def _profit_factor(trades: Sequence[dict[str, Any]]) -> float:
 
 
 def _average_holding_bars(trades: Sequence[dict[str, Any]]) -> float:
+    """Average across COMPLETED trades only, computed from the
+    ``bars_held`` value persisted on each trade record. Open positions
+    are excluded from the completed-trade average."""
     if not trades:
         return 0.0
-    # Trades store timestamps, not indexes — we approximate with 1
-    # bar per 60m for reporting. Since the shadow runner does not
-    # persist bar indexes, holding time is best captured as bar count
-    # via the exposure ratio when trade indexes aren't available.
-    # This helper is best-effort; the true "average holding bars"
-    # per trade requires bar-index info the runner does not persist.
-    # Report 0.0 rather than misleading.
-    return 0.0
+    total = 0
+    n = 0
+    for t in trades:
+        bh = t.get("bars_held")
+        if isinstance(bh, int):
+            total += bh
+            n += 1
+    return total / n if n > 0 else 0.0
 
 
 def _largest_positive_trade_share(trades: Sequence[dict[str, Any]]) -> float | None:
@@ -93,25 +93,33 @@ def _candidate_report(
     processed = s.get("processed_forward_bar_count", 0) or 0
     exposure = (s.get("cumulative_exposure_bars", 0) / processed) if processed > 0 else 0.0
 
+    entry_count = (
+        s.get("immediate_entry_count", 0)
+        + s.get("delayed_entry_count", 0)
+        + s.get("inherited_bullish_state_entry_count", 0)
+    )
+
     return {
         "candidate_id": cid,
-        "first_eligible_forward_bar_utc": s.get("_first_forward_bar_utc"),
-        "last_processed_forward_bar_utc": s.get("processed_through_utc"),
+        "first_eligible_forward_bar_utc": s.get("first_forward_bar_utc"),
+        "last_processed_forward_bar_utc": s.get("last_forward_bar_utc"),
         "processed_forward_bar_count": processed,
         "bullish_crossover_count": s.get("bullish_crossover_count", 0),
         "bullish_state_bar_count": s.get("bullish_state_bar_count", 0),
-        "bullish_signal_count": s.get("bullish_signal_count", 0),  # alias
+        "bullish_signal_count": s.get("bullish_signal_count", 0),
         "unique_bullish_episode_count": s.get("unique_bullish_episode_count", 0),
+        "inherited_bullish_episode_count":
+            s.get("inherited_bullish_episode_count", 0),
         "filter_evaluation_count": s.get("filter_evaluation_count", 0),
         "filter_allowed_count": s.get("filter_allowed_count", 0),
         "filter_blocked_count": s.get("filter_blocked_count", 0),
         "blocked_on_crossover_count": s.get("blocked_on_crossover_count", 0),
         "immediate_entry_count": s.get("immediate_entry_count", 0),
         "delayed_entry_count": s.get("delayed_entry_count", 0),
+        "inherited_bullish_state_entry_count":
+            s.get("inherited_bullish_state_entry_count", 0),
         "episodes_without_entry_count": s.get("episodes_without_entry_count", 0),
-        "entry_count": (
-            s.get("immediate_entry_count", 0) + s.get("delayed_entry_count", 0)
-        ),
+        "entry_count": entry_count,
         "exit_count": s.get("completed_trade_count", 0),
         "completed_trade_count": s.get("completed_trade_count", 0),
         "position_open": bool(s.get("position_open", False)),
@@ -157,11 +165,11 @@ def _diagnostic_flags(
 ) -> dict[str, Any]:
     flags: dict[str, Any] = {
         "insufficient_calendar_weeks": None,
+        "weeks_observed": None,
         "candidates_with_fewer_than_10_completed_trades": [],
         "candidates_with_fewer_than_3_bullish_episodes": [],
         "candidates_with_single_trade_pnl_share_above_60_percent": [],
     }
-    # Calendar-week span
     if processed_utc_earliest and processed_utc_latest:
         try:
             a = datetime.fromisoformat(processed_utc_earliest.replace("Z", "+00:00"))
@@ -171,7 +179,6 @@ def _diagnostic_flags(
             flags["weeks_observed"] = weeks
         except ValueError:
             pass
-
     for cid, r in reports.items():
         if r["completed_trade_count"] < 10:
             flags["candidates_with_fewer_than_10_completed_trades"].append(cid)
@@ -217,7 +224,6 @@ def build_report(
         ):
             filter_deltas[cid] = _comparison_row(rep, unfiltered_10_20)
 
-    # Overall span for calendar-weeks flag
     earliest = min(
         (r["first_eligible_forward_bar_utc"] or "")
         for r in per_candidate.values()
@@ -245,8 +251,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="python -m src.tools.shadow_strategy_report",
         description=(
-            "Report over the S62 shadow-strategy state. Read-only; "
-            "never promotes a candidate."
+            "Read-only report over the S62 shadow-strategy state."
         ),
     )
     p.add_argument("--state-dir", default=str(_DEFAULT_STATE_DIR),
@@ -258,8 +263,8 @@ def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     state_dir = Path(args.state_dir)
     try:
-        manifest = load_or_init_manifest(state_dir, datetime.now(timezone.utc))
-        state = load_or_init_state(state_dir, manifest)
+        manifest = load_manifest_readonly(state_dir)
+        state = load_state_readonly(state_dir, manifest)
     except ShadowError as exc:
         print(json.dumps({"error": str(exc)}, indent=2))
         return 2
