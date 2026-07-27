@@ -2110,3 +2110,366 @@ def test_event_counts_dry_run_mirrors_would_append(tmp_path: Path) -> None:
     assert real["candidate_events_appended"] == dry["candidate_events_would_append"]
     assert real["experiment_events_appended"] == dry["experiment_events_would_append"]
     assert real["events_appended"] == dry["events_would_append"]
+
+
+# ---------------------------------------------------------------------------
+# S62 review round 5 — unterminated-valid-tail safety, semantic event validation
+# ---------------------------------------------------------------------------
+
+
+def _make_events_end_without_newline(events_path: Path) -> None:
+    """Strip the trailing newline from events.jsonl (final record
+    still a valid JSON object, just unterminated)."""
+    raw = events_path.read_bytes()
+    assert raw.endswith(b"\n")
+    events_path.write_bytes(raw[:-1])
+
+
+# --- Fix 1: unterminated valid final record ---
+
+
+def test_status_exits_2_on_unterminated_valid_final_record(
+    tmp_path: Path, capsys: pytest.CaptureFixture,
+) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    before = _snapshot_dir(state_dir)
+    _make_events_end_without_newline(events_path)
+    snap_after_corruption = _snapshot_dir(state_dir)
+    rc = ssc.main(["--state-dir", str(state_dir), "--status"])
+    assert rc == 2
+    err = json.loads(capsys.readouterr().out)
+    assert "newline" in err["error"].lower() or "framing" in err["error"].lower()
+    # No further mutation.
+    assert _snapshot_dir(state_dir) == snap_after_corruption
+    # Everything except events.jsonl unchanged from before.
+    for path, before_entry in before.items():
+        if path.endswith(ssc._EVENTS_FILENAME):
+            continue
+        assert _snapshot_dir(state_dir)[path] == before_entry, path
+
+
+def test_report_exits_2_on_unterminated_valid_final_record(
+    tmp_path: Path, capsys: pytest.CaptureFixture,
+) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    _make_events_end_without_newline(events_path)
+    before = _snapshot_dir(state_dir)
+    rc = ssr.main(["--state-dir", str(state_dir)])
+    assert rc == 2
+    err = json.loads(capsys.readouterr().out)
+    assert "newline" in err["error"].lower() or "framing" in err["error"].lower()
+    assert _snapshot_dir(state_dir) == before
+
+
+def test_once_exits_2_on_unterminated_valid_final_record(
+    tmp_path: Path, capsys: pytest.CaptureFixture,
+) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    _make_events_end_without_newline(events_path)
+    before_bytes = events_path.read_bytes()
+    bars = _many_bars_across_cutoff(pre=800, post=105)
+    with pytest.raises(ssc.ShadowError, match="newline"):
+        ssc.run_cycle(bars, state_dir=state_dir, now_utc=_NOW)
+    # Event bytes untouched.
+    assert events_path.read_bytes() == before_bytes
+
+
+def test_repair_normalizes_unterminated_valid_tail(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    _make_events_end_without_newline(events_path)
+    pre_lines = [
+        json.loads(l) for l in
+        events_path.read_text().splitlines() if l.strip()
+    ]
+    result = ssc.repair_event_log_tail_command(
+        state_dir, now_utc=datetime(2026, 8, 1, tzinfo=timezone.utc),
+    )
+    assert result["repaired"] is True
+    assert result["recovered_detail"]["kind"] == "terminator_restored"
+    assert result["recovered_detail"]["removed_byte_count"] == 0
+    assert result["recovery_event"]["event_type"] == "EVENT_LOG_TERMINATOR_RESTORED"
+    # File now ends with a newline; every prior event is preserved
+    # and one new recovery event line is appended.
+    after_lines = [
+        json.loads(l) for l in
+        events_path.read_text().splitlines() if l.strip()
+    ]
+    assert after_lines[:len(pre_lines)] == pre_lines
+    assert after_lines[-1]["event_type"] == "EVENT_LOG_TERMINATOR_RESTORED"
+    assert events_path.read_bytes().endswith(b"\n")
+
+
+def test_repair_then_append_lines_all_parseable(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    _make_events_end_without_newline(events_path)
+    ssc.repair_event_log_tail_command(
+        state_dir, now_utc=datetime(2026, 8, 1, tzinfo=timezone.utc),
+    )
+    bars = _many_bars_across_cutoff(pre=800, post=110)
+    ssc.run_cycle(bars, state_dir=state_dir, now_utc=_NOW)
+    for line in events_path.read_text().splitlines():
+        stripped = line.strip()
+        if stripped:
+            json.loads(stripped)
+
+
+def test_repeated_repair_of_valid_unterminated_is_idempotent(
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    _make_events_end_without_newline(events_path)
+    ssc.repair_event_log_tail_command(
+        state_dir, now_utc=datetime(2026, 8, 1, tzinfo=timezone.utc),
+    )
+    after_bytes = events_path.read_bytes()
+    # A second call finds the file already newline-terminated and
+    # valid — nothing changes.
+    result = ssc.repair_event_log_tail_command(
+        state_dir, now_utc=datetime(2027, 6, 1, tzinfo=timezone.utc),
+    )
+    assert result["repaired"] is False
+    assert events_path.read_bytes() == after_bytes
+
+
+# --- Fix 2: semantic event-log integrity validation ---
+
+
+def _prime_with_forward(state_dir: Path) -> tuple[dict, dict]:
+    bars = _many_bars_across_cutoff(pre=800, post=100)
+    ssc.run_cycle(bars, state_dir=state_dir, now_utc=_NOW)
+    manifest = ssc.load_manifest_readonly(state_dir)
+    state = ssc.load_state_readonly(state_dir, manifest)
+    return manifest, state
+
+
+def _rewrite_events(events_path: Path, mutate) -> None:
+    lines = events_path.read_text().splitlines()
+    for i, line in enumerate(lines):
+        if line.strip():
+            obj = json.loads(line)
+            new = mutate(obj, i)
+            if new is not None:
+                lines[i] = json.dumps(new, sort_keys=True)
+    events_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_event_log_duplicate_event_id_rejected(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    manifest, state = _prime_with_forward(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    lines = events_path.read_text().splitlines()
+    assert len(lines) >= 2
+    lines.append(lines[-1])
+    events_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    with pytest.raises(ssc.ShadowError, match="duplicate event_id"):
+        ssc._validate_event_log_readonly(events_path, state, manifest)
+
+
+def test_event_log_wrong_experiment_id_rejected(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    manifest, state = _prime_with_forward(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    def _mutate(obj, i):
+        if i == 0:
+            obj["experiment_id"] = "OTHER_EXPERIMENT"
+            return obj
+    _rewrite_events(events_path, _mutate)
+    with pytest.raises(ssc.ShadowError, match="experiment_id"):
+        ssc._validate_event_log_readonly(events_path, state, manifest)
+
+
+def test_event_log_wrong_manifest_hash_rejected(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    manifest, state = _prime_with_forward(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    def _mutate(obj, i):
+        if i == 0:
+            obj["manifest_hash"] = "0" * 64
+            return obj
+    _rewrite_events(events_path, _mutate)
+    with pytest.raises(ssc.ShadowError, match="manifest_hash"):
+        ssc._validate_event_log_readonly(events_path, state, manifest)
+
+
+def test_event_log_unknown_candidate_id_rejected(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    manifest, state = _prime_with_forward(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    def _mutate(obj, i):
+        if i == 0:
+            obj["candidate_id"] = "not_a_candidate"
+            return obj
+    _rewrite_events(events_path, _mutate)
+    with pytest.raises(ssc.ShadowError, match="candidate_id"):
+        ssc._validate_event_log_readonly(events_path, state, manifest)
+
+
+def test_event_log_unknown_event_type_rejected(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    manifest, state = _prime_with_forward(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    def _mutate(obj, i):
+        if i == 0:
+            obj["event_type"] = "MADE_UP_EVENT"
+            return obj
+    _rewrite_events(events_path, _mutate)
+    with pytest.raises(ssc.ShadowError, match="event_type"):
+        ssc._validate_event_log_readonly(events_path, state, manifest)
+
+
+def test_event_log_invalid_event_id_type_rejected(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    manifest, state = _prime_with_forward(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    def _mutate(obj, i):
+        if i == 0:
+            obj["event_id"] = 42
+            return obj
+    _rewrite_events(events_path, _mutate)
+    with pytest.raises(ssc.ShadowError, match="event_id"):
+        ssc._validate_event_log_readonly(events_path, state, manifest)
+
+
+def test_event_log_invalid_utf8_rejected(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    manifest, state = _prime_with_forward(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    with events_path.open("ab") as f:
+        f.write(b"\xff\xfe not utf-8\n")
+    with pytest.raises(ssc.ShadowError, match="UTF-8"):
+        ssc._validate_event_log_readonly(events_path, state, manifest)
+
+
+def test_event_log_malformed_timestamp_rejected(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    manifest, state = _prime_with_forward(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    def _mutate(obj, i):
+        if i == 0:
+            obj["signal_bar_utc"] = "not-a-timestamp"
+            return obj
+    _rewrite_events(events_path, _mutate)
+    with pytest.raises(ssc.ShadowError, match="signal_bar_utc"):
+        ssc._validate_event_log_readonly(events_path, state, manifest)
+
+
+def test_event_log_non_finite_numeric_rejected(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    manifest, state = _prime_with_forward(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    def _mutate(obj, i):
+        if i == 0 and obj.get("price") is not None:
+            obj["price"] = "not_a_number"
+            return obj
+        # Fallback: alter any event's short_sma.
+        if i == 0:
+            obj["short_sma"] = "nope"
+            return obj
+    _rewrite_events(events_path, _mutate)
+    with pytest.raises(ssc.ShadowError, match="finite"):
+        ssc._validate_event_log_readonly(events_path, state, manifest)
+
+
+def test_event_log_invalid_filter_result_rejected(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    manifest, state = _prime_with_forward(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    def _mutate(obj, i):
+        if i == 0:
+            obj["filter_result"] = "maybe"
+            return obj
+    _rewrite_events(events_path, _mutate)
+    with pytest.raises(ssc.ShadowError, match="filter_result"):
+        ssc._validate_event_log_readonly(events_path, state, manifest)
+
+
+def test_event_log_invalid_position_state_rejected(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    manifest, state = _prime_with_forward(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    def _mutate(obj, i):
+        if i == 0:
+            obj["position_state"] = "sideways"
+            return obj
+    _rewrite_events(events_path, _mutate)
+    with pytest.raises(ssc.ShadowError, match="position_state"):
+        ssc._validate_event_log_readonly(events_path, state, manifest)
+
+
+def test_cli_status_detects_semantic_corruption(
+    tmp_path: Path, capsys: pytest.CaptureFixture,
+) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime_with_forward(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    def _mutate(obj, i):
+        if i == 0:
+            obj["candidate_id"] = "not_a_candidate"
+            return obj
+    _rewrite_events(events_path, _mutate)
+    rc = ssc.main(["--state-dir", str(state_dir), "--status"])
+    assert rc == 2
+    err = json.loads(capsys.readouterr().out)
+    assert "candidate_id" in err["error"]
+
+
+def test_cli_report_detects_semantic_corruption(
+    tmp_path: Path, capsys: pytest.CaptureFixture,
+) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime_with_forward(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    def _mutate(obj, i):
+        if i == 0:
+            obj["event_type"] = "MADE_UP"
+            return obj
+    _rewrite_events(events_path, _mutate)
+    rc = ssr.main(["--state-dir", str(state_dir)])
+    assert rc == 2
+    err = json.loads(capsys.readouterr().out)
+    assert "event_type" in err["error"]
+
+
+# --- Fix 3: explicit repair requires state ---
+
+
+def test_explicit_repair_requires_state(tmp_path: Path) -> None:
+    """Repair against a missing state.json fails closed."""
+    state_dir = tmp_path / "shadow"
+    ssc.load_or_init_manifest(state_dir, _NOW)  # manifest only
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    events_path.write_text('{"event_id":"x"}', encoding="utf-8")
+    # Missing state.json — repair must refuse.
+    events_before = events_path.read_bytes()
+    with pytest.raises(ssc.ShadowError, match="requires an initialized experiment"):
+        ssc.repair_event_log_tail_command(
+            state_dir, now_utc=datetime(2026, 8, 1, tzinfo=timezone.utc),
+        )
+    assert events_path.read_bytes() == events_before
+
+
+def test_explicit_repair_requires_valid_state(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    _make_events_end_without_newline(events_path)
+    events_before = events_path.read_bytes()
+    # Corrupt state.
+    _corrupt_state(state_dir, lambda s: s.pop("experiment_id"))
+    with pytest.raises(ssc.ShadowError):
+        ssc.repair_event_log_tail_command(
+            state_dir, now_utc=datetime(2026, 8, 1, tzinfo=timezone.utc),
+        )
+    assert events_path.read_bytes() == events_before

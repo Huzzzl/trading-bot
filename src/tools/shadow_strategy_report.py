@@ -267,7 +267,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         manifest = load_manifest_readonly(state_dir)
         state = load_state_readonly(state_dir, manifest)
-        _validate_event_log_readonly(state_dir / _EVENTS_FILENAME, state)
+        _validate_event_log_readonly(
+            state_dir / _EVENTS_FILENAME, state, manifest,
+        )
     except ShadowError as exc:
         print(json.dumps({"error": str(exc)}, indent=2))
         return 2

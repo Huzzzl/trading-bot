@@ -694,20 +694,25 @@ def _load_known_event_ids(events_path: Path) -> set[str]:
     """Strict, fail-closed event log loader.
 
     Any malformed JSONL line — including the final line — raises
-    :class:`ShadowError`. Silently ignoring a truncated tail is unsafe:
-    the next ``_append_events`` call would concatenate a fresh JSON
-    record directly after the corrupted bytes, permanently hiding
-    every subsequently appended event from parsers that split on
-    newlines.
-
-    Operators can either delete the offending line manually or run the
-    dedicated repair helper (see ``_repair_event_log_tail``) while
-    holding the writer lock.
+    :class:`ShadowError`. A valid final JSON record that is NOT
+    newline-terminated is treated as an incomplete framing state:
+    a subsequent ``_append_events`` write would concatenate onto the
+    previous record, silently corrupting both. Only the explicit
+    ``--repair-event-log-tail`` command may normalize it.
     """
     known: set[str] = set()
     if not events_path.exists():
         return known
-    lines = events_path.read_text(encoding="utf-8").splitlines(keepends=False)
+    raw = events_path.read_bytes()
+    if not raw:
+        return known
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ShadowError(
+            f"events.jsonl is not valid UTF-8: {exc}"
+        ) from exc
+    lines = text.splitlines(keepends=False)
     for i, line in enumerate(lines):
         stripped = line.strip()
         if not stripped:
@@ -717,34 +722,59 @@ def _load_known_event_ids(events_path: Path) -> set[str]:
         except json.JSONDecodeError as exc:
             raise ShadowError(
                 f"events.jsonl line {i + 1} is malformed "
-                f"({exc.msg}) — cannot proceed. If this is a truncated "
-                f"final line from an interrupted append, run --once "
-                f"which will atomically repair it under the writer lock."
+                f"({exc.msg}) — cannot proceed. "
+                f"Run --repair-event-log-tail to repair an "
+                f"interrupted append."
             ) from exc
         if not isinstance(e, dict) or "event_id" not in e:
             raise ShadowError(
                 f"events.jsonl line {i + 1} missing event_id"
             )
+        if not isinstance(e["event_id"], str) or not e["event_id"]:
+            raise ShadowError(
+                f"events.jsonl line {i + 1} has invalid event_id "
+                f"type {type(e['event_id']).__name__}"
+            )
         known.add(e["event_id"])
+    # Detect the unterminated-but-valid-tail state — appending onto
+    # the file would concatenate a fresh record onto the previous
+    # last line and produce a malformed physical row.
+    if not raw.endswith(b"\n"):
+        raise ShadowError(
+            "events.jsonl does not end with a newline — appending "
+            "another event would concatenate it onto the previous "
+            "record and silently corrupt the log. "
+            "Run --repair-event-log-tail to normalize the terminator."
+        )
     return known
 
 
-def _repair_event_log_tail(events_path: Path) -> dict[str, Any] | None:
-    """Physically truncate a malformed trailing line.
+def _repair_event_log_tail(
+    events_path: Path,
+    *,
+    allow_terminator_restore: bool = True,
+) -> dict[str, Any] | None:
+    """Repair one of two specific framing anomalies:
 
-    Repair conditions — ALL of these must hold:
+    1. **Unterminated MALFORMED tail** — file does not end in ``b"\\n"``
+       and the final line fails to parse. Rewrite the file with the
+       malformed tail removed. Detail includes ``removed_byte_count``,
+       ``removed_tail_length``, ``removed_tail_sha256`` and
+       ``previous_event_id``. Kind = ``"tail_removed"``.
 
-    * the raw file does NOT end in a newline byte (``b"\\n"``) — a
-      newline-terminated malformed final record is a real event log
-      corruption, NOT an interrupted append, and is rejected;
-    * every prior line parses as JSON (a malformed middle line
-      raises :class:`ShadowError` and no bytes are removed);
-    * the last (unterminated) line fails to parse as JSON.
+    2. **Unterminated VALID tail** — file does not end in ``b"\\n"``
+       and the final line IS a valid JSON record. Preserve the
+       record and add a single newline byte. Detail includes
+       ``pre_repair_file_sha256``, ``previous_event_id``,
+       ``removed_byte_count = 0`` and ``removed_tail_length = 0``.
+       Kind = ``"terminator_restored"``. The valid event is NEVER
+       deleted.
 
-    Returns an audit detail dict — ``removed_byte_count``,
-    ``removed_tail_length``, ``removed_tail_sha256``, and the
-    ``previous_event_id`` (may be ``""`` if the log had no prior
-    events) — or ``None`` when the log is already well-formed.
+    Any newline-terminated malformed record is genuine corruption
+    and is rejected — this helper does not touch the file in that
+    case.
+
+    Returns ``None`` when the log is already well-formed.
 
     ONLY safe to call while the writer lock is held.
     """
@@ -753,12 +783,9 @@ def _repair_event_log_tail(events_path: Path) -> dict[str, Any] | None:
     raw = events_path.read_bytes()
     if not raw:
         return None
-    # If the file ends in a newline, every record is terminated —
-    # any parse failure represents genuine corruption, not an
-    # interrupted append. Fail closed.
+
+    # Newline-terminated file: real corruption ⇒ fail closed.
     if raw.endswith(b"\n"):
-        # Still validate all lines so a corrupted terminated final
-        # record surfaces clearly to the caller.
         text = raw.decode("utf-8", errors="strict")
         for i, line in enumerate(text.splitlines()):
             stripped = line.strip()
@@ -797,39 +824,65 @@ def _repair_event_log_tail(events_path: Path) -> dict[str, Any] | None:
     last = lines[-1].strip()
     if not last:
         return None
-    try:
-        json.loads(last)
-        return None  # last line already valid — nothing to repair
-    except json.JSONDecodeError:
-        pass
 
-    # Truncate the tail. Preserve every prior complete line verbatim,
-    # ended with a newline; drop the unterminated malformed tail.
-    good = "\n".join(lines[:-1])
-    if good:
-        good += "\n"
-    good_bytes = good.encode("utf-8")
-    removed_bytes = len(raw) - len(good_bytes)
-    removed_tail_bytes = raw[len(good_bytes):]
-    tail_sha256 = hashlib.sha256(removed_tail_bytes).hexdigest()
-    tmp = events_path.with_suffix(events_path.suffix + ".tmp")
-    tmp.write_text(good, encoding="utf-8")
-    os.replace(str(tmp), str(events_path))
+    pre_repair_file_sha256 = hashlib.sha256(raw).hexdigest()
+
+    try:
+        last_obj = json.loads(last)
+    except json.JSONDecodeError:
+        # Case 1: unterminated MALFORMED tail. Remove it.
+        good = "\n".join(lines[:-1])
+        if good:
+            good += "\n"
+        good_bytes = good.encode("utf-8")
+        removed_bytes = len(raw) - len(good_bytes)
+        removed_tail_bytes = raw[len(good_bytes):]
+        tail_sha256 = hashlib.sha256(removed_tail_bytes).hexdigest()
+        tmp = events_path.with_suffix(events_path.suffix + ".tmp")
+        tmp.write_text(good, encoding="utf-8")
+        os.replace(str(tmp), str(events_path))
+        return {
+            "kind": "tail_removed",
+            "removed_byte_count": removed_bytes,
+            "removed_tail_length": len(last),
+            "removed_tail_sha256": tail_sha256,
+            "previous_event_id": prev_event_id,
+            "pre_repair_file_sha256": pre_repair_file_sha256,
+        }
+
+    # Case 2: unterminated VALID tail. Only the explicit
+    # --repair-event-log-tail command may normalize this — automatic
+    # (run_cycle) repair leaves it alone so the subsequent event-log
+    # load fails closed and the operator is forced to invoke repair
+    # deliberately.
+    if not allow_terminator_restore:
+        return None
+    final_event_id = ""
+    if isinstance(last_obj, dict) and isinstance(last_obj.get("event_id"), str):
+        final_event_id = last_obj["event_id"]
+    with events_path.open("ab") as f:
+        f.write(b"\n")
     return {
-        "removed_byte_count": removed_bytes,
-        "removed_tail_length": len(last),
-        "removed_tail_sha256": tail_sha256,
-        "previous_event_id": prev_event_id,
+        "kind": "terminator_restored",
+        "removed_byte_count": 0,
+        "removed_tail_length": 0,
+        "removed_tail_sha256": hashlib.sha256(b"").hexdigest(),
+        "previous_event_id": final_event_id,
+        "pre_repair_file_sha256": pre_repair_file_sha256,
     }
 
 
 def _validate_event_log_readonly(
     events_path: Path,
     state: dict[str, Any],
+    manifest: dict[str, Any] | None = None,
 ) -> None:
     """Validate the event log for a read-only caller (status / report).
 
-    * Existing log → strict parse; any malformed line raises.
+    * Existing log → strict parse + optional semantic validation
+      against ``manifest`` (experiment_id, manifest_hash, allowed
+      candidate IDs / event types, timestamp parseability, numeric
+      finiteness, event-ID uniqueness). Any anomaly raises.
     * Missing log → acceptable only when the state proves no forward
       observations exist. Any candidate with processed forward bars
       or completed trades makes a missing event file an
@@ -838,7 +891,7 @@ def _validate_event_log_readonly(
     Never mutates the file.
     """
     if events_path.exists():
-        _load_known_event_ids(events_path)
+        _validate_event_log_bytes(events_path, manifest)
         return
     for cid, cs in state.get("candidates", {}).items():
         if cs.get("processed_forward_bar_count", 0) > 0:
@@ -852,6 +905,136 @@ def _validate_event_log_readonly(
                 f"events.jsonl missing but candidate {cid!r} has "
                 f"{cs['completed_trade_count']} completed trades — "
                 f"audit integrity mismatch"
+            )
+
+
+def _validate_event_log_bytes(
+    events_path: Path,
+    manifest: dict[str, Any] | None,
+) -> None:
+    """Semantic + structural validation of every record in events.jsonl.
+
+    Also enforces:
+      - UTF-8 decodability;
+      - file ends in a newline (structural framing);
+      - event-ID uniqueness;
+      - experiment_id / manifest_hash match the current manifest;
+      - candidate_id is one of the five candidates OR __experiment__;
+      - event_type is in the allowed set;
+      - signal / event / execution timestamps parseable UTC;
+      - numeric fields null or finite;
+      - filter_result null or bool; position_state null or in the
+        allowed set.
+    """
+    raw = events_path.read_bytes()
+    if not raw:
+        return
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ShadowError(f"events.jsonl not valid UTF-8: {exc}") from exc
+    if not raw.endswith(b"\n"):
+        raise ShadowError(
+            "events.jsonl does not end with a newline — audit log "
+            "framing is incomplete. Run --repair-event-log-tail."
+        )
+    allowed_cids = {_EXPERIMENT_CANDIDATE_ID}
+    expected_exp = None
+    expected_hash = None
+    if manifest is not None:
+        allowed_cids |= {c["id"] for c in manifest["candidates"]}
+        expected_exp = manifest["experiment_id"]
+        expected_hash = manifest["candidate_manifest_sha256"]
+    seen: set[str] = set()
+    for i, line in enumerate(text.splitlines(keepends=False)):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            e = json.loads(stripped)
+        except json.JSONDecodeError as exc:
+            raise ShadowError(
+                f"events.jsonl line {i + 1} malformed: {exc.msg}"
+            ) from exc
+        if not isinstance(e, dict):
+            raise ShadowError(f"events.jsonl line {i + 1} is not an object")
+        eid = e.get("event_id")
+        if not isinstance(eid, str) or not eid:
+            raise ShadowError(
+                f"events.jsonl line {i + 1} event_id invalid: {eid!r}"
+            )
+        if eid in seen:
+            raise ShadowError(
+                f"events.jsonl line {i + 1} duplicate event_id {eid!r}"
+            )
+        seen.add(eid)
+        if expected_exp is not None and e.get("experiment_id") != expected_exp:
+            raise ShadowError(
+                f"events.jsonl line {i + 1} experiment_id "
+                f"{e.get('experiment_id')!r} != manifest {expected_exp!r}"
+            )
+        if expected_hash is not None and e.get("manifest_hash") != expected_hash:
+            raise ShadowError(
+                f"events.jsonl line {i + 1} manifest_hash "
+                f"{e.get('manifest_hash')!r} does not match current "
+                f"manifest"
+            )
+        cid = e.get("candidate_id")
+        if cid not in allowed_cids and manifest is not None:
+            raise ShadowError(
+                f"events.jsonl line {i + 1} unknown candidate_id {cid!r}"
+            )
+        et = e.get("event_type")
+        if et not in _ALLOWED_EVENT_TYPES:
+            raise ShadowError(
+                f"events.jsonl line {i + 1} unknown event_type {et!r}"
+            )
+        for key in ("signal_bar_utc", "event_timestamp_utc"):
+            v = e.get(key)
+            if not isinstance(v, str):
+                raise ShadowError(
+                    f"events.jsonl line {i + 1} {key} must be a UTC "
+                    f"ISO-8601 string, got {type(v).__name__}"
+                )
+            try:
+                _parse_ts(v)
+            except Exception as exc:
+                raise ShadowError(
+                    f"events.jsonl line {i + 1} {key} unparseable: {exc}"
+                ) from exc
+        exec_ts = e.get("execution_bar_utc")
+        if exec_ts is not None:
+            if not isinstance(exec_ts, str):
+                raise ShadowError(
+                    f"events.jsonl line {i + 1} execution_bar_utc must be "
+                    f"a UTC string when non-null"
+                )
+            try:
+                _parse_ts(exec_ts)
+            except Exception as exc:
+                raise ShadowError(
+                    f"events.jsonl line {i + 1} execution_bar_utc "
+                    f"unparseable: {exc}"
+                ) from exc
+        for key in _NUMERIC_EVENT_FIELDS:
+            v = e.get(key)
+            if v is None:
+                continue
+            if not _is_finite_number(v):
+                raise ShadowError(
+                    f"events.jsonl line {i + 1} {key} must be null or "
+                    f"a finite number, got {v!r}"
+                )
+        fr = e.get("filter_result")
+        if fr is not None and not isinstance(fr, bool):
+            raise ShadowError(
+                f"events.jsonl line {i + 1} filter_result must be null "
+                f"or bool, got {type(fr).__name__}"
+            )
+        ps = e.get("position_state")
+        if ps is not None and ps not in _ALLOWED_POSITION_STATES:
+            raise ShadowError(
+                f"events.jsonl line {i + 1} position_state invalid: {ps!r}"
             )
 
 
@@ -936,6 +1119,28 @@ def _bar_ts_utc(bar: Bar) -> datetime:
 
 
 _EXPERIMENT_CANDIDATE_ID = "__experiment__"
+
+# Every event_type persisted to events.jsonl. The validator rejects
+# anything outside this set.
+_ALLOWED_EVENT_TYPES = frozenset({
+    "BAR_PROCESSED",
+    "BULLISH_CROSSOVER",
+    "BEARISH_CROSSOVER",
+    "SHADOW_BUY_SCHEDULED",
+    "SHADOW_BUY_EXECUTED",
+    "SHADOW_SELL_SCHEDULED",
+    "SHADOW_SELL_EXECUTED",
+    "ENTRY_FILTER_BLOCKED",
+    "DUPLICATE_BAR_SKIPPED",
+    "DATA_GAP_DETECTED",
+    "EVENT_LOG_TAIL_RECOVERED",
+    "EVENT_LOG_TERMINATOR_RESTORED",
+})
+
+_ALLOWED_POSITION_STATES = frozenset({"long", "flat"})
+_NUMERIC_EVENT_FIELDS = (
+    "short_sma", "long_sma", "price", "quantity", "cash", "equity",
+)
 
 
 def _validate_and_prepare_bars(
@@ -1041,25 +1246,32 @@ def _make_recovery_event(
     recovered_detail: dict[str, Any],
     now_utc: datetime,
 ) -> dict[str, Any]:
-    """Build the EVENT_LOG_TAIL_RECOVERED audit event.
+    """Build the recovery audit event (either type).
 
     The ID is derived deterministically from
-    ``(manifest_hash, event_type, removed_tail_sha256, previous_event_id)``.
-    ``now_utc`` fills the human-visible timestamps but is deliberately
-    excluded from the ID so repeated repairs of the same tail produce
+    ``(manifest_hash, event_type, pre_repair_file_sha256,
+    removed_tail_sha256, previous_event_id)``. ``now_utc`` fills
+    the human-visible timestamps but is deliberately excluded from
+    the ID so repeated repairs of the same content produce
     identical event IDs.
     """
+    kind = recovered_detail.get("kind", "tail_removed")
+    event_type = (
+        "EVENT_LOG_TERMINATOR_RESTORED" if kind == "terminator_restored"
+        else "EVENT_LOG_TAIL_RECOVERED"
+    )
     tail_sha = recovered_detail.get("removed_tail_sha256", "")
     prev_id = recovered_detail.get("previous_event_id", "")
+    pre_sha = recovered_detail.get("pre_repair_file_sha256", "")
     event_id = _event_id(
-        manifest_hash_str, "EVENT_LOG_TAIL_RECOVERED", tail_sha, prev_id,
+        manifest_hash_str, event_type, pre_sha, tail_sha, prev_id,
     )
     ts = now_utc.astimezone(timezone.utc).isoformat()
     return {
         "event_id": event_id,
         "experiment_id": EXPERIMENT_ID,
         "candidate_id": _EXPERIMENT_CANDIDATE_ID,
-        "event_type": "EVENT_LOG_TAIL_RECOVERED",
+        "event_type": event_type,
         "signal_bar_utc": ts,
         "execution_bar_utc": None,
         "event_timestamp_utc": ts,
@@ -1496,9 +1708,14 @@ def run_cycle(
         events_path = state_dir / _EVENTS_FILENAME
         # State first — an invalid state must never trigger event-log
         # mutation. Only after successful state validation do we
-        # consider the restricted event-tail repair.
+        # consider the restricted event-tail repair. Automatic path
+        # ONLY repairs malformed unterminated tails; a valid but
+        # unterminated final record must be normalized deliberately
+        # via --repair-event-log-tail.
         state = load_or_init_state(state_dir, manifest)
-        recovered = _repair_event_log_tail(events_path)
+        recovered = _repair_event_log_tail(
+            events_path, allow_terminator_restore=False,
+        )
         known_event_ids = _load_known_event_ids(events_path)
 
         summary = _run_candidates(
@@ -1643,14 +1860,22 @@ def _build_parser() -> argparse.ArgumentParser:
 def repair_event_log_tail_command(
     state_dir: Path, *, now_utc: datetime,
 ) -> dict[str, Any]:
-    """Explicit repair mode used by ``--repair-event-log-tail``."""
+    """Explicit repair mode used by ``--repair-event-log-tail``.
+
+    Requires an initialized manifest AND a valid state — never
+    mutates the event log against a missing or invalid state.
+    """
     manifest = load_manifest_readonly(state_dir)
+    # State MUST exist and validate. A missing state file is not a
+    # recoverable state for the tail-repair command.
+    state_path = state_dir / _STATE_FILENAME
+    if not state_path.exists():
+        raise ShadowError(
+            f"no shadow state at {state_path} — --repair-event-log-tail "
+            "requires an initialized experiment. Run --once first."
+        )
     with _FileLock(state_dir / _LOCK_FILENAME):
-        # Validate state fully first — a corrupted state must never
-        # trigger an event-log mutation.
-        state_path = state_dir / _STATE_FILENAME
-        if state_path.exists():
-            load_state_readonly(state_dir, manifest)
+        load_state_readonly(state_dir, manifest)
         events_path = state_dir / _EVENTS_FILENAME
         recovered = _repair_event_log_tail(events_path)
         recovery_event: dict[str, Any] | None = None
@@ -1689,7 +1914,7 @@ def main(argv: list[str] | None = None) -> int:
             # Read-only event-log validation — status must fail closed
             # on corruption without repairing.
             _validate_event_log_readonly(
-                state_dir / _EVENTS_FILENAME, state,
+                state_dir / _EVENTS_FILENAME, state, manifest,
             )
             print(json.dumps({
                 "experiment_id": manifest["experiment_id"],
