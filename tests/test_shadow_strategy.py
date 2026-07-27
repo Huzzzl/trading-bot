@@ -1750,3 +1750,363 @@ def test_crash_recovery_state_fully_matches_reference(tmp_path: Path) -> None:
     ids_b = [json.loads(l)["event_id"] for l in events_b if l.strip()]
     assert set(ids_a) == set(ids_b)
     assert len(ids_b) == len(set(ids_b))
+
+
+# ---------------------------------------------------------------------------
+# S62 review round 4 — status/report validate events, restricted repair,
+# correct event-count reporting
+# ---------------------------------------------------------------------------
+
+
+def _corrupt_event_final_line(events_path: Path, terminated: bool) -> None:
+    """Append a malformed final line. When ``terminated`` is True the
+    file ends in a newline (real corruption). When False the file
+    ends without a newline (interrupted append)."""
+    with events_path.open("a", encoding="utf-8") as f:
+        if terminated:
+            f.write('{"event_id": "abc", "partial\n')
+        else:
+            f.write('{"event_id": "abc", "partial')
+
+
+# --- Fix 1: status + report validate events.jsonl ---
+
+
+def test_cli_status_exits_2_on_corrupt_final_event_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture,
+) -> None:
+    """--status must read events.jsonl and fail closed on corruption."""
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    before = _snapshot_dir(state_dir)
+    _corrupt_event_final_line(events_path, terminated=True)
+    rc = ssc.main(["--state-dir", str(state_dir), "--status"])
+    assert rc == 2
+    err = json.loads(capsys.readouterr().out)
+    assert "malformed" in err["error"] or "newline-terminated" in err["error"]
+    # Compare with the state dir immediately after the corruption
+    # (excluding the deliberate mutation) — status did not further
+    # change anything.
+    now = _snapshot_dir(state_dir)
+    # Events file may have changed due to the injected corruption, but
+    # every other file should be byte-identical to `before`.
+    for path, before_bytes_mtime in before.items():
+        if path.endswith(ssc._EVENTS_FILENAME):
+            continue
+        assert now[path] == before_bytes_mtime, path
+
+
+def test_cli_status_exits_2_on_corrupt_middle_event_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture,
+) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    text = events_path.read_text()
+    lines = text.splitlines()
+    lines.insert(1, "not-json")
+    events_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    rc = ssc.main(["--state-dir", str(state_dir), "--status"])
+    assert rc == 2
+    err = json.loads(capsys.readouterr().out)
+    assert "malformed" in err["error"]
+
+
+def test_cli_status_valid_log_returns_0(
+    tmp_path: Path, capsys: pytest.CaptureFixture,
+) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    before = _snapshot_dir(state_dir)
+    rc = ssc.main(["--state-dir", str(state_dir), "--status"])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["experiment_id"] == "S62_SPY_60M_FORWARD"
+    # State dir unchanged.
+    assert _snapshot_dir(state_dir) == before
+
+
+def test_cli_report_exits_2_on_corrupt_event_log(
+    tmp_path: Path, capsys: pytest.CaptureFixture,
+) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    _corrupt_event_final_line(events_path, terminated=True)
+    before = _snapshot_dir(state_dir)
+    rc = ssr.main(["--state-dir", str(state_dir)])
+    assert rc == 2
+    err = json.loads(capsys.readouterr().out)
+    assert "malformed" in err["error"] or "newline-terminated" in err["error"]
+    assert _snapshot_dir(state_dir) == before
+
+
+def test_cli_report_valid_log_returns_0(
+    tmp_path: Path, capsys: pytest.CaptureFixture,
+) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    before = _snapshot_dir(state_dir)
+    rc = ssr.main(["--state-dir", str(state_dir)])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["validation_status"]["promotion_eligible"] is False
+    assert _snapshot_dir(state_dir) == before
+
+
+def test_missing_event_log_with_forward_bars_fails_closed(
+    tmp_path: Path, capsys: pytest.CaptureFixture,
+) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    # Delete events.jsonl while state still shows processed forward bars.
+    (state_dir / ssc._EVENTS_FILENAME).unlink()
+    rc = ssc.main(["--state-dir", str(state_dir), "--status"])
+    assert rc == 2
+    err = json.loads(capsys.readouterr().out)
+    assert "audit integrity mismatch" in err["error"]
+
+
+# --- Fix 2: restricted repair semantics ---
+
+
+def test_repair_rejects_newline_terminated_malformed_final_line(
+    tmp_path: Path,
+) -> None:
+    """A malformed final record that ends with \\n is real corruption,
+    not an interrupted append, and MUST NOT be silently deleted."""
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    before_bytes = events_path.read_bytes()
+    _corrupt_event_final_line(events_path, terminated=True)
+    after_corruption = events_path.read_bytes()
+    with pytest.raises(ssc.ShadowError, match="newline-terminated"):
+        ssc._repair_event_log_tail(events_path)
+    # Bytes untouched.
+    assert events_path.read_bytes() == after_corruption
+    assert before_bytes != after_corruption  # we did inject the tail
+
+
+def test_repair_middle_line_never_deleted(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    text = events_path.read_text()
+    lines = text.splitlines()
+    lines.insert(1, "not-json")
+    # Leave the file unterminated so the outer branch would attempt
+    # a tail repair.
+    events_path.write_text("\n".join(lines), encoding="utf-8")
+    before_bytes = events_path.read_bytes()
+    with pytest.raises(ssc.ShadowError, match="middle line"):
+        ssc._repair_event_log_tail(events_path)
+    assert events_path.read_bytes() == before_bytes
+
+
+def test_repair_explicit_command_recovers_unterminated_tail(
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    before_size = events_path.stat().st_size
+    _corrupt_event_final_line(events_path, terminated=False)
+    result = ssc.repair_event_log_tail_command(
+        state_dir, now_utc=datetime(2026, 8, 1, tzinfo=timezone.utc),
+    )
+    assert result["repaired"] is True
+    assert result["recovered_detail"]["removed_byte_count"] > 0
+    assert result["recovered_detail"]["removed_tail_sha256"]
+    # Recovery event was appended, so final size == before_size +
+    # one event line.
+    for line in events_path.read_text().splitlines():
+        stripped = line.strip()
+        if stripped:
+            json.loads(stripped)
+
+
+def test_repair_event_id_derived_only_from_content(tmp_path: Path) -> None:
+    """The recovery event ID depends only on manifest hash, event
+    type, removed_tail_sha256, and previous_event_id — never on wall
+    time. Two calls with the same content and different now_utc must
+    produce the same event_id."""
+    detail = {
+        "removed_byte_count": 42,
+        "removed_tail_length": 30,
+        "removed_tail_sha256": "abcd" * 16,
+        "previous_event_id": "prev123",
+    }
+    manifest_hash = "manifest-hash-xyz"
+    e1 = ssc._make_recovery_event(
+        manifest_hash_str=manifest_hash,
+        recovered_detail=detail,
+        now_utc=datetime(2026, 8, 1, 0, 0, 0, tzinfo=timezone.utc),
+    )
+    e2 = ssc._make_recovery_event(
+        manifest_hash_str=manifest_hash,
+        recovered_detail=detail,
+        now_utc=datetime(2027, 1, 1, 12, 30, 0, tzinfo=timezone.utc),
+    )
+    assert e1["event_id"] == e2["event_id"]
+    # But changing any content component changes the ID.
+    e_diff_tail = ssc._make_recovery_event(
+        manifest_hash_str=manifest_hash,
+        recovered_detail={**detail, "removed_tail_sha256": "0" * 64},
+        now_utc=datetime(2026, 8, 1, tzinfo=timezone.utc),
+    )
+    assert e_diff_tail["event_id"] != e1["event_id"]
+    e_diff_prev = ssc._make_recovery_event(
+        manifest_hash_str=manifest_hash,
+        recovered_detail={**detail, "previous_event_id": "OTHER"},
+        now_utc=datetime(2026, 8, 1, tzinfo=timezone.utc),
+    )
+    assert e_diff_prev["event_id"] != e1["event_id"]
+
+
+def test_repair_state_corruption_prevents_event_mutation(
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    _corrupt_event_final_line(events_path, terminated=False)
+    events_before = events_path.read_bytes()
+
+    # Corrupt the state.
+    _corrupt_state(
+        state_dir,
+        lambda s: s.pop("experiment_id"),
+    )
+    with pytest.raises(ssc.ShadowError):
+        ssc.repair_event_log_tail_command(
+            state_dir, now_utc=datetime(2026, 8, 1, tzinfo=timezone.utc),
+        )
+    assert events_path.read_bytes() == events_before  # unchanged
+
+
+def test_repair_then_append_leaves_every_line_parseable(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    _corrupt_event_final_line(events_path, terminated=False)
+    ssc.repair_event_log_tail_command(
+        state_dir, now_utc=datetime(2026, 8, 1, tzinfo=timezone.utc),
+    )
+    bars = _many_bars_across_cutoff(pre=800, post=105)
+    ssc.run_cycle(bars, state_dir=state_dir, now_utc=_NOW)
+    for line in events_path.read_text().splitlines():
+        stripped = line.strip()
+        if stripped:
+            json.loads(stripped)
+
+
+def test_normal_once_fails_closed_on_newline_terminated_corruption(
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    _corrupt_event_final_line(events_path, terminated=True)
+    bars = _many_bars_across_cutoff(pre=800, post=50)
+    with pytest.raises(ssc.ShadowError, match="newline-terminated"):
+        ssc.run_cycle(bars, state_dir=state_dir, now_utc=_NOW)
+
+
+# --- Fix 3: correct event-count reporting ---
+
+
+def test_event_counts_split_candidate_vs_experiment(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    bars = _many_bars_across_cutoff(pre=800, post=100)
+    dup = bars + [bars[-1]]
+    summary = ssc.run_cycle(dup, state_dir=state_dir, now_utc=_NOW)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    physical_lines = [
+        l for l in events_path.read_text().splitlines() if l.strip()
+    ]
+    # candidate + experiment sums to total physical new events.
+    assert (
+        summary["candidate_events_appended"]
+        + summary["experiment_events_appended"]
+        == summary["events_appended"]
+    )
+    assert summary["events_appended"] == len(physical_lines)
+    assert summary["experiment_events_appended"] >= 1  # at least the duplicate audit
+
+
+def test_event_counts_only_duplicate_experiment_event(tmp_path: Path) -> None:
+    """A dry-run that only produces a duplicate audit event (no new
+    candidate observations) should report a single experiment event
+    and zero candidate events."""
+    state_dir = tmp_path / "shadow"
+    bars = _many_bars_across_cutoff(pre=800, post=50)
+    ssc.run_cycle(bars, state_dir=state_dir, now_utc=_NOW)
+    # Second run with duplicate of the last bar (already processed
+    # + one duplicate).
+    dup = bars + [bars[-1]]
+    summary = ssc.run_cycle(dup, state_dir=state_dir, now_utc=_NOW)
+    # No new forward bars → no candidate events.
+    assert summary["candidate_events_appended"] == 0
+    # But one new duplicate audit event.
+    assert summary["experiment_events_appended"] == 1
+    assert summary["events_appended"] == 1
+
+
+def test_event_counts_only_gap_event(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    ssc.load_or_init_manifest(state_dir, _NOW)
+    # Prime with pre-cutoff bars.
+    cutoff = pd.Timestamp("2026-07-17 19:30", tz="UTC")
+    pre = _bar_seq([float(c) for c in range(1, 800)],
+                   start=cutoff - pd.Timedelta(hours=1000))
+    ssc.run_cycle(pre, state_dir=state_dir, now_utc=_NOW)
+    # Now add two forward bars with an intraday gap in the same session.
+    session_start = pd.Timestamp("2026-07-20 14:30", tz="UTC")  # Monday
+    b1 = Bar(ts=session_start, open=100.0, high=100.0, low=100.0,
+             close=100.0, volume=1_000)
+    b2 = Bar(ts=session_start + pd.Timedelta(hours=3),
+             open=101.0, high=101.0, low=101.0, close=101.0, volume=1_000)
+    summary = ssc.run_cycle(pre + [b1, b2], state_dir=state_dir, now_utc=_NOW)
+    assert summary["experiment_events_appended"] >= 1
+    # Verify at least one is a DATA_GAP_DETECTED event.
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    gap_types = [
+        json.loads(l)["event_type"]
+        for l in events_path.read_text().splitlines() if l.strip()
+    ]
+    assert "DATA_GAP_DETECTED" in gap_types
+
+
+def test_event_counts_rerun_dedup_zero_appends(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    bars = _many_bars_across_cutoff(pre=800, post=100)
+    ssc.run_cycle(bars, state_dir=state_dir, now_utc=_NOW)
+    # Re-run identical input — nothing new should be appended.
+    r2 = ssc.run_cycle(bars, state_dir=state_dir, now_utc=_NOW)
+    assert r2["candidate_events_appended"] == 0
+    assert r2["experiment_events_appended"] == 0
+    assert r2["events_appended"] == 0
+
+
+def test_event_counts_dry_run_mirrors_would_append(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    bars = _many_bars_across_cutoff(pre=800, post=100)
+    ssc.run_cycle(bars, state_dir=state_dir, now_utc=_NOW)
+    dup = bars + [bars[-1]]
+    dry = ssc.run_cycle(
+        dup, state_dir=state_dir, now_utc=_NOW, dry_run=True,
+    )
+    assert dry["dry_run"] is True
+    assert (
+        dry["candidate_events_would_append"]
+        + dry["experiment_events_would_append"]
+        == dry["events_would_append"]
+    )
+    # And a real run right after with the same input produces the
+    # same counts.
+    real = ssc.run_cycle(dup, state_dir=state_dir, now_utc=_NOW)
+    assert real["candidate_events_appended"] == dry["candidate_events_would_append"]
+    assert real["experiment_events_appended"] == dry["experiment_events_would_append"]
+    assert real["events_appended"] == dry["events_would_append"]

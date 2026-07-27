@@ -23,6 +23,8 @@ from typing import Any, Sequence
 from src.tools.run_shadow_strategy_cycle import (
     ShadowError,
     _DEFAULT_STATE_DIR,
+    _EVENTS_FILENAME,
+    _validate_event_log_readonly,
     load_manifest_readonly,
     load_state_readonly,
 )
@@ -265,6 +267,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         manifest = load_manifest_readonly(state_dir)
         state = load_state_readonly(state_dir, manifest)
+        _validate_event_log_readonly(state_dir / _EVENTS_FILENAME, state)
     except ShadowError as exc:
         print(json.dumps({"error": str(exc)}, indent=2))
         return 2
