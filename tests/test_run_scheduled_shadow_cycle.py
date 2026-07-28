@@ -636,18 +636,29 @@ def test_corrupt_existing_scheduler_audit_log_blocks_new_invocation(
 ) -> None:
     """A malformed existing scheduler-audit file must fail closed
     before appending — the write-ahead journal must never be
-    silently extended onto a corrupt log."""
+    silently extended onto a corrupt log. This must hold even for the
+    exception-handling fallback path (no unlocked retry that appends
+    onto a file validation has already rejected)."""
     env = _setup_happy_path(tmp_path)
     env["scheduler_audit_dir"].mkdir(parents=True, exist_ok=True)
     date_iso = env["now_utc"].astimezone(timezone.utc).date().isoformat()
     bad_path = env["scheduler_audit_dir"] / f"{date_iso}.jsonl"
     bad_path.write_text("not-json\n", encoding="utf-8")
+    before_bytes = bad_path.read_bytes()
+    before_mtime = bad_path.stat().st_mtime_ns
 
     result = _gate(env)
     assert result["result"] == "ERROR"
     assert result["exit_code"] == 2
     assert result["reason_codes"] == [rssc.REASON_SCHEDULER_AUDIT_WRITE_FAILED]
     assert result["shadow_invoked"] is False
+    assert result["terminal_audit_persisted"] is False
+
+    # The corrupt file must remain byte-for-byte and mtime-for-mtime
+    # unchanged — no fallback handler may have appended to it.
+    assert bad_path.read_bytes() == before_bytes
+    assert bad_path.stat().st_mtime_ns == before_mtime
+    assert list(env["scheduler_audit_dir"].glob("*.jsonl")) == [bad_path]
 
 
 def test_unterminated_existing_scheduler_audit_log_blocks_new_invocation(
@@ -658,17 +669,27 @@ def test_unterminated_existing_scheduler_audit_log_blocks_new_invocation(
     date_iso = env["now_utc"].astimezone(timezone.utc).date().isoformat()
     bad_path = env["scheduler_audit_dir"] / f"{date_iso}.jsonl"
     bad_path.write_text('{"tool": "run_scheduled_shadow_cycle"}', encoding="utf-8")
+    before_bytes = bad_path.read_bytes()
+    before_mtime = bad_path.stat().st_mtime_ns
 
     result = _gate(env)
     assert result["result"] == "ERROR"
     assert result["exit_code"] == 2
     assert result["reason_codes"] == [rssc.REASON_SCHEDULER_AUDIT_WRITE_FAILED]
     assert result["shadow_invoked"] is False
+    assert result["terminal_audit_persisted"] is False
+
+    assert bad_path.read_bytes() == before_bytes
+    assert bad_path.stat().st_mtime_ns == before_mtime
 
 
 def test_concurrent_invocation_lock_conflict_skips_deterministically(
     tmp_path: Path,
 ) -> None:
+    """A lock conflict must leave the scheduler-audit directory
+    completely untouched — no TERMINAL record, no new file — since
+    obtaining the lock has already failed and there is nothing safe
+    to retry."""
     env = _setup_happy_path(tmp_path)
     env["scheduler_audit_dir"].mkdir(parents=True, exist_ok=True)
     lock_path = env["scheduler_audit_dir"] / rssc._SCHEDULER_LOCK_FILENAME
@@ -680,9 +701,192 @@ def test_concurrent_invocation_lock_conflict_skips_deterministically(
         assert result["exit_code"] == 2
         assert result["reason_codes"] == [rssc.REASON_SCHEDULER_LOCK_CONFLICT]
         assert result["shadow_invoked"] is False
+        assert result["terminal_audit_persisted"] is False
+        # No TERMINAL record — no jsonl file was ever created.
+        assert list(env["scheduler_audit_dir"].glob("*.jsonl")) == []
     finally:
         _os.close(fd)
         lock_path.unlink()
+
+
+def test_lock_conflict_leaves_pre_existing_scheduler_audit_bytes_and_mtime_unchanged(
+    tmp_path: Path,
+) -> None:
+    env = _setup_happy_path(tmp_path)
+    first = _gate(env)
+    assert first["result"] == "RUN"
+    files = list(env["scheduler_audit_dir"].glob("*.jsonl"))
+    assert len(files) == 1
+    audit_path = files[0]
+    before_bytes = audit_path.read_bytes()
+    before_mtime = audit_path.stat().st_mtime_ns
+
+    lock_path = env["scheduler_audit_dir"] / rssc._SCHEDULER_LOCK_FILENAME
+    import os as _os
+    fd = _os.open(str(lock_path), _os.O_CREAT | _os.O_EXCL | _os.O_WRONLY, 0o600)
+    try:
+        result = _gate(env, now_utc=env["now_utc"] + timedelta(seconds=1))
+        assert result["reason_codes"] == [rssc.REASON_SCHEDULER_LOCK_CONFLICT]
+        assert result["terminal_audit_persisted"] is False
+    finally:
+        _os.close(fd)
+        lock_path.unlink()
+
+    assert audit_path.read_bytes() == before_bytes
+    assert audit_path.stat().st_mtime_ns == before_mtime
+
+
+def test_two_concurrent_early_skipped_outcomes_cannot_write_concurrently(
+    tmp_path: Path,
+) -> None:
+    """An early SKIPPED-classified outcome (e.g. NO_PAPER_AUDIT) must
+    still respect the scheduler lock — it may not bypass a held lock
+    just because its own classification is a SKIPPED, not ERROR."""
+    env = _setup_happy_path(tmp_path)
+    empty_dir = tmp_path / "no_such_audit_dir"
+    env["scheduler_audit_dir"].mkdir(parents=True, exist_ok=True)
+    lock_path = env["scheduler_audit_dir"] / rssc._SCHEDULER_LOCK_FILENAME
+    import os as _os
+    fd = _os.open(str(lock_path), _os.O_CREAT | _os.O_EXCL | _os.O_WRONLY, 0o600)
+    try:
+        result = _gate(env, paper_audit_dir=empty_dir)
+        # The lock conflict overrides the would-be SKIPPED outcome —
+        # it must not silently write a SKIPPED record around the lock.
+        assert result["result"] == "ERROR"
+        assert result["exit_code"] == 2
+        assert result["reason_codes"] == [rssc.REASON_SCHEDULER_LOCK_CONFLICT]
+        assert result["terminal_audit_persisted"] is False
+        assert list(env["scheduler_audit_dir"].glob("*.jsonl")) == []
+    finally:
+        _os.close(fd)
+        lock_path.unlink()
+
+
+def test_started_persistence_failure_does_not_invoke_s62(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failure writing the STARTED record itself (not merely a
+    corrupt pre-existing log) must still prevent S62 from ever being
+    invoked."""
+    env = _setup_happy_path(tmp_path)
+    real_append = rssc._append_scheduler_audit
+    call_count = {"n": 0}
+
+    def _flaky_append(scheduler_audit_dir, record, now_utc):
+        call_count["n"] += 1
+        if record.get("phase") == "STARTED":
+            raise OSError("simulated STARTED write failure")
+        return real_append(scheduler_audit_dir, record, now_utc)
+
+    monkeypatch.setattr(rssc, "_append_scheduler_audit", _flaky_append)
+    result = _gate(env)
+    assert result["result"] == "ERROR"
+    assert result["exit_code"] == 2
+    assert result["reason_codes"] == [rssc.REASON_SCHEDULER_AUDIT_WRITE_FAILED]
+    assert result["shadow_invoked"] is False
+    manifest_path = env["shadow_state_dir"] / "manifest.json"
+    assert not manifest_path.exists()
+
+
+def test_terminal_persistence_failure_leaves_exactly_one_detectable_started_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env = _setup_happy_path(tmp_path)
+    real_append = rssc._append_scheduler_audit
+
+    def _flaky_append(scheduler_audit_dir, record, now_utc):
+        if record.get("phase") == "TERMINAL":
+            raise OSError("simulated TERMINAL write failure")
+        return real_append(scheduler_audit_dir, record, now_utc)
+
+    monkeypatch.setattr(rssc, "_append_scheduler_audit", _flaky_append)
+    result = _gate(env)
+    assert result["result"] == "ERROR"
+    assert result["exit_code"] == 2
+    assert result["reason_codes"] == [rssc.REASON_SCHEDULER_AUDIT_WRITE_FAILED]
+    assert result["terminal_audit_persisted"] is False
+    # S62 itself still ran (the failure is purely in persisting the
+    # terminal record) — its own state must be untouched by this test
+    # concern; the durable fact we assert on is the journal.
+    files = list(env["scheduler_audit_dir"].glob("*.jsonl"))
+    assert len(files) == 1
+    lines = files[0].read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 1
+    rec = json.loads(lines[0])
+    assert rec["phase"] == "STARTED"
+
+    incomplete = rssc.find_incomplete_invocations(env["scheduler_audit_dir"])
+    assert len(incomplete) == 1
+    assert incomplete[0]["invocation_id"] == rec["invocation_id"]
+
+
+def test_cli_invalid_argument_cannot_append_without_acquiring_lock(
+    tmp_path: Path, capsys: pytest.CaptureFixture,
+) -> None:
+    scheduler_audit_dir = tmp_path / "shadow_scheduler"
+    scheduler_audit_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = scheduler_audit_dir / rssc._SCHEDULER_LOCK_FILENAME
+    import os as _os
+    fd = _os.open(str(lock_path), _os.O_CREAT | _os.O_EXCL | _os.O_WRONLY, 0o600)
+    try:
+        rc = rssc.main([
+            "--paper-audit-dir", str(tmp_path / "paper_cycles"),
+            "--cache-dir", str(tmp_path / "cache"),
+            "--shadow-state-dir", str(tmp_path / "shadow_strategy"),
+            "--scheduler-audit-dir", str(scheduler_audit_dir),
+            "--now-utc", "not-a-timestamp",
+        ])
+        assert rc == 2
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["reason_codes"] == [rssc.REASON_INVALID_ARGUMENT]
+        assert payload["terminal_audit_persisted"] is False
+        assert list(scheduler_audit_dir.glob("*.jsonl")) == []
+    finally:
+        _os.close(fd)
+        lock_path.unlink()
+
+
+def test_no_scheduler_audit_write_call_exists_outside_a_held_lock() -> None:
+    """Static check: every call to _append_scheduler_audit in the
+    module source must be lexically nested inside a `with
+    _SchedulerLock(...):` block — there is no code path that appends
+    without first holding the lock."""
+    import ast
+
+    source = Path("src/tools/run_scheduled_shadow_cycle.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    class _Visitor(ast.NodeVisitor):
+        def __init__(self) -> None:
+            self.violations: list[int] = []
+            self._lock_depth = 0
+
+        def visit_With(self, node: ast.With) -> None:
+            is_lock = any(
+                isinstance(item.context_expr, ast.Call)
+                and isinstance(item.context_expr.func, ast.Name)
+                and item.context_expr.func.id == "_SchedulerLock"
+                for item in node.items
+            )
+            if is_lock:
+                self._lock_depth += 1
+                self.generic_visit(node)
+                self._lock_depth -= 1
+            else:
+                self.generic_visit(node)
+
+        def visit_Call(self, node: ast.Call) -> None:
+            if isinstance(node.func, ast.Name) and node.func.id == "_append_scheduler_audit":
+                if self._lock_depth == 0:
+                    self.violations.append(node.lineno)
+            self.generic_visit(node)
+
+    visitor = _Visitor()
+    visitor.visit(tree)
+    assert visitor.violations == [], (
+        f"_append_scheduler_audit called outside a held _SchedulerLock at "
+        f"line(s) {visitor.violations}"
+    )
 
 
 def test_shadow_commit_observed_populated_after_invocation(tmp_path: Path) -> None:
@@ -939,6 +1143,71 @@ def test_cli_write_dry_run_audit_without_dry_run_returns_json_error_exit_2(
     payload = json.loads(capsys.readouterr().out)
     assert payload["result"] == "ERROR"
     assert payload["reason_codes"] == [rssc.REASON_INVALID_ARGUMENT]
+
+
+# ---------------------------------------------------------------------------
+# Round 2, item 2: run_gate() validates its own inputs directly —
+# not only through main()'s CLI parsing.
+# ---------------------------------------------------------------------------
+
+
+def _assert_invalid_argument(result: dict[str, Any]) -> None:
+    assert result["result"] == "ERROR"
+    assert result["exit_code"] == 2
+    assert result["reason_codes"] == [rssc.REASON_INVALID_ARGUMENT]
+    assert result["shadow_invoked"] is False
+
+
+def test_run_gate_rejects_zero_max_age_directly(tmp_path: Path) -> None:
+    env = _setup_happy_path(tmp_path)
+    result = _gate(env, max_paper_audit_age_minutes=0)
+    _assert_invalid_argument(result)
+    assert not env["shadow_state_dir"].exists()
+
+
+def test_run_gate_rejects_negative_max_age_directly(tmp_path: Path) -> None:
+    env = _setup_happy_path(tmp_path)
+    result = _gate(env, max_paper_audit_age_minutes=-5)
+    _assert_invalid_argument(result)
+    assert not env["shadow_state_dir"].exists()
+
+
+def test_run_gate_rejects_unreasonable_max_age_directly(tmp_path: Path) -> None:
+    env = _setup_happy_path(tmp_path)
+    result = _gate(env, max_paper_audit_age_minutes=999_999)
+    _assert_invalid_argument(result)
+    assert not env["shadow_state_dir"].exists()
+
+
+def test_run_gate_rejects_non_integer_max_age_directly(tmp_path: Path) -> None:
+    env = _setup_happy_path(tmp_path)
+    result = _gate(env, max_paper_audit_age_minutes="20")
+    _assert_invalid_argument(result)
+    assert not env["shadow_state_dir"].exists()
+
+
+def test_run_gate_rejects_naive_now_utc_directly(tmp_path: Path) -> None:
+    env = _setup_happy_path(tmp_path)
+    naive_now = env["now_utc"].replace(tzinfo=None)
+    result = _gate(env, now_utc=naive_now)
+    _assert_invalid_argument(result)
+    assert not env["shadow_state_dir"].exists()
+
+
+def test_run_gate_rejects_non_datetime_now_utc_directly(tmp_path: Path) -> None:
+    env = _setup_happy_path(tmp_path)
+    result = _gate(env, now_utc="2026-08-01T15:00:00+00:00")
+    _assert_invalid_argument(result)
+    assert not env["shadow_state_dir"].exists()
+
+
+def test_run_gate_rejects_write_dry_run_audit_without_dry_run_directly(
+    tmp_path: Path,
+) -> None:
+    env = _setup_happy_path(tmp_path)
+    result = _gate(env, write_dry_run_audit=True, dry_run=False)
+    _assert_invalid_argument(result)
+    assert not env["shadow_state_dir"].exists()
 
 
 def test_pandas_parser_exception_on_cache_load_is_classified(

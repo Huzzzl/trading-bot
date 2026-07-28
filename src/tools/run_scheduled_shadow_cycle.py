@@ -99,9 +99,28 @@ record with no matching ``TERMINAL`` record for that
 :func:`find_incomplete_invocations`), not a silent "nothing happened"
 or a false claim that the gate left S62 unchanged. Gate failures that
 occur BEFORE step 1 above (no qualifying audit, stale audit, cache
-mismatch, etc.) never reach the write-ahead protocol at all — S62 was
+mismatch, invalid input, a failure to persist the ``STARTED`` record
+itself, etc.) never reach the write-ahead protocol at all — S62 was
 never invoked, so a single ``TERMINAL``-phase record fully and safely
 represents that outcome.
+
+No code path may append a scheduler-audit record without first
+holding the S63 lock and validating the existing log immediately
+before that append. The normal STARTED/TERMINAL sequence holds one
+lock continuously across both records and the S62 invocation; every
+other outcome (invalid input, no qualifying paper audit, a corrupt
+S62 state, a failure to persist ``STARTED`` itself, or any
+unanticipated exception) goes through
+:func:`_persist_terminal_under_lock`, which acquires the lock,
+validates the log, and appends — all as one operation. If the lock
+cannot be acquired (``SCHEDULER_LOCK_CONFLICT``) or the existing log
+fails validation (``SCHEDULER_AUDIT_WRITE_FAILED``), nothing is
+appended and the existing file's bytes and mtime are left untouched;
+callers never fall back to an unlocked append to "at least record
+that journaling failed." A ``SCHEDULER_LOCK_CONFLICT`` in particular
+is never retried — the lock is already known to be held elsewhere, so
+the invocation is reported without writing any scheduler record at
+all, leaving ``terminal_audit_persisted: false``.
 """
 
 from __future__ import annotations
@@ -619,6 +638,37 @@ def _append_scheduler_audit(
         os.fsync(f.fileno())
 
 
+def _persist_terminal_under_lock(
+    scheduler_audit_dir: Path, record: dict[str, Any], now_utc: datetime,
+) -> None:
+    """Acquire the S63 scheduler lock, validate today's existing log,
+    and append ``record`` — all within that single lock acquisition.
+
+    This is the ONLY way a terminal-only record (one representing an
+    invocation that never reached, or never durably persisted, its
+    own write-ahead ``STARTED`` record) may be written. It must never
+    be called to retry after a ``SCHEDULER_LOCK_CONFLICT`` — that
+    would mean acquiring a lock that is already known to be held by
+    another invocation.
+
+    Raises :class:`GateError` (``SCHEDULER_LOCK_CONFLICT`` if the lock
+    is held, ``SCHEDULER_AUDIT_WRITE_FAILED`` if the existing log is
+    corrupt/unterminated or the append itself fails) WITHOUT ever
+    appending in that case — the existing file's bytes and mtime are
+    left untouched.
+    """
+    lock_path = scheduler_audit_dir / _SCHEDULER_LOCK_FILENAME
+    with _SchedulerLock(lock_path):
+        _validate_scheduler_audit_log(scheduler_audit_dir, now_utc)
+        try:
+            _append_scheduler_audit(scheduler_audit_dir, record, now_utc)
+        except OSError as exc:
+            raise GateError(
+                REASON_SCHEDULER_AUDIT_WRITE_FAILED,
+                f"could not persist scheduler audit record: {exc}",
+            ) from exc
+
+
 def find_incomplete_invocations(scheduler_audit_dir: Path) -> list[dict[str, Any]]:
     """Read-only diagnostic: scan every ``*.jsonl`` scheduler-audit
     file and return ``STARTED``-phase records that have no matching
@@ -679,6 +729,11 @@ def run_gate(
     """Execute the full S63 gate exactly once.
 
     Transaction ordering:
+      0. validate inputs (``now_utc`` timezone-aware, max age, the
+         dry-run/write-dry-run-audit combination) — this is the
+         primary enforcement layer; ``main()`` validates again during
+         CLI parsing purely for friendlier messages, but every direct
+         caller of ``run_gate()`` gets the same guarantee
       1. read and validate the paper audit
       2. evaluate age and fetch gate
       3. load and validate cache
@@ -691,22 +746,57 @@ def run_gate(
       7. otherwise: acquire the S63 write-ahead lock, validate the
          existing scheduler-audit log, persist+fsync a STARTED
          record, invoke S62, persist+fsync a TERMINAL record with the
-         same invocation_id, release the lock
+         same invocation_id, release the lock — continuously held
+         across all three steps
       8. return the final record (exit_code carries the exit status)
+
+    Every scheduler-audit append — including one representing an
+    invocation that failed before ever reaching step 7 — goes through
+    either the locked STARTED/TERMINAL sequence in step 7 or
+    :func:`_persist_terminal_under_lock`. There is no code path that
+    appends without first holding the lock and validating the
+    existing log.
 
     Never raises — every failure, including any exception type not
     explicitly anticipated above, is classified into the returned
     record's ``result``/``exit_code``/``reason_codes``. Only
     ``KeyboardInterrupt`` and ``SystemExit`` propagate unchanged.
     """
-    record = _new_scheduler_record(now_utc)
-    record["dry_run"] = dry_run
+    # `now_utc` must be valid before it can be used for anything —
+    # including constructing the record itself or naming the
+    # date-sharded audit file. If it is not, fall back to the real
+    # wall clock purely so the failure can still be reported/persisted
+    # under a sane timestamp; the invalid input itself is what gets
+    # reported via INVALID_ARGUMENT below.
+    now_utc_is_valid = isinstance(now_utc, datetime) and now_utc.tzinfo is not None
+    safe_now = now_utc.astimezone(timezone.utc) if now_utc_is_valid else datetime.now(timezone.utc)
+
+    record = _new_scheduler_record(safe_now)
+    record["dry_run"] = bool(dry_run)
 
     paper_audit_hash: str | None = None
     cache_latest_iso: str | None = None
     should_persist = (not dry_run) or write_dry_run_audit
 
     try:
+        if not now_utc_is_valid:
+            if isinstance(now_utc, datetime):
+                raise GateError(
+                    REASON_INVALID_ARGUMENT,
+                    "now_utc must be timezone-aware (naive datetime given)",
+                )
+            raise GateError(
+                REASON_INVALID_ARGUMENT,
+                f"now_utc must be a datetime (got {type(now_utc).__name__})",
+            )
+        now_utc = safe_now
+        _validate_max_age(max_paper_audit_age_minutes)
+        if write_dry_run_audit and not dry_run:
+            raise GateError(
+                REASON_INVALID_ARGUMENT,
+                "write_dry_run_audit requires dry_run=True",
+            )
+
         selected = select_latest_paper_audit(paper_audit_dir, now_utc)
         if selected is None:
             if not _any_audit_files(paper_audit_dir):
@@ -901,23 +991,27 @@ def run_gate(
         record["phase"] = "TERMINAL"
         if record.get("invocation_id") is None:
             record["invocation_id"] = _compute_invocation_id(
-                paper_audit_hash, cache_latest_iso, now_utc,
+                paper_audit_hash, cache_latest_iso, safe_now,
             )
-        record["completed_timestamp_utc"] = now_utc.astimezone(timezone.utc).isoformat()
+        record["completed_timestamp_utc"] = safe_now.isoformat()
         record["terminal_audit_persisted"] = False
 
-        if should_persist:
+        # A lock conflict means acquiring the lock has ALREADY failed —
+        # there is nothing to retry, and attempting the locked-persist
+        # helper again would just mean acquiring a lock known to be
+        # held elsewhere. Every other pre-STARTED (or STARTED-write-
+        # failure) outcome goes through the same locked+validated path
+        # as the normal flow — never an unlocked fallback append.
+        if should_persist and exc.reason_code != REASON_SCHEDULER_LOCK_CONFLICT:
             record["terminal_audit_persisted"] = True
             try:
-                _append_scheduler_audit(scheduler_audit_dir, record, now_utc)
-            except OSError as exc2:
+                _persist_terminal_under_lock(scheduler_audit_dir, record, safe_now)
+            except GateError as persist_exc:
                 record["terminal_audit_persisted"] = False
                 record["result"] = "ERROR"
                 record["exit_code"] = 2
-                record["reason_codes"] = [REASON_SCHEDULER_AUDIT_WRITE_FAILED]
-                record["shadow_error"] = (
-                    record["shadow_error"] or f"scheduler audit write failed: {exc2}"
-                )
+                record["reason_codes"] = [persist_exc.reason_code]
+                record["shadow_error"] = record["shadow_error"] or str(persist_exc)
 
     except (KeyboardInterrupt, SystemExit):
         raise
@@ -932,15 +1026,15 @@ def run_gate(
         record["phase"] = "TERMINAL"
         if record.get("invocation_id") is None:
             record["invocation_id"] = _compute_invocation_id(
-                paper_audit_hash, cache_latest_iso, now_utc,
+                paper_audit_hash, cache_latest_iso, safe_now,
             )
-        record["completed_timestamp_utc"] = now_utc.astimezone(timezone.utc).isoformat()
+        record["completed_timestamp_utc"] = safe_now.isoformat()
         record["terminal_audit_persisted"] = False
         if should_persist:
             record["terminal_audit_persisted"] = True
             try:
-                _append_scheduler_audit(scheduler_audit_dir, record, now_utc)
-            except OSError:
+                _persist_terminal_under_lock(scheduler_audit_dir, record, safe_now)
+            except GateError:
                 record["terminal_audit_persisted"] = False
 
     return record
@@ -1022,10 +1116,14 @@ def main(argv: list[str] | None = None) -> int:
         record["reason_codes"] = [exc.reason_code]
         record["shadow_error"] = str(exc)
         record["invocation_id"] = _compute_invocation_id(None, None, real_now)
+        # A CLI argument error may be printed as JSON with no durable
+        # scheduler record when the lock is occupied, the existing log
+        # is corrupt, or the directory is unwritable — never append
+        # without first holding the lock and validating the log.
         record["terminal_audit_persisted"] = True
         try:
-            _append_scheduler_audit(scheduler_audit_dir, record, real_now)
-        except OSError:
+            _persist_terminal_under_lock(scheduler_audit_dir, record, real_now)
+        except GateError:
             record["terminal_audit_persisted"] = False
         print(json.dumps(record, indent=2, default=str, sort_keys=True))
         return 2
