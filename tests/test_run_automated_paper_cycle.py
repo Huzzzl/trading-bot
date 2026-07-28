@@ -661,6 +661,131 @@ class TestExitCodes:
         assert code == 2
 
 
+class TestLatestBarTsPopulatedBeforePostRefreshFailures:
+    """S63 audit-ordering: latest_bar_ts must be populated from the
+    just-refreshed cache BEFORE the adapter/clock are ever touched, so
+    a real adapter-init or clock-read failure still leaves a record
+    that identifies exactly which cache snapshot was refreshed."""
+
+    def test_adapter_init_failure_still_populates_latest_bar_ts(
+        self, tmp_path,
+    ):
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        cache_path = _bullish_cache(cache_dir)
+        audit_dir = tmp_path / "audit"
+        with patch.object(runner, "run_fetch", return_value=_good_fetch_result()), \
+             patch.object(
+                 runner.AlpacaPaperAdapter, "from_environment",
+                 side_effect=AlpacaPaperAdapterError("missing key"),
+             ), \
+             patch.object(sys, "stdout", io.StringIO()):
+            code = runner.main(
+                ["--cache-dir", str(cache_dir), "--audit-dir", str(audit_dir)],
+                now_utc_fn=_fixed_now,
+            )
+        assert code == 2
+        lines = _audit_lines(audit_dir)
+        assert len(lines) == 1
+        record = lines[0]
+        assert record["fetch_result"] == "PASS"
+        assert record["final_result"] == "ERROR"
+        assert record["latest_bar_ts"] is not None
+        assert record["latest_bar_ts"] == _FRI_FINAL_BAR.astimezone(
+            timezone.utc,
+        ).isoformat()
+        assert record["blocker"] is not None and "adapter init failed" in record["blocker"]
+
+    def test_clock_read_failure_still_populates_latest_bar_ts(
+        self, tmp_path,
+    ):
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        _bullish_cache(cache_dir)
+        audit_dir = tmp_path / "audit"
+        a = _mock_adapter()
+        a.get_clock.side_effect = AlpacaPaperAdapterError("clock timeout")
+        code, _, _ = _run(
+            [], adapter=a, audit_dir=audit_dir, cache_dir=cache_dir,
+        )
+        assert code == 2
+        lines = _audit_lines(audit_dir)
+        assert len(lines) == 1
+        record = lines[0]
+        assert record["fetch_result"] == "PASS"
+        assert record["final_result"] == "ERROR"
+        assert record["latest_bar_ts"] is not None
+        assert record["latest_bar_ts"] == _FRI_FINAL_BAR.astimezone(
+            timezone.utc,
+        ).isoformat()
+        assert record["blocker"] is not None and "clock read failed" in record["blocker"]
+        # No order path was ever reached.
+        a.submit_market_order.assert_not_called()
+        a.get_position.assert_not_called()
+
+    def test_adapter_init_failure_never_calls_submit(self, tmp_path):
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        _bullish_cache(cache_dir)
+        audit_dir = tmp_path / "audit"
+        adapter_cls_mock = MagicMock(
+            side_effect=AlpacaPaperAdapterError("missing key"),
+        )
+        with patch.object(runner, "run_fetch", return_value=_good_fetch_result()), \
+             patch.object(
+                 runner.AlpacaPaperAdapter, "from_environment", adapter_cls_mock,
+             ), \
+             patch.object(sys, "stdout", io.StringIO()):
+            runner.main(
+                ["--submit-paper", "--cache-dir", str(cache_dir),
+                 "--audit-dir", str(audit_dir)],
+                now_utc_fn=_fixed_now,
+            )
+        # from_environment was called (attempted) but no order method
+        # exists to call since construction itself failed.
+        adapter_cls_mock.assert_called_once()
+
+    def test_both_failure_records_match_refreshed_cache_latest_timestamp(
+        self, tmp_path,
+    ):
+        """Both the adapter-init-failure and clock-failure audit
+        records must carry the EXACT latest timestamp of the
+        refreshed cache — matching what S63 would independently load
+        via load_cached_bars."""
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        _bullish_cache(cache_dir)
+        audit_dir1 = tmp_path / "audit1"
+        audit_dir2 = tmp_path / "audit2"
+
+        with patch.object(runner, "run_fetch", return_value=_good_fetch_result()), \
+             patch.object(
+                 runner.AlpacaPaperAdapter, "from_environment",
+                 side_effect=AlpacaPaperAdapterError("missing key"),
+             ), \
+             patch.object(sys, "stdout", io.StringIO()):
+            runner.main(
+                ["--cache-dir", str(cache_dir), "--audit-dir", str(audit_dir1)],
+                now_utc_fn=_fixed_now,
+            )
+
+        a = _mock_adapter()
+        a.get_clock.side_effect = AlpacaPaperAdapterError("clock timeout")
+        _run([], adapter=a, audit_dir=audit_dir2, cache_dir=cache_dir)
+
+        rec1 = _audit_lines(audit_dir1)[0]
+        rec2 = _audit_lines(audit_dir2)[0]
+        assert rec1["latest_bar_ts"] == rec2["latest_bar_ts"]
+
+        # Independently confirm against backtest_strategy_eval's own
+        # cache loader (the same one S63 uses).
+        from src.tools.backtest_strategy_eval import load_cached_bars
+        bars = load_cached_bars(cache_dir, "SPY", "60m")
+        from src.tools.run_shadow_strategy_cycle import _bar_ts_utc
+        expected = _bar_ts_utc(bars[-1]).isoformat()
+        assert rec1["latest_bar_ts"] == expected
+
+
 class TestIdempotencyHardening:
     """Per-key claim/state semantics and concurrent-safety."""
 

@@ -4,14 +4,20 @@ Performs the complete safe workflow:
 
   1. Force-refresh the Yahoo SPY 60m cache.
   2. Abort before any trading if the refresh fails.
-  3. Build the real Alpaca paper adapter and read the broker clock once.
-  4. Load cached bars and validate freshness session-aware (S52d).
-  5. Run the paper trading cycle in dry-run mode to obtain the planned
+  3. Load the just-refreshed cached bars and populate the audit
+     record's latest_bar_ts immediately (S63 audit-ordering change) —
+     before any broker/adapter call, so a later adapter-init or
+     clock-read failure still leaves a record identifying exactly
+     which cache snapshot was refreshed.
+  4. Build the real Alpaca paper adapter and read the broker clock once.
+  5. Validate freshness session-aware (S52d), reusing the bars loaded
+     in step 3 — the cache is not re-read.
+  6. Run the paper trading cycle in dry-run mode to obtain the planned
      action (and reason codes).
-  6. If --submit-paper was passed and the dry-run produced a buy_planned
+  7. If --submit-paper was passed and the dry-run produced a buy_planned
      or sell_planned, derive a deterministic idempotency key and submit
      exactly once. Re-running with the same key blocks duplicate orders.
-  7. Always write one JSONL audit record per invocation.
+  8. Always write one JSONL audit record per invocation.
 
 Defaults: SPY, 60m, max_position_fraction=0.01, DRY_RUN.
 
@@ -435,7 +441,26 @@ def main(argv: list[str] | None = None, *, now_utc_fn=_default_now_utc) -> int:
         return _finalize_and_exit(audit_dir, record, now, "BLOCKED", 1)
 
     # -----------------------------------------------------------------
-    # Step 2. Build adapter and read the broker clock exactly once.
+    # Step 2. Load the just-refreshed cache and populate latest_bar_ts
+    # immediately after a successful cache refresh — before touching
+    # the broker adapter at all. This is an audit-ordering change
+    # only: it guarantees that any *later* adapter-init/clock/broker
+    # failure still leaves a record with a populated latest_bar_ts,
+    # since S63's scheduling gate keys off latest_bar_ts to confirm
+    # the audit corresponds to the refreshed cache. The bars and
+    # latest_ts loaded here are reused below — the cache is not
+    # re-read after this point.
+    # -----------------------------------------------------------------
+    try:
+        bars, latest_ts = _load_cached_bars(cache_dir, _SYMBOL, _INTERVAL)
+    except _CliError as exc:
+        record["blocker"] = str(exc)
+        return _finalize_and_exit(audit_dir, record, now, "BLOCKED", 1)
+
+    record["latest_bar_ts"] = latest_ts.astimezone(timezone.utc).isoformat()
+
+    # -----------------------------------------------------------------
+    # Step 3. Build adapter and read the broker clock exactly once.
     # -----------------------------------------------------------------
     try:
         adapter = AlpacaPaperAdapter.from_environment()
@@ -452,16 +477,9 @@ def main(argv: list[str] | None = None, *, now_utc_fn=_default_now_utc) -> int:
         record["clock_is_open"] = bool(clock.get("is_open"))
 
     # -----------------------------------------------------------------
-    # Step 3. Load cached bars and validate freshness session-aware.
+    # Step 4. Validate freshness session-aware, reusing the bars and
+    # latest_ts already loaded in Step 2 (no re-read of the cache).
     # -----------------------------------------------------------------
-    try:
-        bars, latest_ts = _load_cached_bars(cache_dir, _SYMBOL, _INTERVAL)
-    except _CliError as exc:
-        record["blocker"] = str(exc)
-        return _finalize_and_exit(audit_dir, record, now, "BLOCKED", 1)
-
-    record["latest_bar_ts"] = latest_ts.astimezone(timezone.utc).isoformat()
-
     freshness_blocker = validate_bar_freshness(
         latest_ts=latest_ts, now=now, clock=clock, interval=_INTERVAL,
     )
@@ -470,7 +488,7 @@ def main(argv: list[str] | None = None, *, now_utc_fn=_default_now_utc) -> int:
         return _finalize_and_exit(audit_dir, record, now, "BLOCKED", 1)
 
     # -----------------------------------------------------------------
-    # Step 4. Dry-run the cycle first so we always have the planned
+    # Step 5. Dry-run the cycle first so we always have the planned
     # action, signal, and order_plan to log — and so the idempotency
     # key can be derived without consulting submission.
     # -----------------------------------------------------------------
@@ -507,7 +525,7 @@ def main(argv: list[str] | None = None, *, now_utc_fn=_default_now_utc) -> int:
         return _finalize_and_exit(audit_dir, record, now, "PASS", 0)
 
     # -----------------------------------------------------------------
-    # Step 5. Pre-submit broker-state safety checks (BUY only).
+    # Step 6. Pre-submit broker-state safety checks (BUY only).
     #
     # Broker state is the source of truth. A race between dry-run and
     # this second read would produce a duplicate order; catching it
@@ -551,7 +569,7 @@ def main(argv: list[str] | None = None, *, now_utc_fn=_default_now_utc) -> int:
             return _finalize_and_exit(audit_dir, record, now, "PASS", 0)
 
     # -----------------------------------------------------------------
-    # Step 6. PAPER_SUBMIT: idempotency + single submission.
+    # Step 7. PAPER_SUBMIT: idempotency + single submission.
     # -----------------------------------------------------------------
     side = "buy" if action == "buy_planned" else "sell"
     key = _idempotency_key(
