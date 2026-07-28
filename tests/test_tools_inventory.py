@@ -93,6 +93,9 @@ ACTIVE_RUNTIME_CANDIDATE_TOOLS: tuple[str, ...] = (
     "paper_status_summary",       # read-only end-of-day paper trading summary
     # --- Added in PR S56 ---
     "backtest_strategy_eval",     # read-only SMA-crossover strategy backtest
+    # --- Added in PR S62 ---
+    "run_shadow_strategy_cycle",  # forward-only shadow validation runner
+    "shadow_strategy_report",     # report over the shadow-strategy state
 )
 
 # May be needed by automated runtime; keep in place.
@@ -300,13 +303,13 @@ class TestToolsInventory:
         assert len(ACTIVE_RESEARCH_TOOLS) == 3
 
     def test_active_runtime_candidate_tools_count(self) -> None:
-        assert len(ACTIVE_RUNTIME_CANDIDATE_TOOLS) == 20
+        assert len(ACTIVE_RUNTIME_CANDIDATE_TOOLS) == 22
 
     def test_preserve_runtime_support_tools_count(self) -> None:
         assert len(PRESERVE_RUNTIME_SUPPORT_TOOLS) == 1
 
     def test_active_tools_count(self) -> None:
-        assert len(ACTIVE_TOOLS) == 24
+        assert len(ACTIVE_TOOLS) == 26
 
     def test_archived_tools_count(self) -> None:
         assert len(ARCHIVED_TOOLS) == 20
