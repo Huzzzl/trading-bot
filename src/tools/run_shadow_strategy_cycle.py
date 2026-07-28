@@ -690,15 +690,136 @@ def _make_event(
     return ev
 
 
-def _load_known_event_ids(events_path: Path) -> set[str]:
-    """Strict, fail-closed event log loader.
+def _validate_event_record(
+    e: Any,
+    line_no: int,
+    *,
+    allowed_cids: frozenset[str] | set[str],
+    expected_exp: str,
+    expected_hash: str,
+) -> str:
+    """Validate one decoded JSONL event object against the full S62
+    event schema. Returns its ``event_id`` on success; raises
+    :class:`ShadowError` on any anomaly.
 
-    Any malformed JSONL line — including the final line — raises
-    :class:`ShadowError`. A valid final JSON record that is NOT
-    newline-terminated is treated as an incomplete framing state:
-    a subsequent ``_append_events`` write would concatenate onto the
-    previous record, silently corrupting both. Only the explicit
-    ``--repair-event-log-tail`` command may normalize it.
+    This is the single semantic-validation implementation used by
+    every path that reads events.jsonl — no runtime path may use a
+    weaker parse-only check.
+    """
+    if not isinstance(e, dict):
+        raise ShadowError(f"events.jsonl line {line_no} is not an object")
+    eid = e.get("event_id")
+    if not isinstance(eid, str) or not eid:
+        raise ShadowError(
+            f"events.jsonl line {line_no} event_id invalid: {eid!r}"
+        )
+    if e.get("experiment_id") != expected_exp:
+        raise ShadowError(
+            f"events.jsonl line {line_no} experiment_id "
+            f"{e.get('experiment_id')!r} != manifest {expected_exp!r}"
+        )
+    if e.get("manifest_hash") != expected_hash:
+        raise ShadowError(
+            f"events.jsonl line {line_no} manifest_hash "
+            f"{e.get('manifest_hash')!r} does not match current manifest"
+        )
+    cid = e.get("candidate_id")
+    if cid not in allowed_cids:
+        raise ShadowError(
+            f"events.jsonl line {line_no} unknown candidate_id {cid!r}"
+        )
+    et = e.get("event_type")
+    if et not in _ALLOWED_EVENT_TYPES:
+        raise ShadowError(
+            f"events.jsonl line {line_no} unknown event_type {et!r}"
+        )
+    for key in ("signal_bar_utc", "event_timestamp_utc"):
+        v = e.get(key)
+        if not isinstance(v, str):
+            raise ShadowError(
+                f"events.jsonl line {line_no} {key} must be a UTC "
+                f"ISO-8601 string, got {type(v).__name__}"
+            )
+        try:
+            _parse_ts(v)
+        except Exception as exc:
+            raise ShadowError(
+                f"events.jsonl line {line_no} {key} unparseable: {exc}"
+            ) from exc
+    exec_ts = e.get("execution_bar_utc")
+    if exec_ts is not None:
+        if not isinstance(exec_ts, str):
+            raise ShadowError(
+                f"events.jsonl line {line_no} execution_bar_utc must be "
+                f"a UTC string when non-null"
+            )
+        try:
+            _parse_ts(exec_ts)
+        except Exception as exc:
+            raise ShadowError(
+                f"events.jsonl line {line_no} execution_bar_utc "
+                f"unparseable: {exc}"
+            ) from exc
+    for key in _NUMERIC_EVENT_FIELDS:
+        v = e.get(key)
+        if v is None:
+            continue
+        if not _is_finite_number(v):
+            raise ShadowError(
+                f"events.jsonl line {line_no} {key} must be null or "
+                f"a finite number, got {v!r}"
+            )
+    fr = e.get("filter_result")
+    if fr is not None and not isinstance(fr, bool):
+        raise ShadowError(
+            f"events.jsonl line {line_no} filter_result must be null "
+            f"or bool, got {type(fr).__name__}"
+        )
+    ps = e.get("position_state")
+    if ps is not None and ps not in _ALLOWED_POSITION_STATES:
+        raise ShadowError(
+            f"events.jsonl line {line_no} position_state invalid: {ps!r}"
+        )
+    return eid
+
+
+def _validate_and_load_event_ids(
+    events_path: Path,
+    manifest: dict[str, Any],
+    *,
+    require_terminated: bool = True,
+) -> set[str]:
+    """Canonical, fail-closed event-log loader + semantic validator.
+
+    Validates UTF-8 decodability, JSONL framing, and the full S62
+    event schema (experiment_id, manifest_hash, candidate_id,
+    event_type, timestamps, numeric/enum fields) for every complete
+    physical line, and rejects duplicate event IDs. This is the ONLY
+    event-log loader in the module — every runtime path (normal
+    ``--once``, ``--dry-run``, ``--status``, the report tool, the
+    post-repair revalidation, and any future crash-recovery /
+    dedup path) must call this function. No path may use a weaker
+    parse-only loader.
+
+    ``require_terminated``:
+
+    * ``True`` (default — every read path and the final state after
+      any mutation): the raw file must end with ``b"\\n"``. A missing
+      trailing newline — whether the final record is well-formed or
+      not — raises :class:`ShadowError`, since appending onto such a
+      file would concatenate a fresh record onto the previous line.
+    * ``False`` (used only by the internal pre-repair inspection
+      step): tolerates a missing trailing newline. Every *complete*
+      (newline-terminated) line is still validated as usual. If the
+      final incomplete fragment happens to parse as JSON, it is
+      ALSO semantically validated and included in the returned ID
+      set — and a semantic failure there still raises, matching the
+      requirement that a "valid but semantically wrong" unterminated
+      record must be rejected before any repair mutation. A fragment
+      that fails to parse at all is silently excluded — the caller
+      (the repair inspector) decides what to do with it.
+
+    Returns the set of validated, unique event IDs.
     """
     known: set[str] = set()
     if not events_path.exists():
@@ -709,43 +830,54 @@ def _load_known_event_ids(events_path: Path) -> set[str]:
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
-        raise ShadowError(
-            f"events.jsonl is not valid UTF-8: {exc}"
-        ) from exc
-    lines = text.splitlines(keepends=False)
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-        if not stripped:
-            continue
-        try:
-            e = json.loads(stripped)
-        except json.JSONDecodeError as exc:
-            raise ShadowError(
-                f"events.jsonl line {i + 1} is malformed "
-                f"({exc.msg}) — cannot proceed. "
-                f"Run --repair-event-log-tail to repair an "
-                f"interrupted append."
-            ) from exc
-        if not isinstance(e, dict) or "event_id" not in e:
-            raise ShadowError(
-                f"events.jsonl line {i + 1} missing event_id"
-            )
-        if not isinstance(e["event_id"], str) or not e["event_id"]:
-            raise ShadowError(
-                f"events.jsonl line {i + 1} has invalid event_id "
-                f"type {type(e['event_id']).__name__}"
-            )
-        known.add(e["event_id"])
-    # Detect the unterminated-but-valid-tail state — appending onto
-    # the file would concatenate a fresh record onto the previous
-    # last line and produce a malformed physical row.
-    if not raw.endswith(b"\n"):
+        raise ShadowError(f"events.jsonl is not valid UTF-8: {exc}") from exc
+
+    ends_with_newline = raw.endswith(b"\n")
+    if require_terminated and not ends_with_newline:
         raise ShadowError(
             "events.jsonl does not end with a newline — appending "
             "another event would concatenate it onto the previous "
             "record and silently corrupt the log. "
             "Run --repair-event-log-tail to normalize the terminator."
         )
+
+    lines = text.splitlines(keepends=False)
+    complete_count = len(lines) if ends_with_newline else max(len(lines) - 1, 0)
+
+    allowed_cids = {_EXPERIMENT_CANDIDATE_ID} | {
+        c["id"] for c in manifest["candidates"]
+    }
+    expected_exp = manifest["experiment_id"]
+    expected_hash = manifest["candidate_manifest_sha256"]
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        is_complete = i < complete_count
+        try:
+            e = json.loads(stripped)
+        except json.JSONDecodeError as exc:
+            if is_complete:
+                raise ShadowError(
+                    f"events.jsonl line {i + 1} is malformed ({exc.msg})"
+                ) from exc
+            # Final incomplete fragment that fails to parse at all —
+            # the caller (repair inspector) decides whether this is
+            # the specifically-permitted malformed-tail case. Not
+            # registered in the returned ID set.
+            continue
+        eid = _validate_event_record(
+            e, i + 1,
+            allowed_cids=allowed_cids,
+            expected_exp=expected_exp,
+            expected_hash=expected_hash,
+        )
+        if eid in known:
+            raise ShadowError(
+                f"events.jsonl line {i + 1} duplicate event_id {eid!r}"
+            )
+        known.add(eid)
     return known
 
 
@@ -875,14 +1007,13 @@ def _repair_event_log_tail(
 def _validate_event_log_readonly(
     events_path: Path,
     state: dict[str, Any],
-    manifest: dict[str, Any] | None = None,
+    manifest: dict[str, Any],
 ) -> None:
     """Validate the event log for a read-only caller (status / report).
 
-    * Existing log → strict parse + optional semantic validation
-      against ``manifest`` (experiment_id, manifest_hash, allowed
-      candidate IDs / event types, timestamp parseability, numeric
-      finiteness, event-ID uniqueness). Any anomaly raises.
+    * Existing log → routed through the canonical
+      :func:`_validate_and_load_event_ids` validator (strict framing +
+      full semantic validation). Any anomaly raises.
     * Missing log → acceptable only when the state proves no forward
       observations exist. Any candidate with processed forward bars
       or completed trades makes a missing event file an
@@ -891,7 +1022,7 @@ def _validate_event_log_readonly(
     Never mutates the file.
     """
     if events_path.exists():
-        _validate_event_log_bytes(events_path, manifest)
+        _validate_and_load_event_ids(events_path, manifest, require_terminated=True)
         return
     for cid, cs in state.get("candidates", {}).items():
         if cs.get("processed_forward_bar_count", 0) > 0:
@@ -905,136 +1036,6 @@ def _validate_event_log_readonly(
                 f"events.jsonl missing but candidate {cid!r} has "
                 f"{cs['completed_trade_count']} completed trades — "
                 f"audit integrity mismatch"
-            )
-
-
-def _validate_event_log_bytes(
-    events_path: Path,
-    manifest: dict[str, Any] | None,
-) -> None:
-    """Semantic + structural validation of every record in events.jsonl.
-
-    Also enforces:
-      - UTF-8 decodability;
-      - file ends in a newline (structural framing);
-      - event-ID uniqueness;
-      - experiment_id / manifest_hash match the current manifest;
-      - candidate_id is one of the five candidates OR __experiment__;
-      - event_type is in the allowed set;
-      - signal / event / execution timestamps parseable UTC;
-      - numeric fields null or finite;
-      - filter_result null or bool; position_state null or in the
-        allowed set.
-    """
-    raw = events_path.read_bytes()
-    if not raw:
-        return
-    try:
-        text = raw.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise ShadowError(f"events.jsonl not valid UTF-8: {exc}") from exc
-    if not raw.endswith(b"\n"):
-        raise ShadowError(
-            "events.jsonl does not end with a newline — audit log "
-            "framing is incomplete. Run --repair-event-log-tail."
-        )
-    allowed_cids = {_EXPERIMENT_CANDIDATE_ID}
-    expected_exp = None
-    expected_hash = None
-    if manifest is not None:
-        allowed_cids |= {c["id"] for c in manifest["candidates"]}
-        expected_exp = manifest["experiment_id"]
-        expected_hash = manifest["candidate_manifest_sha256"]
-    seen: set[str] = set()
-    for i, line in enumerate(text.splitlines(keepends=False)):
-        stripped = line.strip()
-        if not stripped:
-            continue
-        try:
-            e = json.loads(stripped)
-        except json.JSONDecodeError as exc:
-            raise ShadowError(
-                f"events.jsonl line {i + 1} malformed: {exc.msg}"
-            ) from exc
-        if not isinstance(e, dict):
-            raise ShadowError(f"events.jsonl line {i + 1} is not an object")
-        eid = e.get("event_id")
-        if not isinstance(eid, str) or not eid:
-            raise ShadowError(
-                f"events.jsonl line {i + 1} event_id invalid: {eid!r}"
-            )
-        if eid in seen:
-            raise ShadowError(
-                f"events.jsonl line {i + 1} duplicate event_id {eid!r}"
-            )
-        seen.add(eid)
-        if expected_exp is not None and e.get("experiment_id") != expected_exp:
-            raise ShadowError(
-                f"events.jsonl line {i + 1} experiment_id "
-                f"{e.get('experiment_id')!r} != manifest {expected_exp!r}"
-            )
-        if expected_hash is not None and e.get("manifest_hash") != expected_hash:
-            raise ShadowError(
-                f"events.jsonl line {i + 1} manifest_hash "
-                f"{e.get('manifest_hash')!r} does not match current "
-                f"manifest"
-            )
-        cid = e.get("candidate_id")
-        if cid not in allowed_cids and manifest is not None:
-            raise ShadowError(
-                f"events.jsonl line {i + 1} unknown candidate_id {cid!r}"
-            )
-        et = e.get("event_type")
-        if et not in _ALLOWED_EVENT_TYPES:
-            raise ShadowError(
-                f"events.jsonl line {i + 1} unknown event_type {et!r}"
-            )
-        for key in ("signal_bar_utc", "event_timestamp_utc"):
-            v = e.get(key)
-            if not isinstance(v, str):
-                raise ShadowError(
-                    f"events.jsonl line {i + 1} {key} must be a UTC "
-                    f"ISO-8601 string, got {type(v).__name__}"
-                )
-            try:
-                _parse_ts(v)
-            except Exception as exc:
-                raise ShadowError(
-                    f"events.jsonl line {i + 1} {key} unparseable: {exc}"
-                ) from exc
-        exec_ts = e.get("execution_bar_utc")
-        if exec_ts is not None:
-            if not isinstance(exec_ts, str):
-                raise ShadowError(
-                    f"events.jsonl line {i + 1} execution_bar_utc must be "
-                    f"a UTC string when non-null"
-                )
-            try:
-                _parse_ts(exec_ts)
-            except Exception as exc:
-                raise ShadowError(
-                    f"events.jsonl line {i + 1} execution_bar_utc "
-                    f"unparseable: {exc}"
-                ) from exc
-        for key in _NUMERIC_EVENT_FIELDS:
-            v = e.get(key)
-            if v is None:
-                continue
-            if not _is_finite_number(v):
-                raise ShadowError(
-                    f"events.jsonl line {i + 1} {key} must be null or "
-                    f"a finite number, got {v!r}"
-                )
-        fr = e.get("filter_result")
-        if fr is not None and not isinstance(fr, bool):
-            raise ShadowError(
-                f"events.jsonl line {i + 1} filter_result must be null "
-                f"or bool, got {type(fr).__name__}"
-            )
-        ps = e.get("position_state")
-        if ps is not None and ps not in _ALLOWED_POSITION_STATES:
-            raise ShadowError(
-                f"events.jsonl line {i + 1} position_state invalid: {ps!r}"
             )
 
 
@@ -1660,29 +1661,55 @@ def run_cycle(
     now_utc: datetime,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    """Process all unseen bars for all five candidates."""
+    """Process all unseen bars for all five candidates.
+
+    Write-path ordering (the S62 audit-integrity contract):
+
+      1. acquire writer lock
+      2. load and validate manifest
+      3. load and validate state
+      4. validate all COMPLETE event records semantically against
+         the manifest
+      5. handle only the specifically permitted malformed
+         unterminated tail (a semantically valid but unterminated
+         final record is left untouched and fails closed — only the
+         explicit ``--repair-event-log-tail`` command may normalize
+         it)
+      6. revalidate the complete (possibly repaired) log
+         semantically
+      7. process bars
+      8. append events
+      9. revalidate the resulting event log
+      10. atomically write state
+
+    A wrong experiment ID, manifest hash, candidate ID, event type,
+    duplicate ID, invalid timestamp, or invalid field type raises
+    :class:`ShadowError` at step 4 or 6/9 — always before state
+    mutation, event append, tail deletion, or terminator restoration.
+    """
     if dry_run:
         # Dry-run requires an initialized experiment — it must not
         # create the state directory, manifest, state, events, or a
         # persistent lock file. It may only read.
         manifest = load_manifest_readonly(state_dir)
-    else:
-        manifest = load_or_init_manifest(state_dir, now_utc)
+        cutoff = _parse_ts(manifest["forward_cutoff_utc"])
+        validated, duplicates_meta, gap_events = _validate_and_prepare_bars(bars)
+        manifest_hash_str = manifest["candidate_manifest_sha256"]
 
-    cutoff = _parse_ts(manifest["forward_cutoff_utc"])
-    validated, duplicates_meta, gap_events = _validate_and_prepare_bars(bars)
-    manifest_hash_str = manifest["candidate_manifest_sha256"]
-
-    if dry_run:
         state_path = state_dir / _STATE_FILENAME
         if state_path.exists():
             state = load_state_readonly(state_dir, manifest)
         else:
             state = _init_state(manifest)
         events_path = state_dir / _EVENTS_FILENAME
-        # Read-only in dry-run: no repair, no writes. A corrupted log
-        # surfaces as ShadowError to the caller.
-        known_event_ids = _load_known_event_ids(events_path)
+        # Read-only in dry-run: strict framing + full semantic
+        # validation; no repair, no writes. Any corruption — bad
+        # framing, wrong experiment/manifest hash, unknown
+        # candidate/event type, bad timestamp, non-finite field —
+        # surfaces as ShadowError.
+        known_event_ids = _validate_and_load_event_ids(
+            events_path, manifest, require_terminated=True,
+        )
         summary = _run_candidates(
             state, manifest, validated, cutoff, known_event_ids,
         )
@@ -1703,21 +1730,64 @@ def run_cycle(
         )
         return summary
 
+    # --- Write path ---------------------------------------------------
     lock_path = state_dir / _LOCK_FILENAME
     with _FileLock(lock_path):
-        events_path = state_dir / _EVENTS_FILENAME
-        # State first — an invalid state must never trigger event-log
-        # mutation. Only after successful state validation do we
-        # consider the restricted event-tail repair. Automatic path
-        # ONLY repairs malformed unterminated tails; a valid but
-        # unterminated final record must be normalized deliberately
-        # via --repair-event-log-tail.
+        # Step 2: load and validate manifest.
+        manifest = load_or_init_manifest(state_dir, now_utc)
+        cutoff = _parse_ts(manifest["forward_cutoff_utc"])
+        manifest_hash_str = manifest["candidate_manifest_sha256"]
+
+        # Bar validation touches no shared file state; safe to run
+        # here so a bad-bar error surfaces before state/events I/O.
+        validated, duplicates_meta, gap_events = _validate_and_prepare_bars(bars)
+
+        # Step 3: load and validate state. An invalid state must
+        # never trigger event-log mutation.
         state = load_or_init_state(state_dir, manifest)
+
+        events_path = state_dir / _EVENTS_FILENAME
+
+        # Step 4: validate all COMPLETE event records semantically.
+        # require_terminated=False tolerates a missing trailing
+        # newline so step 5 can inspect the specific permitted
+        # malformed-tail case, but every complete line — and any
+        # final fragment that DOES parse as JSON — is still fully
+        # validated here. A wrong experiment ID, manifest hash,
+        # candidate ID, event type, duplicate ID, bad timestamp, or
+        # invalid field type raises now, before any mutation.
+        _validate_and_load_event_ids(
+            events_path, manifest, require_terminated=False,
+        )
+
+        # Step 5: handle only the specifically permitted malformed
+        # unterminated tail. allow_terminator_restore=False means a
+        # semantically-valid-but-unterminated final record is left
+        # completely untouched by this call.
         recovered = _repair_event_log_tail(
             events_path, allow_terminator_restore=False,
         )
-        known_event_ids = _load_known_event_ids(events_path)
+        if events_path.exists():
+            raw_after = events_path.read_bytes()
+            if raw_after and not raw_after.endswith(b"\n"):
+                # The only remaining reason the file can still be
+                # unterminated here is a semantically valid final
+                # record that this automatic path is not permitted
+                # to normalize.
+                raise ShadowError(
+                    "events.jsonl ends with a valid but unterminated "
+                    "(missing trailing newline) final record — normal "
+                    "processing cannot repair this automatically. Run "
+                    "--repair-event-log-tail."
+                )
 
+        # Step 6: revalidate the complete (possibly repaired) log —
+        # this becomes the authoritative known-ID set for dedup.
+        known_event_ids = _validate_and_load_event_ids(
+            events_path, manifest, require_terminated=True,
+        )
+
+        # Step 7: process bars.
         summary = _run_candidates(
             state, manifest, validated, cutoff, known_event_ids,
         )
@@ -1736,8 +1806,16 @@ def run_cycle(
                 known_event_ids.add(recovery_event["event_id"])
                 experiment_events.insert(0, recovery_event)
 
+        # Step 8: append events.
         all_events = experiment_events + collected
         _append_events(events_path, all_events)
+
+        # Step 9: revalidate the resulting event log.
+        _validate_and_load_event_ids(
+            events_path, manifest, require_terminated=True,
+        )
+
+        # Step 10: atomically write state.
         _atomic_write_json(state_dir / _STATE_FILENAME, state)
 
     candidate_events_appended = len(collected)
@@ -1862,8 +1940,24 @@ def repair_event_log_tail_command(
 ) -> dict[str, Any]:
     """Explicit repair mode used by ``--repair-event-log-tail``.
 
-    Requires an initialized manifest AND a valid state — never
-    mutates the event log against a missing or invalid state.
+    Ordering:
+
+      1. require manifest and state; validate state
+      2. inspect the event log without mutating it
+      3. semantically validate every complete prefix event against
+         the manifest — a final unterminated record that DOES parse
+         as JSON is validated too (and rejected without mutation if
+         semantically invalid); a final fragment that fails to parse
+         is excluded from this check (that is the malformed-tail
+         case handled by the physical repair step)
+      4. perform the repair (tail removal or terminator restoration)
+      5. semantically revalidate the repaired log
+      6. append the deterministic recovery event
+      7. semantically revalidate the final log
+
+    Any failure at step 1 or 3 leaves the event-log bytes completely
+    unchanged — the physical repair (step 4) only runs after
+    validation has succeeded.
     """
     manifest = load_manifest_readonly(state_dir)
     # State MUST exist and validate. A missing state file is not a
@@ -1874,23 +1968,45 @@ def repair_event_log_tail_command(
             f"no shadow state at {state_path} — --repair-event-log-tail "
             "requires an initialized experiment. Run --once first."
         )
+    manifest_hash_str = manifest["candidate_manifest_sha256"]
     with _FileLock(state_dir / _LOCK_FILENAME):
         load_state_readonly(state_dir, manifest)
         events_path = state_dir / _EVENTS_FILENAME
-        recovered = _repair_event_log_tail(events_path)
+
+        # Steps 2-3: inspect + semantically validate every complete
+        # prefix event AND the final fragment if it parses as JSON —
+        # all without mutating the file. Any anomaly raises here,
+        # before the physical repair ever runs.
+        _validate_and_load_event_ids(
+            events_path, manifest, require_terminated=False,
+        )
+
+        # Step 4: perform the physical repair (only reached once
+        # validation above has succeeded).
+        recovered = _repair_event_log_tail(
+            events_path, allow_terminator_restore=True,
+        )
         recovery_event: dict[str, Any] | None = None
         if recovered is not None:
+            # Step 5: semantically revalidate the repaired log.
+            known = _validate_and_load_event_ids(
+                events_path, manifest, require_terminated=True,
+            )
+            # Step 6: append the deterministic recovery event.
             recovery_event = _make_recovery_event(
-                manifest_hash_str=manifest["candidate_manifest_sha256"],
+                manifest_hash_str=manifest_hash_str,
                 recovered_detail=recovered,
                 now_utc=now_utc,
             )
-            known = _load_known_event_ids(events_path)
             if recovery_event["event_id"] not in known:
                 _append_events(events_path, [recovery_event])
+            # Step 7: semantically revalidate the final log.
+            _validate_and_load_event_ids(
+                events_path, manifest, require_terminated=True,
+            )
     return {
         "experiment_id": manifest["experiment_id"],
-        "manifest_hash": manifest["candidate_manifest_sha256"],
+        "manifest_hash": manifest_hash_str,
         "repaired": recovered is not None,
         "recovered_detail": recovered,
         "recovery_event": recovery_event,

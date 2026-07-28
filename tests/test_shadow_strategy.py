@@ -1103,7 +1103,7 @@ def test_state_validator_rejects_counter_alias_mismatch(tmp_path: Path) -> None:
 
 def test_events_log_rejects_malformed_middle_line(tmp_path: Path) -> None:
     state_dir = tmp_path / "shadow"
-    _prime(state_dir)
+    manifest, _state = _prime(state_dir)
     events_path = state_dir / ssc._EVENTS_FILENAME
     # Insert a malformed line in the middle.
     lines = events_path.read_text().splitlines()
@@ -1111,7 +1111,7 @@ def test_events_log_rejects_malformed_middle_line(tmp_path: Path) -> None:
     lines.insert(1, "not-a-json-line")
     events_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     with pytest.raises(ssc.ShadowError, match="events.jsonl line"):
-        ssc._load_known_event_ids(events_path)
+        ssc._validate_and_load_event_ids(events_path, manifest)
 
 
 def test_events_log_read_fails_closed_on_truncated_last_line(tmp_path: Path) -> None:
@@ -1119,19 +1119,21 @@ def test_events_log_read_fails_closed_on_truncated_last_line(tmp_path: Path) -> 
     truncated final line — silent recovery would allow the next
     append to concatenate its JSON onto the corrupted tail."""
     state_dir = tmp_path / "shadow"
-    _prime(state_dir)
+    manifest, _state = _prime(state_dir)
     events_path = state_dir / ssc._EVENTS_FILENAME
     with events_path.open("a", encoding="utf-8") as f:
         f.write('{"event_id": "abc", "partial')
-    with pytest.raises(ssc.ShadowError, match="malformed"):
-        ssc._load_known_event_ids(events_path)
+    # An unterminated final line fails closed regardless of whether
+    # it is itself well-formed JSON — the framing check runs first.
+    with pytest.raises(ssc.ShadowError, match="malformed|newline"):
+        ssc._validate_and_load_event_ids(events_path, manifest)
 
 
 def test_repair_event_log_tail_truncates_bad_final_line(tmp_path: Path) -> None:
     """The explicit repair helper physically removes a malformed
     final line, returning a diagnostic with removed byte count."""
     state_dir = tmp_path / "shadow"
-    _prime(state_dir)
+    manifest, _state = _prime(state_dir)
     events_path = state_dir / ssc._EVENTS_FILENAME
     before_size = events_path.stat().st_size
     with events_path.open("a", encoding="utf-8") as f:
@@ -1141,7 +1143,7 @@ def test_repair_event_log_tail_truncates_bad_final_line(tmp_path: Path) -> None:
     assert diag["removed_byte_count"] > 0
     # After repair the loader must succeed and the file size must
     # equal the pre-append size.
-    known = ssc._load_known_event_ids(events_path)
+    known = ssc._validate_and_load_event_ids(events_path, manifest)
     assert isinstance(known, set)
     assert events_path.stat().st_size == before_size
 
@@ -1187,7 +1189,9 @@ def test_dry_run_detects_corrupted_event_log(tmp_path: Path) -> None:
         f.write('{"event_id": "abc", "partial')
     # Small synthetic bar set so dry-run does not need the cache.
     bars = _many_bars_across_cutoff(pre=800, post=50)
-    with pytest.raises(ssc.ShadowError, match="malformed"):
+    # Dry-run validates with require_terminated=True: an unterminated
+    # file fails on the framing check before content is inspected.
+    with pytest.raises(ssc.ShadowError, match="malformed|newline"):
         ssc.run_cycle(
             bars, state_dir=state_dir, now_utc=_NOW, dry_run=True,
         )
@@ -2010,7 +2014,10 @@ def test_normal_once_fails_closed_on_newline_terminated_corruption(
     events_path = state_dir / ssc._EVENTS_FILENAME
     _corrupt_event_final_line(events_path, terminated=True)
     bars = _many_bars_across_cutoff(pre=800, post=50)
-    with pytest.raises(ssc.ShadowError, match="newline-terminated"):
+    # The canonical validator catches this at step 4 (every complete
+    # line, including a newline-terminated malformed final line, is
+    # validated) before any repair is even attempted.
+    with pytest.raises(ssc.ShadowError, match="malformed"):
         ssc.run_cycle(bars, state_dir=state_dir, now_utc=_NOW)
 
 
@@ -2473,3 +2480,328 @@ def test_explicit_repair_requires_valid_state(tmp_path: Path) -> None:
             state_dir, now_utc=datetime(2026, 8, 1, tzinfo=timezone.utc),
         )
     assert events_path.read_bytes() == events_before
+
+
+# ---------------------------------------------------------------------------
+# S62 review round 6 — one canonical validator, exercised across all three
+# entry points (normal --once, --dry-run, --repair-event-log-tail)
+# ---------------------------------------------------------------------------
+
+
+def _make_unterminated_final_event(events_path: Path, mutate) -> None:
+    """Take the last well-formed event line, apply ``mutate`` to its
+    decoded dict, and rewrite the file so the mutated event becomes
+    the final line WITHOUT a trailing newline — i.e. valid JSON but
+    incomplete JSONL framing."""
+    lines = [l for l in events_path.read_text().splitlines() if l.strip()]
+    assert lines
+    last_obj = json.loads(lines[-1])
+    mutated = mutate(last_obj)
+    prefix = "\n".join(lines[:-1])
+    if prefix:
+        prefix += "\n"
+    events_path.write_text(
+        prefix + json.dumps(mutated, sort_keys=True), encoding="utf-8",
+    )
+
+
+def _make_malformed_tail_after_invalid_complete_event(events_path: Path) -> None:
+    """Corrupt the FIRST complete event semantically (unknown
+    event_type), then append a malformed, unterminated final line —
+    the specific combination in review-round-6 corruption case 10."""
+    lines = events_path.read_text().splitlines()
+    assert len(lines) >= 2
+    obj = json.loads(lines[0])
+    obj["event_type"] = "MADE_UP_EVENT_TYPE"
+    lines[0] = json.dumps(obj, sort_keys=True)
+    content = "\n".join(lines) + "\n" + '{"event_id": "abc", "partial'
+    events_path.write_text(content, encoding="utf-8")
+
+
+def _assert_all_paths_fail_closed(
+    state_dir: Path, match: str, *, dry_run_match: str | None = None,
+) -> None:
+    """Given a state_dir whose events.jsonl is already corrupted,
+    assert that --once, --dry-run, and --repair-event-log-tail all
+    raise ShadowError WITHOUT mutating state.json or events.jsonl,
+    and (for the CLI entry points) exit with status 2.
+
+    ``dry_run_match`` may differ from ``match``: dry-run always
+    validates with ``require_terminated=True`` (it can never repair,
+    so an unterminated file is rejected on framing alone), whereas
+    ``--once``/``--repair-event-log-tail`` first inspect with
+    ``require_terminated=False`` and therefore surface the deeper
+    semantic error for an unterminated-but-parseable final record.
+    Both are legitimate fail-closed outcomes for the same corruption.
+    """
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    state_path = state_dir / ssc._STATE_FILENAME
+    events_before = events_path.read_bytes()
+    state_before = state_path.read_bytes()
+    bars = _many_bars_across_cutoff(pre=800, post=60)
+
+    with pytest.raises(ssc.ShadowError, match=dry_run_match or match):
+        ssc.run_cycle(bars, state_dir=state_dir, now_utc=_NOW, dry_run=True)
+    assert events_path.read_bytes() == events_before, "dry-run mutated events.jsonl"
+    assert state_path.read_bytes() == state_before, "dry-run mutated state.json"
+
+    with pytest.raises(ssc.ShadowError, match=match):
+        ssc.run_cycle(bars, state_dir=state_dir, now_utc=_NOW)
+    assert events_path.read_bytes() == events_before, "--once mutated events.jsonl"
+    assert state_path.read_bytes() == state_before, "--once mutated state.json"
+
+    with pytest.raises(ssc.ShadowError, match=match):
+        ssc.repair_event_log_tail_command(state_dir, now_utc=_NOW)
+    assert events_path.read_bytes() == events_before, "repair mutated events.jsonl"
+    assert state_path.read_bytes() == state_before, "repair mutated state.json"
+
+    # No recovery event of any kind was ever appended. Lines that
+    # fail to parse are the deliberately-corrupted fixture content
+    # (e.g. an intentionally malformed unterminated tail) — skip
+    # those rather than treating them as a parse failure here.
+    for line in events_path.read_text().splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            obj = json.loads(stripped)
+        except json.JSONDecodeError:
+            continue
+        assert obj.get("event_type") not in (
+            "EVENT_LOG_TAIL_RECOVERED", "EVENT_LOG_TERMINATOR_RESTORED",
+        )
+
+
+def _assert_all_paths_fail_closed_cli(state_dir: Path) -> None:
+    """CLI-level check: --status, the report tool, and
+    --repair-event-log-tail all exit 2 with a JSON error and leave
+    the state directory byte-for-byte unchanged."""
+    before = _snapshot_dir(state_dir)
+    rc = ssc.main(["--state-dir", str(state_dir), "--status"])
+    assert rc == 2
+    assert _snapshot_dir(state_dir) == before
+
+    rc = ssr.main(["--state-dir", str(state_dir)])
+    assert rc == 2
+    assert _snapshot_dir(state_dir) == before
+
+    rc = ssc.main(["--state-dir", str(state_dir), "--repair-event-log-tail"])
+    assert rc == 2
+    assert _snapshot_dir(state_dir) == before
+
+
+# --- Corruption case 1: duplicate physical event ID ---
+
+
+def test_r6_duplicate_event_id_fails_all_paths(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime_with_forward(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    lines = events_path.read_text().splitlines()
+    assert len(lines) >= 2
+    lines.append(lines[0])  # duplicate an existing event line
+    events_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    _assert_all_paths_fail_closed(state_dir, match="duplicate event_id")
+    _assert_all_paths_fail_closed_cli(state_dir)
+
+
+# --- Corruption case 2: wrong experiment ID ---
+
+
+def test_r6_wrong_experiment_id_fails_all_paths(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime_with_forward(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    def _mutate(obj, i):
+        if i == 0:
+            obj["experiment_id"] = "WRONG_EXPERIMENT"
+            return obj
+    _rewrite_events(events_path, _mutate)
+    _assert_all_paths_fail_closed(state_dir, match="experiment_id")
+    _assert_all_paths_fail_closed_cli(state_dir)
+
+
+# --- Corruption case 3: wrong manifest hash ---
+
+
+def test_r6_wrong_manifest_hash_fails_all_paths(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime_with_forward(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    def _mutate(obj, i):
+        if i == 0:
+            obj["manifest_hash"] = "f" * 64
+            return obj
+    _rewrite_events(events_path, _mutate)
+    _assert_all_paths_fail_closed(state_dir, match="manifest_hash")
+    _assert_all_paths_fail_closed_cli(state_dir)
+
+
+# --- Corruption case 4: unknown candidate ID ---
+
+
+def test_r6_unknown_candidate_id_fails_all_paths(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime_with_forward(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    def _mutate(obj, i):
+        if i == 0:
+            obj["candidate_id"] = "totally_unknown"
+            return obj
+    _rewrite_events(events_path, _mutate)
+    _assert_all_paths_fail_closed(state_dir, match="candidate_id")
+    _assert_all_paths_fail_closed_cli(state_dir)
+
+
+# --- Corruption case 5: unknown event type ---
+
+
+def test_r6_unknown_event_type_fails_all_paths(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime_with_forward(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    def _mutate(obj, i):
+        if i == 0:
+            obj["event_type"] = "SOMETHING_MADE_UP"
+            return obj
+    _rewrite_events(events_path, _mutate)
+    _assert_all_paths_fail_closed(state_dir, match="event_type")
+    _assert_all_paths_fail_closed_cli(state_dir)
+
+
+# --- Corruption case 6: malformed timestamp ---
+
+
+def test_r6_malformed_timestamp_fails_all_paths(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime_with_forward(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    def _mutate(obj, i):
+        if i == 0:
+            obj["signal_bar_utc"] = "definitely-not-a-timestamp"
+            return obj
+    _rewrite_events(events_path, _mutate)
+    _assert_all_paths_fail_closed(state_dir, match="signal_bar_utc")
+    _assert_all_paths_fail_closed_cli(state_dir)
+
+
+# --- Corruption case 7: invalid numeric field ---
+
+
+def test_r6_invalid_numeric_field_fails_all_paths(tmp_path: Path) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime_with_forward(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    def _mutate(obj, i):
+        if i == 0:
+            obj["short_sma"] = "not-a-number"
+            return obj
+    _rewrite_events(events_path, _mutate)
+    _assert_all_paths_fail_closed(state_dir, match="finite")
+    _assert_all_paths_fail_closed_cli(state_dir)
+
+
+# --- Corruption case 8: valid unterminated JSON missing event_id ---
+
+
+def test_r6_valid_unterminated_missing_event_id_fails_all_paths(
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime_with_forward(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    _make_unterminated_final_event(
+        events_path,
+        lambda o: {k: v for k, v in o.items() if k != "event_id"},
+    )
+    _assert_all_paths_fail_closed(
+        state_dir, match="event_id", dry_run_match="newline",
+    )
+    _assert_all_paths_fail_closed_cli(state_dir)
+
+
+# --- Corruption case 9: valid unterminated event with wrong manifest hash ---
+
+
+def test_r6_valid_unterminated_wrong_manifest_hash_fails_all_paths(
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime_with_forward(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    _make_unterminated_final_event(
+        events_path,
+        lambda o: {**o, "manifest_hash": "a" * 64},
+    )
+    _assert_all_paths_fail_closed(
+        state_dir, match="manifest_hash", dry_run_match="newline",
+    )
+    _assert_all_paths_fail_closed_cli(state_dir)
+
+
+# --- Corruption case 10: malformed unterminated tail preceded by a
+# semantically invalid complete event ---
+
+
+def test_r6_malformed_tail_after_invalid_complete_event_fails_all_paths(
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / "shadow"
+    _prime_with_forward(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    _make_malformed_tail_after_invalid_complete_event(events_path)
+    # The earlier semantically-invalid complete event must be caught
+    # before the tail is ever inspected for repair. Dry-run rejects
+    # on framing first since it always requires full termination.
+    _assert_all_paths_fail_closed(
+        state_dir, match="event_type", dry_run_match="newline",
+    )
+    _assert_all_paths_fail_closed_cli(state_dir)
+
+
+# --- Success case: a semantically valid unterminated final event ---
+
+
+def test_r6_valid_unterminated_final_event_is_preserved_by_explicit_repair(
+    tmp_path: Path,
+) -> None:
+    """A semantically valid but unterminated final record must be
+    preserved (not deleted), exactly one newline restored, exactly
+    one deterministic recovery event appended, and the final log
+    must pass the canonical strict validator."""
+    state_dir = tmp_path / "shadow"
+    _prime_with_forward(state_dir)
+    events_path = state_dir / ssc._EVENTS_FILENAME
+    pre_lines = [
+        json.loads(l) for l in events_path.read_text().splitlines() if l.strip()
+    ]
+    _make_events_end_without_newline(events_path)
+    assert not events_path.read_bytes().endswith(b"\n")
+
+    result = ssc.repair_event_log_tail_command(state_dir, now_utc=_NOW)
+    assert result["repaired"] is True
+    assert result["recovered_detail"]["kind"] == "terminator_restored"
+    assert result["recovery_event"]["event_type"] == "EVENT_LOG_TERMINATOR_RESTORED"
+
+    raw = events_path.read_bytes()
+    assert raw.endswith(b"\n")
+    post_lines = [
+        json.loads(l) for l in raw.decode("utf-8").splitlines() if l.strip()
+    ]
+    # Every original event preserved verbatim, plus exactly one new
+    # recovery event appended.
+    assert post_lines[:len(pre_lines)] == pre_lines
+    assert len(post_lines) == len(pre_lines) + 1
+    assert post_lines[-1]["event_type"] == "EVENT_LOG_TERMINATOR_RESTORED"
+
+    # The final log passes the canonical strict validator cleanly.
+    manifest = ssc.load_manifest_readonly(state_dir)
+    known_ids = ssc._validate_and_load_event_ids(
+        events_path, manifest, require_terminated=True,
+    )
+    assert len(known_ids) == len(post_lines)
+
+    # A normal --once afterward must succeed cleanly (no more errors).
+    bars = _many_bars_across_cutoff(pre=800, post=110)
+    summary = ssc.run_cycle(bars, state_dir=state_dir, now_utc=_NOW)
+    assert summary["dry_run"] is False
