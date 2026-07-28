@@ -31,7 +31,8 @@
     Absolute path to the Python interpreter to use. Must exist.
 
 .PARAMETER MaxPaperAuditAgeMinutes
-    Passed through to --max-paper-audit-age-minutes. Default: 20.
+    Passed through to --max-paper-audit-age-minutes. Must be > 0.
+    Default: 20.
 
 .EXAMPLE
     powershell -NoProfile -ExecutionPolicy Bypass -File .\run_s62_shadow_task.ps1 `
@@ -61,13 +62,30 @@ if (-not (Test-Path -LiteralPath $PythonExe -PathType Leaf)) {
     exit 2
 }
 
+if ($MaxPaperAuditAgeMinutes -le 0) {
+    Write-Error "MaxPaperAuditAgeMinutes must be > 0 (got $MaxPaperAuditAgeMinutes)"
+    exit 2
+}
+
+# Default to a failure exit code BEFORE the Python process is ever
+# invoked. If the native process cannot start at all (bad PythonExe,
+# OS-level launch failure), $exitCode must still resolve to a
+# deterministic failure rather than an unset/stale value.
+$exitCode = 2
+
 $originalLocation = Get-Location
 Set-Location -LiteralPath $RepoRoot
 try {
-    & $PythonExe -m src.tools.run_scheduled_shadow_cycle `
-        --max-paper-audit-age-minutes $MaxPaperAuditAgeMinutes `
-        --json
-    $exitCode = $LASTEXITCODE
+    try {
+        & $PythonExe -m src.tools.run_scheduled_shadow_cycle `
+            --max-paper-audit-age-minutes $MaxPaperAuditAgeMinutes `
+            --json
+        $exitCode = $LASTEXITCODE
+    }
+    catch {
+        Write-Error "failed to start Python process: $_"
+        $exitCode = 2
+    }
 }
 finally {
     Set-Location -LiteralPath $originalLocation
