@@ -857,6 +857,278 @@ def test_batch_vs_incremental_episode_classification(tmp_path: Path) -> None:
             )
 
 
+# ---------------------------------------------------------------------------
+# Equality-touch episode bookkeeping regression
+# (production-shadow failure: research_10_20_none:
+#  unique_bullish_episode_count < bullish_crossover_count)
+# ---------------------------------------------------------------------------
+#
+# All bars below are forward-only (start at cutoff+1h) and use a
+# short=10/long=20 SMA plateau construction, hand-verified against the
+# real _sma() arithmetic:
+#
+#   idx  0-24 (25 bars) @ 100.00  -> first available SMA (idx 19) is a
+#                                     flat equality (100==100), no
+#                                     episode opens.
+#   idx 25-44 (20 bars) @ 100.01  -> idx25 is a genuine bullish
+#                                     crossover (tiny positive
+#                                     separation); the plateau then
+#                                     converges monotonically back to
+#                                     an exact SMA equality at idx44
+#                                     with neither cross condition
+#                                     firing on the way.
+#   idx 45-50 ( 6 bars)           -> "bullish" tail (100.02) reproduces
+#                                     a second bullish crossover at
+#                                     idx45 while the prior episode was
+#                                     never closed (the reported bug);
+#                                     "bearish" tail (100.00) instead
+#                                     produces a genuine bearish
+#                                     crossover at idx45.
+#
+# The ~0.05bps SMA separation at both crossovers is always far below
+# the 25bps filter threshold, so research_10_20_separation25 never
+# enters — giving a real (not hand-constructed) flat/blocked
+# candidate — while research_10_20_none (filter=none) always enters
+# immediately, giving a real open-position candidate, both from the
+# exact same bar sequence.
+
+
+def _equality_touch_bars(second_move: str) -> list[Bar]:
+    assert second_move in ("bullish", "bearish")
+    plateau1 = [100.0] * 25
+    plateau2 = [100.01] * 20
+    tail = [100.02] * 6 if second_move == "bullish" else [100.00] * 6
+    return _forward_bar_series(plateau1 + plateau2 + tail)
+
+
+def _candidate_events(state_dir: Path, cid: str) -> list[dict[str, Any]]:
+    text = (state_dir / ssc._EVENTS_FILENAME).read_text(encoding="utf-8")
+    parsed = [json.loads(line) for line in text.strip().splitlines()]
+    return [e for e in parsed if e.get("candidate_id") == cid]
+
+
+def _assert_batch_equals_incremental(
+    bars: list[Bar], one_shot_dir: Path, incremental_dir: Path, cid: str,
+) -> None:
+    for cut in range(10, len(bars) + 10, 10):
+        ssc.run_cycle(bars[:cut], state_dir=incremental_dir, now_utc=_NOW)
+    manifest_a = ssc.load_manifest_readonly(one_shot_dir)
+    state_a = ssc.load_state_readonly(one_shot_dir, manifest_a)
+    manifest_b = ssc.load_manifest_readonly(incremental_dir)
+    state_b = ssc.load_state_readonly(incremental_dir, manifest_b)
+    sa = state_a["candidates"][cid]
+    sb = state_b["candidates"][cid]
+    for key in (
+        "bullish_crossover_count", "bearish_crossover_count",
+        "unique_bullish_episode_count", "inherited_bullish_episode_count",
+        "episodes_without_entry_count", "blocked_on_crossover_count",
+        "immediate_entry_count", "delayed_entry_count",
+        "inherited_bullish_state_entry_count", "completed_trade_count",
+        "position_open", "quantity",
+    ):
+        assert sa[key] == sb[key], (
+            f"{cid}.{key} drift: batch={sa[key]!r} incremental={sb[key]!r}"
+        )
+
+
+def test_equality_touch_case_a_flat_candidate_bullish_recross(
+    tmp_path: Path,
+) -> None:
+    """Case A: flat candidate — bullish state -> equality -> bullish
+    crossover again. research_10_20_separation25 never passes the
+    entry filter (tiny separation), so it stays flat throughout; every
+    bullish crossover must still open exactly one new episode."""
+    state_dir = tmp_path / "shadow"
+    bars = _equality_touch_bars("bullish")
+    ssc.run_cycle(bars, state_dir=state_dir, now_utc=_NOW)
+
+    manifest = ssc.load_manifest_readonly(state_dir)
+    state = ssc.load_state_readonly(state_dir, manifest)  # raises if invalid
+    s = state["candidates"]["research_10_20_separation25"]
+
+    assert s["bullish_crossover_count"] == 2
+    assert s["unique_bullish_episode_count"] == 2
+    assert s["unique_bullish_episode_count"] >= s["bullish_crossover_count"]
+    assert s["bearish_crossover_count"] == 0
+    assert s["position_open"] is False
+    assert s["quantity"] == 0.0
+    assert s["completed_trade_count"] == 0
+    assert s["immediate_entry_count"] == 0
+    assert s["delayed_entry_count"] == 0
+    assert s["inherited_bullish_state_entry_count"] == 0
+    assert s["blocked_on_crossover_count"] == 2
+
+    events = _candidate_events(state_dir, "research_10_20_separation25")
+    assert sum(1 for e in events if e["event_type"] == "BULLISH_CROSSOVER") == 2
+    assert not any(e["event_type"] == "SHADOW_SELL_SCHEDULED" for e in events)
+    assert not any(e["event_type"] == "SHADOW_BUY_EXECUTED" for e in events)
+    assert not any(e["event_type"] == "SHADOW_BUY_SCHEDULED" for e in events)
+
+    # Idempotent rerun.
+    r2 = ssc.run_cycle(bars, state_dir=state_dir, now_utc=_NOW)
+    assert r2["events_appended"] == 0
+
+    # Batch replay == incremental replay.
+    _assert_batch_equals_incremental(
+        bars, state_dir, tmp_path / "incremental_a",
+        "research_10_20_separation25",
+    )
+
+
+def test_equality_touch_case_b_open_position_bullish_recross(
+    tmp_path: Path,
+) -> None:
+    """Case B: open position — bullish state with an open position ->
+    equality -> bullish crossover again. research_10_20_none
+    (filter=none) enters immediately on the first crossover and must
+    carry that position across the equality touch without a duplicate
+    buy, while the episode counters stay consistent."""
+    state_dir = tmp_path / "shadow"
+    bars = _equality_touch_bars("bullish")
+    ssc.run_cycle(bars, state_dir=state_dir, now_utc=_NOW)
+
+    manifest = ssc.load_manifest_readonly(state_dir)
+    state = ssc.load_state_readonly(state_dir, manifest)  # raises if invalid
+    s = state["candidates"]["research_10_20_none"]
+
+    assert s["bullish_crossover_count"] == 2
+    assert s["unique_bullish_episode_count"] == 2
+    assert s["unique_bullish_episode_count"] >= s["bullish_crossover_count"]
+    assert s["bearish_crossover_count"] == 0
+    # Exactly one entry — the equality-touch re-crossover must not
+    # schedule or execute a second buy while a position is open.
+    assert s["position_open"] is True
+    assert s["quantity"] > 0
+    assert s["completed_trade_count"] == 0
+    assert s["immediate_entry_count"] == 1
+    assert s["delayed_entry_count"] == 0
+    assert s["inherited_bullish_state_entry_count"] == 0
+    # The carried-over position must not be misclassified as an
+    # episode without entry/exposure.
+    assert s["episodes_without_entry_count"] == 0
+
+    events = _candidate_events(state_dir, "research_10_20_none")
+    assert sum(1 for e in events if e["event_type"] == "BULLISH_CROSSOVER") == 2
+    assert sum(1 for e in events if e["event_type"] == "SHADOW_BUY_SCHEDULED") == 1
+    assert sum(1 for e in events if e["event_type"] == "SHADOW_BUY_EXECUTED") == 1
+    assert not any(e["event_type"] == "SHADOW_SELL_SCHEDULED" for e in events)
+
+    # Idempotent rerun.
+    r2 = ssc.run_cycle(bars, state_dir=state_dir, now_utc=_NOW)
+    assert r2["events_appended"] == 0
+
+    # Batch replay == incremental replay.
+    _assert_batch_equals_incremental(
+        bars, state_dir, tmp_path / "incremental_b", "research_10_20_none",
+    )
+
+
+def test_equality_touch_case_c_filter_blocked_episode_bullish_recross(
+    tmp_path: Path,
+) -> None:
+    """Case C: filter-blocked episode -> equality -> bullish crossover.
+    The blocked-crossover flag and episodes_without_entry_count must
+    reset per episode — the second, freshly opened episode gets its
+    own independent block, not a merge with the first episode's."""
+    state_dir = tmp_path / "shadow"
+    bars = _equality_touch_bars("bullish")
+    ssc.run_cycle(bars, state_dir=state_dir, now_utc=_NOW)
+
+    manifest = ssc.load_manifest_readonly(state_dir)
+    state = ssc.load_state_readonly(state_dir, manifest)  # raises if invalid
+    s = state["candidates"]["research_10_20_separation25"]
+
+    # Both the first episode's crossover AND the re-opened second
+    # episode's crossover were independently blocked by the filter —
+    # this would be 1 (merged) under the pre-fix bookkeeping, or would
+    # never be reached at all since state validation itself failed.
+    assert s["blocked_on_crossover_count"] == 2
+    assert s["filter_blocked_count"] >= 2
+    assert s["filter_allowed_count"] == 0
+    assert (
+        s["filter_allowed_count"] + s["filter_blocked_count"]
+        == s["filter_evaluation_count"]
+    )
+    # The first episode finalized as "without entry" at the moment the
+    # second episode opened; the second episode is still active (no
+    # bearish crossover in this bar sequence) so it has not yet been
+    # counted as without-entry itself.
+    assert s["episodes_without_entry_count"] == 1
+
+    events = _candidate_events(state_dir, "research_10_20_separation25")
+    assert sum(1 for e in events if e["event_type"] == "ENTRY_FILTER_BLOCKED") >= 2
+
+    # Idempotent rerun.
+    r2 = ssc.run_cycle(bars, state_dir=state_dir, now_utc=_NOW)
+    assert r2["events_appended"] == 0
+
+
+def test_equality_touch_case_d_equality_then_bearish_crossover(
+    tmp_path: Path,
+) -> None:
+    """Case D: equality followed by a genuine bearish crossover. This
+    exercises the existing (unchanged) bearish-exit rule — the
+    equality touch itself must not have scheduled a sell, and the
+    subsequent real bearish crossover must close any open position
+    exactly as before."""
+    state_dir = tmp_path / "shadow"
+    bars = _equality_touch_bars("bearish")
+    ssc.run_cycle(bars, state_dir=state_dir, now_utc=_NOW)
+
+    manifest = ssc.load_manifest_readonly(state_dir)
+    state = ssc.load_state_readonly(state_dir, manifest)  # raises if invalid
+
+    # Open-position candidate: entered at the first crossover, then
+    # exited cleanly by the real bearish crossover after the equality
+    # touch — exactly one trade, no orphaned or duplicate exit.
+    s_open = state["candidates"]["research_10_20_none"]
+    assert s_open["bullish_crossover_count"] == 1
+    assert s_open["bearish_crossover_count"] == 1
+    assert s_open["unique_bullish_episode_count"] == 1
+    assert s_open["position_open"] is False
+    assert s_open["completed_trade_count"] == 1
+    assert s_open["immediate_entry_count"] == 1
+
+    events_open = _candidate_events(state_dir, "research_10_20_none")
+    assert sum(1 for e in events_open if e["event_type"] == "BEARISH_CROSSOVER") == 1
+    assert sum(1 for e in events_open if e["event_type"] == "SHADOW_SELL_SCHEDULED") == 1
+    # The equality bar (idx 44) must not itself have produced a sell —
+    # only the later, genuinely bearish bar (idx 45) may have.
+    sell_events = [e for e in events_open if e["event_type"] == "SHADOW_SELL_SCHEDULED"]
+    equality_bar_iso = ssc._bar_ts_utc(bars[44]).isoformat()
+    bearish_bar_iso = ssc._bar_ts_utc(bars[45]).isoformat()
+    for e in sell_events:
+        assert e["signal_bar_utc"] != equality_bar_iso
+        assert e["signal_bar_utc"] == bearish_bar_iso
+
+    # Flat/blocked candidate: never entered, so the bearish crossover
+    # that closes its episode must count it as without-entry, exactly
+    # as the pre-existing (unchanged) bearish path always has.
+    s_flat = state["candidates"]["research_10_20_separation25"]
+    assert s_flat["bullish_crossover_count"] == 1
+    assert s_flat["bearish_crossover_count"] == 1
+    assert s_flat["unique_bullish_episode_count"] == 1
+    assert s_flat["position_open"] is False
+    assert s_flat["completed_trade_count"] == 0
+    assert s_flat["episodes_without_entry_count"] == 1
+
+    events_flat = _candidate_events(state_dir, "research_10_20_separation25")
+    assert not any(e["event_type"] == "SHADOW_SELL_SCHEDULED" for e in events_flat)
+
+    # Idempotent rerun.
+    r2 = ssc.run_cycle(bars, state_dir=state_dir, now_utc=_NOW)
+    assert r2["events_appended"] == 0
+
+    # Batch replay == incremental replay for both candidates.
+    _assert_batch_equals_incremental(
+        bars, state_dir, tmp_path / "incremental_d1", "research_10_20_none",
+    )
+    _assert_batch_equals_incremental(
+        bars, state_dir, tmp_path / "incremental_d2",
+        "research_10_20_separation25",
+    )
+
+
 # --- Issue 2: forward timestamps + holding periods ---
 
 
