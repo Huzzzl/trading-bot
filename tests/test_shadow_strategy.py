@@ -1062,6 +1062,12 @@ def test_equality_touch_case_c_filter_blocked_episode_bullish_recross(
     r2 = ssc.run_cycle(bars, state_dir=state_dir, now_utc=_NOW)
     assert r2["events_appended"] == 0
 
+    # Batch replay == incremental replay.
+    _assert_batch_equals_incremental(
+        bars, state_dir, tmp_path / "incremental_c",
+        "research_10_20_separation25",
+    )
+
 
 def test_equality_touch_case_d_equality_then_bearish_crossover(
     tmp_path: Path,
