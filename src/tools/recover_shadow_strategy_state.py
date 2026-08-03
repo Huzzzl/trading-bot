@@ -14,30 +14,35 @@ directory and NEVER writes to it:
   1. Read the existing frozen S62 manifest from ``--state-dir``
      (read-only).
   2. Load the current SPY 60m cache from ``--cache-dir`` (read-only).
-  3. Copy the existing, already-validated ``manifest.json`` byte-for-
-     byte into a FRESH, empty work directory — created by default
-     *beside* ``--state-dir`` (under its parent, never under the OS
-     temp directory) so the rebuild lands on the same volume — then
-     replay every cached bar into it using the exact same
-     :func:`run_shadow_strategy_cycle.run_cycle` code path production
-     uses. This is a from-scratch rebuild: the work directory must be
-     completely empty before it starts. Copying the manifest instead
-     of letting ``run_cycle`` mint a new one preserves its exact
-     bytes — including ``created_at_utc`` — rather than silently
-     resetting them.
-  4. Validate the rebuilt manifest, state, and event log using S62's
+  3. Resolve ``work_dir`` (defaulting to a fresh sibling of
+     ``--state-dir``, created under its parent — never under the OS
+     temp directory) and validate, BEFORE creating or touching it in
+     any way, that it is a distinct path from ``state_dir`` and that
+     neither is nested inside the other (:func:`_resolve_work_dir` /
+     :func:`_validate_distinct_and_unnested`). This check runs before
+     any ``mkdir``, so an unsafe ``work_dir`` — e.g. one nested inside
+     the broken ``state_dir`` — is rejected before this tool writes
+     anything at all.
+  4. Only once that is confirmed safe: create ``work_dir`` if needed,
+     require it to be completely empty
+     (:func:`_require_empty_work_dir`), and verify it lives on the
+     same filesystem/volume as ``state_dir``
+     (:func:`_verify_same_filesystem`) — a prerequisite for the later
+     replacement rename to be atomic.
+  5. Copy the existing, already-validated ``manifest.json`` byte-for-
+     byte into ``work_dir``, then replay every cached bar into it
+     using the exact same :func:`run_shadow_strategy_cycle.run_cycle`
+     code path production uses. Copying the manifest instead of
+     letting ``run_cycle`` mint a new one preserves its exact bytes —
+     including ``created_at_utc`` — rather than silently resetting
+     them.
+  6. Validate the rebuilt manifest, state, and event log using S62's
      own strict validators (:func:`load_manifest_readonly`,
-     :func:`load_state_readonly`, :func:`_validate_and_load_event_ids`).
-  5. Verify a battery of invariants — see
+     :func:`load_state_readonly`, :func:`_validate_and_load_event_ids`),
+     and verify a battery of invariants — see
      :func:`_verify_rebuilt_experiment` — including that the rebuilt
      manifest is byte-for-byte identical to the existing one and that
      a second replay against the same bars appends zero new events.
-  6. Fail closed — refusing to print any replacement guidance — unless
-     ``work_dir`` and ``state_dir`` are distinct, neither is nested
-     inside the other, and both live on the same filesystem/volume (a
-     cross-volume move is a copy-then-delete, never an atomic rename,
-     and must never be recommended as if it were one). See
-     :func:`_verify_replacement_is_safe`.
   7. Print the rebuilt directory's path and explicit **PowerShell**
      operator commands (``Copy-Item -Recurse`` / ``Move-Item``) to
      back up the broken directory and atomically replace it with the
@@ -47,7 +52,9 @@ This tool NEVER touches ``--state-dir`` itself (no write, no delete),
 NEVER executes the backup/replace commands it prints, NEVER creates or
 enables a Windows Scheduled Task, and NEVER imports anything from the
 paper-trading path. It only reads the frozen S62 manifest/cache and
-writes to a brand-new work directory the operator explicitly controls.
+writes to a brand-new work directory the operator explicitly controls
+— and only after confirming that directory is not, in fact, some part
+of the existing/broken state directory.
 """
 
 from __future__ import annotations
@@ -149,14 +156,17 @@ def _copy_existing_manifest(state_dir: Path, work_dir: Path) -> None:
     into the fresh work directory, so ``run_cycle`` loads and validates
     it rather than minting a brand-new one — preserving its exact
     bytes, including ``created_at_utc``, instead of silently resetting
-    them."""
-    work_dir.mkdir(parents=True, exist_ok=True)
+    them.
+
+    Callers MUST have already validated path safety
+    (:func:`_validate_distinct_and_unnested`) and directory emptiness
+    (:func:`_require_empty_work_dir`) before calling this — it is the
+    first point at which anything is written to ``work_dir``.
+    """
     shutil.copy2(state_dir / _MANIFEST_FILENAME, work_dir / _MANIFEST_FILENAME)
 
 
-def _replay(state_dir: Path, work_dir: Path, bars, now_utc: datetime) -> dict[str, Any]:
-    _require_empty_work_dir(work_dir)
-    _copy_existing_manifest(state_dir, work_dir)
+def _replay(work_dir: Path, bars, now_utc: datetime) -> dict[str, Any]:
     try:
         first = run_cycle(bars, state_dir=work_dir, now_utc=now_utc)
     except ShadowError as exc:
@@ -304,15 +314,16 @@ def _verify_rebuilt_experiment(
 
 # ---------------------------------------------------------------------------
 # Replacement safety (path/volume layout) — fail closed
+#
+# Split into two functions because they must run at different points:
+# the path-relationship check is pure path arithmetic and must run
+# BEFORE work_dir is ever created or written to (an unsafe work_dir —
+# e.g. nested inside the broken state_dir — must be rejected before
+# this tool touches the filesystem at all); the same-filesystem check
+# needs both directories to already exist, so it can only run after
+# work_dir has been created (but still before anything is copied or
+# replayed into it).
 # ---------------------------------------------------------------------------
-
-
-def _same_filesystem(a: Path, b: Path) -> bool:
-    """True iff ``a`` and ``b`` live on the same filesystem/volume — a
-    prerequisite for a same-volume rename (``Move-Item``/``os.rename``)
-    to be atomic. Separated into its own function so tests can
-    simulate a cross-volume layout without needing two real drives."""
-    return os.stat(a).st_dev == os.stat(b).st_dev
 
 
 def _is_within(inner: Path, outer: Path) -> bool:
@@ -322,14 +333,14 @@ def _is_within(inner: Path, outer: Path) -> bool:
         return False
 
 
-def _verify_replacement_is_safe(state_dir: Path, work_dir: Path) -> None:
-    """Fail closed BEFORE any replacement guidance is generated.
-
-    Requires: ``work_dir`` and ``state_dir`` are different, distinct
-    paths; neither is nested inside the other; and both live on the
-    same filesystem/volume. A same-volume directory rename is atomic;
-    a cross-volume move is a copy-then-delete and must never be
-    recommended as if it were atomic.
+def _validate_distinct_and_unnested(state_dir: Path, work_dir: Path) -> None:
+    """Pure path-relationship validation — safe to call before
+    ``work_dir`` exists. Requires ``state_dir`` and ``work_dir`` to be
+    distinct paths, with neither nested inside the other. MUST run
+    before any ``mkdir``, ``shutil.copy2``, or ``run_cycle`` call
+    against ``work_dir`` — otherwise an unsafe ``work_dir`` (e.g. one
+    nested inside the broken ``state_dir``) would already have been
+    written to by the time this raises.
     """
     state_resolved = state_dir.resolve()
     work_resolved = work_dir.resolve()
@@ -341,13 +352,29 @@ def _verify_replacement_is_safe(state_dir: Path, work_dir: Path) -> None:
     if _is_within(work_resolved, state_resolved):
         raise RecoveryError(
             f"work_dir {work_dir} is inside state_dir {state_dir} — "
-            "refusing to recommend this replacement layout"
+            "refusing to write into the existing/broken state directory"
         )
     if _is_within(state_resolved, work_resolved):
         raise RecoveryError(
             f"state_dir {state_dir} is inside work_dir {work_dir} — "
             "refusing to recommend this replacement layout"
         )
+
+
+def _same_filesystem(a: Path, b: Path) -> bool:
+    """True iff ``a`` and ``b`` live on the same filesystem/volume — a
+    prerequisite for a same-volume rename (``Move-Item``/``os.rename``)
+    to be atomic. Separated into its own function so tests can
+    simulate a cross-volume layout without needing two real drives."""
+    return os.stat(a).st_dev == os.stat(b).st_dev
+
+
+def _verify_same_filesystem(state_dir: Path, work_dir: Path) -> None:
+    """Requires ``state_dir`` and ``work_dir`` to live on the same
+    filesystem/volume. Both must already exist. A same-volume
+    directory rename is atomic; a cross-volume move is a
+    copy-then-delete and must never be recommended as if it were
+    atomic."""
     if not _same_filesystem(state_dir, work_dir):
         raise RecoveryError(
             f"work_dir {work_dir} is not on the same filesystem/volume "
@@ -355,6 +382,28 @@ def _verify_replacement_is_safe(state_dir: Path, work_dir: Path) -> None:
             "copy-then-delete, not an atomic rename, and this tool "
             "refuses to recommend it as if it were one"
         )
+
+
+def _resolve_work_dir(state_dir: Path, work_dir: Path | None) -> Path:
+    """Resolve the work directory, validating path safety BEFORE any
+    filesystem mutation.
+
+    * Explicit ``work_dir``: validated with
+      :func:`_validate_distinct_and_unnested` and then created — in
+      that order — so a self-referencing or nested path is rejected
+      before it is ever created, let alone written to.
+    * Default (``work_dir is None``): :func:`_default_work_dir` always
+      creates a fresh sibling of ``state_dir`` with a unique name, so
+      it can never equal or nest inside ``state_dir`` by construction;
+      it is still validated for uniformity and defense in depth.
+    """
+    if work_dir is None:
+        work_dir = _default_work_dir(state_dir)
+        _validate_distinct_and_unnested(state_dir, work_dir)
+        return work_dir
+    _validate_distinct_and_unnested(state_dir, work_dir)
+    work_dir.mkdir(parents=True, exist_ok=True)
+    return work_dir
 
 
 # ---------------------------------------------------------------------------
@@ -413,21 +462,38 @@ def recover(
     ``work_dir`` defaults to a fresh directory created beside
     ``state_dir`` (under its parent) — never under the OS temp
     directory — so it is guaranteed to be on the same volume.
+
+    Ordering is safety-critical: every check that can be performed
+    without creating or writing to ``work_dir`` runs BEFORE it is
+    created or touched, so an unsafe ``work_dir`` (self-referencing,
+    or nested inside the broken ``state_dir``) is rejected before this
+    tool writes anything at all —
+
+      1. resolve work_dir
+      2. validate distinct / non-nested paths
+      3. create work_dir if needed
+      4. require a completely empty directory
+      5. verify same filesystem/volume
+      6. copy the existing manifest
+      7. replay
+      8. validate the rebuilt artifacts
+      9. generate PowerShell guidance
     """
     existing_manifest = _read_existing_manifest(state_dir)
     bars = _load_cache_bars(cache_dir)
     if not bars:
         raise RecoveryError(f"no {_SYMBOL}/{_INTERVAL} bars loaded from {cache_dir}")
 
-    if work_dir is None:
-        work_dir = _default_work_dir(state_dir)
+    work_dir = _resolve_work_dir(state_dir, work_dir)
+    _require_empty_work_dir(work_dir)
+    _verify_same_filesystem(state_dir, work_dir)
 
-    first_replay = _replay(state_dir, work_dir, bars, now_utc)
+    _copy_existing_manifest(state_dir, work_dir)
+    first_replay = _replay(work_dir, bars, now_utc)
     checks = _verify_rebuilt_experiment(
         state_dir=state_dir, existing_manifest=existing_manifest,
         work_dir=work_dir,
     )
-    _verify_replacement_is_safe(state_dir, work_dir)
 
     return {
         "tool": TOOL_NAME,
@@ -479,12 +545,12 @@ def main(argv: list[str] | None = None) -> int:
     now_utc = datetime.now(timezone.utc)
     state_dir = Path(args.state_dir)
     cache_dir = Path(args.cache_dir)
-    work_dir: Path | None
-    if args.work_dir is not None:
-        work_dir = Path(args.work_dir)
-        work_dir.mkdir(parents=True, exist_ok=True)
-    else:
-        work_dir = None
+    # Do NOT create --work-dir here: it must not be touched until
+    # recover() has validated it is not the same as, or nested inside,
+    # state_dir. Creating it eagerly would write into an unsafe path
+    # (e.g. a work_dir nested inside the broken state directory)
+    # before that check ever runs.
+    work_dir = Path(args.work_dir) if args.work_dir is not None else None
 
     try:
         summary = recover(

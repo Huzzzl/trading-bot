@@ -210,6 +210,32 @@ def test_cli_error_exit_code_on_missing_state_dir(
     assert payload["existing_state_dir_modified"] is False
 
 
+def test_cli_nested_work_dir_fails_closed_without_writing_state_dir(
+    tmp_path: Path, capsys: pytest.CaptureFixture,
+) -> None:
+    """The CLI must not eagerly create --work-dir before recover() has
+    validated it — otherwise a nested --work-dir would already have a
+    directory created inside the broken state_dir by the time the
+    safety check raises."""
+    state_dir, cache_dir, _bars = _build_existing_state(tmp_path)
+    work_dir = state_dir / "nested_work"
+    before = _snapshot_dir(state_dir)
+
+    rc = rsc.main([
+        "--state-dir", str(state_dir),
+        "--cache-dir", str(cache_dir),
+        "--work-dir", str(work_dir),
+        "--json",
+    ])
+    assert rc == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["result"] == "ERROR"
+    assert payload["existing_state_dir_modified"] is False
+
+    assert _snapshot_dir(state_dir) == before
+    assert not work_dir.exists()
+
+
 def test_no_broker_network_or_paper_runner_imports() -> None:
     source = Path("src/tools/recover_shadow_strategy_state.py").read_text(
         encoding="utf-8",
@@ -301,8 +327,15 @@ def test_cross_volume_work_dir_fails_closed(
 
 
 def test_work_dir_inside_state_dir_fails_closed(tmp_path: Path) -> None:
+    """Regression for the safety-ordering bug: a work_dir nested
+    inside the broken state_dir (e.g. logs/shadow_strategy/nested_work)
+    must be rejected BEFORE anything is written under state_dir — not
+    after run_cycle() has already created a manifest/state/event log
+    inside the broken directory tree and only then failed the safety
+    check."""
     state_dir, cache_dir, _bars = _build_existing_state(tmp_path)
     work_dir = state_dir / "nested_work"
+    before = _snapshot_dir(state_dir)
 
     with pytest.raises(rsc.RecoveryError, match="inside"):
         rsc.recover(
@@ -310,43 +343,53 @@ def test_work_dir_inside_state_dir_fails_closed(tmp_path: Path) -> None:
             now_utc=_NOW,
         )
 
+    # The broken state directory — including everything inside it —
+    # is byte-for-byte and mtime-for-mtime unchanged.
+    assert _snapshot_dir(state_dir) == before
+    # nested_work itself must never have been created at all.
+    assert not work_dir.exists()
+
 
 def test_state_dir_inside_work_dir_fails_closed(tmp_path: Path) -> None:
-    """A work_dir that is an ANCESTOR of state_dir is unsafe, but any
-    such ancestor is necessarily non-empty (it contains state_dir),
-    so the full recover() pipeline already fails closed earlier, at
-    the empty-work-dir precondition. Exercise the dedicated
-    replacement-safety check directly to prove this specific
-    direction is independently caught by name, not merely as a side
-    effect of the emptiness check."""
+    """A work_dir that is an ANCESTOR of state_dir is unsafe. Path
+    validation now runs before the emptiness check (and before any
+    directory creation), so this is caught by name via the dedicated
+    check — not merely as an incidental side effect of state_dir
+    making the ancestor directory non-empty."""
     state_dir, _cache_dir, _bars = _build_existing_state(tmp_path)
     work_dir = state_dir.parent
 
     with pytest.raises(rsc.RecoveryError, match="inside"):
-        rsc._verify_replacement_is_safe(state_dir, work_dir)
+        rsc._validate_distinct_and_unnested(state_dir, work_dir)
 
 
-def test_state_dir_inside_work_dir_also_fails_closed_end_to_end(
+def test_state_dir_inside_work_dir_fails_closed_end_to_end(
     tmp_path: Path,
 ) -> None:
     state_dir, cache_dir, _bars = _build_existing_state(tmp_path)
     work_dir = state_dir.parent  # non-empty ancestor of state_dir
+    before = _snapshot_dir(state_dir)
 
-    with pytest.raises(rsc.RecoveryError):
+    with pytest.raises(rsc.RecoveryError, match="inside"):
         rsc.recover(
             state_dir=state_dir, cache_dir=cache_dir, work_dir=work_dir,
             now_utc=_NOW,
         )
 
+    assert _snapshot_dir(state_dir) == before
+
 
 def test_work_dir_same_as_state_dir_fails_closed(tmp_path: Path) -> None:
     state_dir, cache_dir, _bars = _build_existing_state(tmp_path)
+    before = _snapshot_dir(state_dir)
 
     with pytest.raises(rsc.RecoveryError):
         rsc.recover(
             state_dir=state_dir, cache_dir=cache_dir, work_dir=state_dir,
             now_utc=_NOW,
         )
+
+    assert _snapshot_dir(state_dir) == before
 
 
 def test_non_empty_work_dir_with_arbitrary_file_fails(tmp_path: Path) -> None:
