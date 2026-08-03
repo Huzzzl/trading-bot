@@ -98,6 +98,8 @@ ACTIVE_RUNTIME_CANDIDATE_TOOLS: tuple[str, ...] = (
     "shadow_strategy_report",     # report over the shadow-strategy state
     # --- Added in PR S63 ---
     "run_scheduled_shadow_cycle", # isolated Windows scheduling gate for S62
+    # --- Added in PR S64 ---
+    "recover_shadow_strategy_state", # deterministic S62 state-recovery tool
 )
 
 # May be needed by automated runtime; keep in place.
@@ -305,13 +307,13 @@ class TestToolsInventory:
         assert len(ACTIVE_RESEARCH_TOOLS) == 3
 
     def test_active_runtime_candidate_tools_count(self) -> None:
-        assert len(ACTIVE_RUNTIME_CANDIDATE_TOOLS) == 23
+        assert len(ACTIVE_RUNTIME_CANDIDATE_TOOLS) == 24
 
     def test_preserve_runtime_support_tools_count(self) -> None:
         assert len(PRESERVE_RUNTIME_SUPPORT_TOOLS) == 1
 
     def test_active_tools_count(self) -> None:
-        assert len(ACTIVE_TOOLS) == 27
+        assert len(ACTIVE_TOOLS) == 28
 
     def test_archived_tools_count(self) -> None:
         assert len(ARCHIVED_TOOLS) == 20

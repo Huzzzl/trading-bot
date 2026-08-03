@@ -1409,15 +1409,31 @@ def _process_candidate(
 
             if bullish_cross:
                 candidate_state["bullish_crossover_count"] += 1
-                # If a previous inherited/forward episode is still
-                # active (shouldn't be — bearish would have closed
-                # it), close it silently.
-                if not candidate_state["_in_bullish_episode"]:
-                    candidate_state["unique_bullish_episode_count"] += 1
+                # An SMA equality touch (short == long) triggers
+                # neither the strict bullish nor the strict bearish
+                # crossover condition, so a prior episode can still be
+                # open here — e.g. bullish -> equality -> bullish
+                # again. Every bullish crossover must correspond to
+                # exactly one newly opened episode, so finalize the
+                # still-open previous episode's diagnostics first
+                # (mirroring the bearish-crossover close path) before
+                # opening the new one.
+                carried_position = False
+                if candidate_state["_in_bullish_episode"]:
+                    if not candidate_state["_current_episode_had_entry"]:
+                        candidate_state["episodes_without_entry_count"] += 1
+                    # A position opened before the equality touch is
+                    # still open now — it is not a NEW entry for this
+                    # episode, but the episode must not later be
+                    # misclassified as having no exposure/entry merely
+                    # because the position was carried across the
+                    # equality touch instead of freshly entered here.
+                    carried_position = candidate_state["position_open"]
+                candidate_state["unique_bullish_episode_count"] += 1
                 candidate_state["_in_bullish_episode"] = True
                 candidate_state["_current_episode_type"] = "forward_crossover"
                 candidate_state["_current_episode_had_crossover_block"] = False
-                candidate_state["_current_episode_had_entry"] = False
+                candidate_state["_current_episode_had_entry"] = carried_position
                 events_out.append(_make_event(
                     cid, "BULLISH_CROSSOVER", bar_ts.isoformat(),
                     manifest_hash_str=manifest_hash_str,
